@@ -920,18 +920,26 @@ func isSlice(t types.Type) bool {
 }
 
 // valueOK says whether values of type t are representable in the model:
-// integers, bools, errors, pointers to and structs of such values, and
-// slices of integers.
-func valueOK(t types.Type) bool {
+// integers, bools, errors, strings, pointers to and structs of such
+// values, and slices of integers. Recursive types are fine: a pointer
+// cycle is cut by treating the type under construction as representable.
+func valueOK(t types.Type) bool { return valueOKVisiting(t, map[types.Type]bool{}) }
+
+func valueOKVisiting(t types.Type, visiting map[types.Type]bool) bool {
 	if _, _, ok := intWidth(t); ok || isBool(t) || isError(t) || isString(t) {
 		return true
 	}
+	if visiting[t] {
+		return true
+	}
+	visiting[t] = true
+	defer delete(visiting, t)
 	switch u := t.Underlying().(type) {
 	case *types.Pointer:
-		return valueOK(u.Elem())
+		return valueOKVisiting(u.Elem(), visiting)
 	case *types.Struct:
 		for i := 0; i < u.NumFields(); i++ {
-			if !valueOK(u.Field(i).Type()) {
+			if !valueOKVisiting(u.Field(i).Type(), visiting) {
 				return false
 			}
 		}
@@ -1015,8 +1023,9 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		abi.Method = f.Name()
 	}
 	pkg := f.Pkg.Pkg
+	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}}
 	for _, p := range f.Params {
-		ap, err := abiParam(pkg, p.Name(), p.Type())
+		ap, err := ab.param(p.Name(), p.Type(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("parameter %s has unsupported type %s", p.Name(), p.Type())
 		}
@@ -1035,10 +1044,42 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	return abi, nil
 }
 
-// abiParam describes one value of type t named name, recursing into
-// pointers and structs.
-func abiParam(pkg *types.Package, name string, t types.Type) (contract.ABIParam, error) {
+// abiBuilder describes parameters, moving named struct types that refer
+// to themselves into the ABI's type table so the description stays finite.
+type abiBuilder struct {
+	pkg   *types.Package
+	abi   *contract.ABI
+	index map[*types.Named]int
+}
+
+// register adds a recursive named struct type to the table.
+func (ab *abiBuilder) register(n *types.Named, src, ipath string) int {
+	if idx, ok := ab.index[n]; ok {
+		return idx
+	}
+	idx := len(ab.abi.Types)
+	ab.index[n] = idx
+	ab.abi.Types = append(ab.abi.Types, contract.ABIType{GoType: src, TypePkg: ipath})
+	return idx
+}
+
+// param describes one value of type t named name. `stack` holds the named
+// struct types under construction; meeting one again means recursion.
+func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (contract.ABIParam, error) {
+	pkg := ab.pkg
 	src, ipath := spell(pkg, t)
+	if n, ok := t.(*types.Named); ok {
+		if _, isStruct := n.Underlying().(*types.Struct); isStruct {
+			if idx, done := ab.index[n]; done {
+				return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
+			}
+			if slices.Contains(stack, n) {
+				idx := ab.register(n, src, ipath)
+				return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
+			}
+			stack = append(stack, n)
+		}
+	}
 	switch {
 	case isBool(t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
@@ -1065,15 +1106,23 @@ func abiParam(pkg *types.Package, name string, t types.Type) (contract.ABIParam,
 	case *types.Struct:
 		ap := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct}
 		for i := 0; i < u.NumFields(); i++ {
-			f, err := abiParam(pkg, u.Field(i).Name(), u.Field(i).Type())
+			f, err := ab.param(u.Field(i).Name(), u.Field(i).Type(), stack)
 			if err != nil {
 				return contract.ABIParam{}, err
 			}
 			ap.Fields = append(ap.Fields, f)
 		}
+		if n, ok := t.(*types.Named); ok {
+			if idx, rec := ab.index[n]; rec {
+				// Found recursive while describing its fields: it lives in
+				// the table and this parameter refers to it.
+				ab.abi.Types[idx].Fields = ap.Fields
+				return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
+			}
+		}
 		return ap, nil
 	case *types.Pointer:
-		pointee, err := abiParam(pkg, name, u.Elem())
+		pointee, err := ab.param(name, u.Elem(), stack)
 		if err != nil {
 			return contract.ABIParam{}, err
 		}

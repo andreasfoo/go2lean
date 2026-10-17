@@ -30,6 +30,15 @@ inductive Gen where
   /-- A string of up to `maxLen` bytes, drawn from the literal pool or a
   small alphabet. -/
   | str (name : String) (maxLen : Nat)
+  /-- A pointer that is always nil (kept for ABI records that have no type
+  table). -/
+  | nilptr (name : String)
+  /-- A struct of the named type `tyIdx` in the type table: the way a
+  recursive type refers to itself. Generation stops at the depth budget. -/
+  | ref (name : String) (tyIdx : Nat)
+
+/-- The type table: field generators per named struct type. -/
+abbrev TypeTable := Array (List Gen)
 
 /-- The property shape to check. -/
 inductive Property where
@@ -102,7 +111,8 @@ def alphabet : Array Nat := #[97, 98, 99, 65, 66, 48, 49, 57, 32, 45, 95, 46, 47
 /-- Generate one value. Slices and pointees are materialised on the heap,
 so stores through them are exact and the report can dump them. -/
 partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap Val)
-    (pool : List (List Nat) := []) : Gen → Val × StdGen × Heap Val
+    (pool : List (List Nat) := []) (table : TypeTable := #[]) (depth : Nat := 4) :
+    Gen → Val × StdGen × Heap Val
   | .int _ w _ =>
     let (v, g) := genBits pf extra g w
     (.int w v, g, heap)
@@ -121,15 +131,24 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 (len + extraCap)), g, heap)
     | _ => (.unit, g, heap)
   | .structv _ fields =>
-    let (vs, g, heap) := genList pf extra g heap pool fields
+    let (vs, g, heap) := genList pf extra g heap pool table depth fields
     (.structv vs, g, heap)
   | .ptr _ pointee =>
-    let (isNil, g) := randNat g 0 4
-    if isNil == 0 then (.ptr 0 [], g, heap)
+    -- nil one time in five at the top, more often as the depth budget
+    -- runs out, always once it is spent.
+    let (roll, g) := randNat g 0 4
+    if depth == 0 || roll < (if depth ≤ 1 then 3 else 1) then (.ptr 0 [], g, heap)
     else
-      let (obj, g, heap) := genVal pf extra g heap pool pointee
+      let (obj, g, heap) := genVal pf extra g heap pool table (depth - 1) pointee
       let (p, heap) := heapAlloc heap obj
       (p, g, heap)
+  | .ref _ tyIdx =>
+    match table[tyIdx]? with
+    | some fields =>
+      let (vs, g, heap) := genList pf extra g heap pool table depth fields
+      (.structv vs, g, heap)
+    | none => (.unit, g, heap)
+  | .nilptr _ => (.ptr 0 [], g, heap)
   | .str _ maxLen =>
     -- Half the time a pool literal or a neighbour of one (a byte dropped or
     -- added, a mined integer appended: "port:" ++ "65536"), else random bytes,
@@ -164,17 +183,17 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
 where
   genMany (pf : Profile) (extra : List Nat) (g : StdGen) (w n : Nat) : List Val × StdGen :=
     (List.range n).foldl (fun (acc, g) _ => let (v, g) := genBits pf extra g w; (acc ++ [.int w v], g)) ([], g)
-  genList (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap Val) (pool : List (List Nat)) :
-      List Gen → List Val × StdGen × Heap Val
+  genList (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap Val) (pool : List (List Nat))
+      (table : TypeTable) (depth : Nat) : List Gen → List Val × StdGen × Heap Val
     | [] => ([], g, heap)
     | gen :: rest =>
-      let (v, g, heap) := genVal pf extra g heap pool gen
-      let (vs, g, heap) := genList pf extra g heap pool rest
+      let (v, g, heap) := genVal pf extra g heap pool table depth gen
+      let (vs, g, heap) := genList pf extra g heap pool table depth rest
       (v :: vs, g, heap)
 
-def genArgs (pf : Profile) (extra : List Nat) (g : StdGen) (gens : List Gen) (pool : List (List Nat) := []) :
-    List Val × StdGen × Heap Val :=
-  genVal.genList pf extra g #[] pool gens
+def genArgs (pf : Profile) (extra : List Nat) (g : StdGen) (gens : List Gen) (pool : List (List Nat) := [])
+    (table : TypeTable := #[]) : List Val × StdGen × Heap Val :=
+  genVal.genList pf extra g #[] pool table 4 gens
 
 /-- Memory contents derived from a per-trial seed and profile. -/
 def oracleOf (pf : Profile) (extra : List Nat) (seed : Nat) : Oracle :=
@@ -249,11 +268,13 @@ def flatten : Gen → Val → List (String × Json)
   | .structv .., _ => []
   | .ptr .., _ => []
   | .str .., _ => [] -- reported under objects, where the heap is available
+  | .nilptr .., _ => []
+  | .ref .., _ => []
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
-    | .str n .. => n
+    | .str n .. => n | .nilptr n => n | .ref n _ => n
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -301,6 +322,8 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.structv name _, v) => some (name, renderObj heap true v)
     | (.ptr name _, v) => some (name, renderObj heap true v)
     | (.str name _, v) => some (name, renderObj heap true v)
+    | (.nilptr name, v) => some (name, renderObj heap true v)
+    | (.ref name _, v) => some (name, renderObj heap true v)
     | _ => none
 
 partial def renderVal : Val → Json
@@ -338,7 +361,7 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
 
 /-- Run `trials` random trials; print one JSON line, `{"found": false, ...}` if nothing refutes. -/
 def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
-    (seed trials fuel : Nat) (strs : List String := []) : IO Unit := do
+    (seed trials fuel : Nat) (strs : List String := []) (table : TypeTable := #[]) : IO Unit := do
   let pool := strs.map fun s => s.toUTF8.toList.map (·.toNat)
   let mut g := mkStdGen seed
   let mut fuelOuts := 0
@@ -351,7 +374,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     let tseed := (mixHash (UInt64.ofNat seed) (UInt64.ofNat trial)).toNat
     let or := oracleOf pf extra tseed
     let h := havocOf tseed p.havocWidths
-    let (args, g', heap) := genArgs pf extra g gens pool
+    let (args, g', heap) := genArgs pf extra g gens pool table
     g := g'
     let (o, s, ret) := check p or h prop args fuel heap
     if o.refutes prop then
@@ -386,7 +409,8 @@ def smallStrs (extra : List Nat) (pool : List (List Nat)) : List (List Nat) :=
 
 /-- Enumerate one parameter as a heap-building function: each candidate
 takes the heap so far and returns the value and the extended heap. -/
-partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) : Gen → List (Heap Val → Val × Heap Val)
+partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable := #[])
+    (depth : Nat := 2) : Gen → List (Heap Val → Val × Heap Val)
   | .int _ w _ => (smallInts w extra).map fun v heap => (.int w v, heap)
   | .bool _ => [fun heap => (.bool true, heap), fun heap => (.bool false, heap)]
   | .err _ => [fun heap => (.err false, heap), fun heap => (.err true, heap)]
@@ -399,55 +423,71 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) :
         | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 len), heap)
         | _ => (.unit, heap)
   | .structv _ fields =>
-    (enumList extra maxLen pool fields).map fun build heap =>
+    (enumList extra maxLen pool table depth fields).map fun build heap =>
       let (vs, heap) := build heap
       (.structv vs, heap)
   | .ptr _ pointee =>
     (fun heap => (.ptr 0 [], heap)) ::
-      (enumGen extra maxLen pool pointee).map fun build heap =>
-        let (obj, heap) := build heap
-        heapAlloc heap obj
+      (if depth == 0 then [] else
+        (enumGen extra maxLen pool table (depth - 1) pointee).map fun build heap =>
+          let (obj, heap) := build heap
+          heapAlloc heap obj)
+  | .ref _ tyIdx =>
+    match table[tyIdx]? with
+    | some fields =>
+      (enumList extra maxLen pool table depth fields).map fun build heap =>
+        let (vs, heap) := build heap
+        (.structv vs, heap)
+    | none => [fun heap => (.unit, heap)]
   | .str _ _ =>
     (smallStrs extra pool).map fun bs heap => strAlloc heap bs
+  | .nilptr _ => [fun heap => (.ptr 0 [], heap)]
 where
-  enumList (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) :
+  enumList (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat) :
       List Gen → List (Heap Val → List Val × Heap Val)
     | [] => [fun heap => ([], heap)]
     | g :: gs =>
-      (enumGen extra maxLen pool g).flatMap fun build =>
-        (enumList extra maxLen pool gs).map fun rest heap =>
+      (enumGen extra maxLen pool table depth g).flatMap fun build =>
+        (enumList extra maxLen pool table depth gs).map fun rest heap =>
           let (v, heap) := build heap
           let (vs, heap) := rest heap
           (v :: vs, heap)
 
 /-- Size of the domain `enumArgs` would produce, computed before building it. -/
-partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) : Gen → Nat
+partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable := #[])
+    (depth : Nat := 2) : Gen → Nat
   | .int _ w _ => (smallInts w extra).length
   | .bool _ => 2
   | .err _ => 2
   | .slice _ w _ maxLen' =>
     let k := (smallInts w extra).length
     (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
-  | .structv _ fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool f) 1
-  | .ptr _ pointee => 1 + genSize extra maxLen pool pointee
+  | .structv _ fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth f) 1
+  | .ptr _ pointee => 1 + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) pointee)
+  | .ref _ tyIdx =>
+    match table[tyIdx]? with
+    | some fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth f) 1
+    | none => 1
   | .str _ _ => (smallStrs extra pool).length
+  | .nilptr _ => 1
 
-def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen) : Nat :=
-  gens.foldl (fun acc g => acc * genSize extra maxLen pool g) 1
+def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)
+    (table : TypeTable := #[]) : Nat :=
+  gens.foldl (fun acc g => acc * genSize extra maxLen pool table 2 g) 1
 
 /-- The full argument domain, each entry with the heap holding its objects. -/
-def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen) :
-    List (List Val × Heap Val) :=
-  (enumGen.enumList extra maxLen pool gens).map fun build => build #[]
+def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)
+    (table : TypeTable := #[]) : List (List Val × Heap Val) :=
+  (enumGen.enumList extra maxLen pool table 2 gens).map fun build => build #[]
 
 /-- Try every input in the small domain. Prints a counterexample line, or
 `{"found": false, "exhaustive": true, ...}` when the whole domain holds, or
 `"exhaustive": false` when the domain exceeds `limit`. Havoc sites (if any)
 are not enumerated; they take seed-derived values. -/
 def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
-    (maxLen limit fuel : Nat) (strs : List String := []) : IO Unit := do
+    (maxLen limit fuel : Nat) (strs : List String := []) (table : TypeTable := #[]) : IO Unit := do
   let pool := strs.map fun s => s.toUTF8.toList.map (·.toNat)
-  let n := domainSize extra maxLen pool gens
+  let n := domainSize extra maxLen pool gens table
   if n > limit then
     IO.println (Json.mkObj [("found", false), ("exhaustive", false),
       ("reason", "domain too large"), ("domain", n), ("limit", limit)]).compress
@@ -457,7 +497,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut fuelOuts := 0
   let mut moots := 0
   let mut i := 0
-  for (args, heap) in enumArgs extra maxLen pool gens do
+  for (args, heap) in enumArgs extra maxLen pool gens table do
     let (o, s, ret) := check p or h prop args fuel heap
     if o.refutes prop then
       IO.println (report or heap gens args i 0 o s ret).compress

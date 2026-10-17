@@ -98,7 +98,7 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 	}
 	var names []string
 	for _, prm := range abi.Params {
-		decl, err := paramDecl(prm, cx)
+		decl, err := paramDecl(abi, prm, cx)
 		if err != nil {
 			return "", err
 		}
@@ -138,7 +138,7 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 
 // paramDecl builds `name := <literal>` for one parameter from the
 // counterexample's inputs and memory.
-func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error) {
+func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexample) (string, error) {
 	switch p.Kind {
 	case contract.ABIInt:
 		v, ok := cx.Inputs[p.Model[0]]
@@ -179,7 +179,7 @@ func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error)
 		if p.Kind == contract.ABIPtr && v == nil {
 			return fmt.Sprintf("var %s %s", p.Go, p.GoType), nil
 		}
-		expr, err := literal(p, v)
+		expr, err := literal(abi, p, v)
 		if err != nil {
 			return "", err
 		}
@@ -217,7 +217,14 @@ func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error)
 
 // literal renders the Go expression for a value of the ABI type p: a struct
 // is a JSON array of its fields in order, a pointer is null or its pointee.
-func literal(p contract.ABIParam, v any) (string, error) {
+func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
+	if p.TypeRef != "" {
+		for _, t := range abi.Types {
+			if t.GoType == p.TypeRef {
+				p.Fields = t.Fields
+			}
+		}
+	}
 	switch p.Kind {
 	case contract.ABIInt:
 		s, ok := v.(string)
@@ -242,7 +249,7 @@ func literal(p contract.ABIParam, v any) (string, error) {
 		}
 		var parts []string
 		for i, f := range p.Fields {
-			e, err := literal(f, fields[i])
+			e, err := literal(abi, f, fields[i])
 			if err != nil {
 				return "", err
 			}
@@ -253,7 +260,7 @@ func literal(p contract.ABIParam, v any) (string, error) {
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
 		}
-		inner, err := literal(*p.Pointee, v)
+		inner, err := literal(abi, *p.Pointee, v)
 		if err != nil {
 			return "", err
 		}

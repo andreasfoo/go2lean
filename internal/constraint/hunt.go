@@ -83,7 +83,7 @@ type searchResult struct {
 func gens(abi *contract.ABI, maxLen int) (string, error) {
 	var parts []string
 	for _, p := range abi.Params {
-		g, err := gen(p, maxLen)
+		g, err := gen(abi, p, maxLen)
 		if err != nil {
 			return "", err
 		}
@@ -92,7 +92,33 @@ func gens(abi *contract.ABI, maxLen int) (string, error) {
 	return "[" + strings.Join(parts, ", ") + "]", nil
 }
 
-func gen(p contract.ABIParam, maxLen int) (string, error) {
+func typeIndex(abi *contract.ABI, ref string) int {
+	for i, t := range abi.Types {
+		if t.GoType == ref {
+			return i
+		}
+	}
+	return -1
+}
+
+// typeTable renders the Search.TypeTable for the ABI's recursive types.
+func typeTable(abi *contract.ABI, maxLen int) (string, error) {
+	var entries []string
+	for _, t := range abi.Types {
+		var fs []string
+		for _, f := range t.Fields {
+			g, err := gen(abi, f, maxLen)
+			if err != nil {
+				return "", err
+			}
+			fs = append(fs, g)
+		}
+		entries = append(entries, "["+strings.Join(fs, ", ")+"]")
+	}
+	return "#[" + strings.Join(entries, ", ") + "]", nil
+}
+
+func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (string, error) {
 	switch p.Kind {
 	case contract.ABIInt:
 		w, signed, ok := p.IntInfo()
@@ -111,9 +137,12 @@ func gen(p contract.ABIParam, maxLen int) (string, error) {
 		}
 		return fmt.Sprintf("(.slice %q %d %v %d)", p.Go, w, signed, maxLen), nil
 	case contract.ABIStruct:
+		if p.TypeRef != "" {
+			return fmt.Sprintf("(.ref %q %d)", p.Go, typeIndex(abi, p.TypeRef)), nil
+		}
 		var fs []string
 		for _, f := range p.Fields {
-			g, err := gen(f, maxLen)
+			g, err := gen(abi, f, maxLen)
 			if err != nil {
 				return "", err
 			}
@@ -124,9 +153,10 @@ func gen(p contract.ABIParam, maxLen int) (string, error) {
 		return fmt.Sprintf("(.str %q %d)", p.Go, maxLen), nil
 	case contract.ABIPtr:
 		if p.Pointee == nil {
-			return "", fmt.Errorf("parameter %s: pointer without pointee", p.Go)
+			// The frontend's depth cut-off for recursive types: always nil.
+			return fmt.Sprintf("(.nilptr %q)", p.Go), nil
 		}
-		g, err := gen(*p.Pointee, maxLen)
+		g, err := gen(abi, *p.Pointee, maxLen)
 		if err != nil {
 			return "", err
 		}
@@ -186,6 +216,10 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	if err != nil {
 		return nil, "", err
 	}
+	table, err := typeTable(abi, opts.MaxLen)
+	if err != nil {
+		return nil, "", err
+	}
 
 	extra := "[" + strings.Join(consts, ", ") + "]"
 	quoted := make([]string, len(strConsts))
@@ -201,7 +235,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 
 	var summary []string
 	if opts.Engine == EngineRandom || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d %s", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel, strs)
+		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d %s %s", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel, strs, table)
 		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_random", call)
 		if err != nil {
 			return nil, "", err
@@ -213,7 +247,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot)", res.Trials, res.OutOfFuel, res.Moot))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d %s", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel, strs)
+		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d %s %s", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel, strs, table)
 		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_exhaustive", call)
 		if err != nil {
 			return nil, "", err

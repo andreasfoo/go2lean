@@ -223,7 +223,10 @@ type ABI struct {
 	Frontend string `json:"frontend"`
 	// Method is set for methods: the receiver is Params[0] and a call is
 	// written recv.Method(rest...).
-	Method  string      `json:"method,omitempty"`
+	Method string `json:"method,omitempty"`
+	// Types is the table of recursive struct types referenced by TypeRef,
+	// in a fixed order (the generators index it by position).
+	Types   []ABIType   `json:"types,omitempty"`
 	Params  []ABIParam  `json:"params"`
 	Results []ABIResult `json:"results,omitempty"`
 	Havoc   []ABIHavoc  `json:"havoc,omitempty"`
@@ -263,6 +266,16 @@ type ABIParam struct {
 	// Struct fields (Go holds the field name) and the pointee of a pointer.
 	Fields  []ABIParam `json:"fields,omitempty"`
 	Pointee *ABIParam  `json:"pointee,omitempty"`
+	// TypeRef names an entry of ABI.Types for a struct that refers to itself
+	// (directly or through pointers); Fields is then empty.
+	TypeRef string `json:"type_ref,omitempty"`
+}
+
+// ABIType is a named struct type in the ABI's type table.
+type ABIType struct {
+	GoType  string     `json:"go_type"`
+	TypePkg string     `json:"type_pkg,omitempty"`
+	Fields  []ABIParam `json:"fields"`
 }
 
 // ABIResult describes the Go result.
