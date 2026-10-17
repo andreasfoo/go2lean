@@ -1,0 +1,8 @@
+name = "go2lean"
+version = "0.1.0"
+defaultTargets = ["Go2Lean"]
+
+[[lean_lib]]
+name = "Go2Lean"
+# Build the root module and every submodule, including M1's generated models.
+globs = ["Go2Lean.+"]

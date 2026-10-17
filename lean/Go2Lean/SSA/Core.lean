@@ -1,0 +1,209 @@
+/-!
+# SSA core
+
+A dialect-independent SSA program representation with an executable,
+fuel-bounded semantics. The design follows lean-mlir's split between a
+generic SSA core and dialects, but keeps only what go2lean needs:
+
+* basic blocks with block parameters (phi nodes are lowered to them by the
+  frontends), straight-line instructions and a terminator;
+* a dialect that supplies the value type, the instruction set and the
+  semantics of a single instruction; dialects cannot branch or call;
+* explicit `havoc` instructions for values the frontend chose not to model
+  (loads, unmodeled calls). Their values are extra inputs to the program, so a
+  counterexample search can pick them and report them.
+
+Every recursion is structural on `fuel`, so the interpreter is total and
+usable from `#eval`, `decide` and, after unfolding, `bv_decide`.
+-/
+
+namespace Go2Lean.SSA
+
+/-- Go runtime panic categories. `tag` matches `contract.PanicKind` on the Go side. -/
+inductive PanicKind where
+  | indexOutOfRange
+  | divideByZero
+  | nilDereference
+  | negativeShift
+  | sliceBounds
+  | makeSliceLen
+  | explicit
+  | other
+  /-- Not a Go panic: the model got stuck (ill-typed operands, missing block).
+  Signals a frontend bug; M3 reports it as inconclusive. -/
+  | modelStuck
+  deriving Repr, DecidableEq, Inhabited
+
+def PanicKind.tag : PanicKind → String
+  | .indexOutOfRange => "index_out_of_range"
+  | .divideByZero => "divide_by_zero"
+  | .nilDereference => "nil_dereference"
+  | .negativeShift => "negative_shift"
+  | .sliceBounds => "slice_bounds"
+  | .makeSliceLen => "make_slice_len"
+  | .explicit => "explicit"
+  | .other => "other"
+  | .modelStuck => "model_stuck"
+
+/-- Result of running a function. `outOfFuel` is an artefact of the bounded
+semantics and never a real program behaviour. -/
+inductive Res (α : Type) where
+  | ok (v : α)
+  | panic (k : PanicKind)
+  | outOfFuel
+  deriving Repr, Inhabited
+
+abbrev Var := Nat
+abbrev BlockId := Nat
+abbrev FuncId := Nat
+
+/-- What a dialect must provide. `Val` is the universe of runtime values,
+`Op` the instruction set, `denote` the meaning of one instruction applied to
+its operands. `Oracle` is read-only ambient state the dialect may consult
+(for GoSSA: the contents of memory), fixed for a whole run so that two reads
+of the same location agree. `toBool` reads a branch condition. -/
+class Dialect (Op : Type) (Val Oracle : outParam Type) where
+  denote : Oracle → Op → List Val → Res Val
+  toBool : Val → Option Bool
+
+inductive Instr (Op : Type) where
+  /-- `dst := op args` -/
+  | op (dst : Var) (o : Op) (args : List Var)
+  /-- `dst := havoc site` — a fresh non-deterministic value for havoc site
+  `site`. Sites are numbered per program; iterations are counted at run time. -/
+  | havoc (dst : Var) (site : Nat)
+  deriving Repr
+
+inductive Term where
+  | ret (v : Var)
+  | jump (b : BlockId) (args : List Var)
+  | br (cond : Var) (t : BlockId) (targs : List Var) (f : BlockId) (fargs : List Var)
+  | panic (k : PanicKind)
+  /-- `dst := call f args; jump next nargs` -/
+  | call (f : FuncId) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var)
+  deriving Repr
+
+structure Block (Op : Type) where
+  /-- Variables bound by this block's parameters, in order. -/
+  params : List Var
+  instrs : Array (Instr Op)
+  term : Term
+  deriving Repr
+
+structure Func (Op : Type) where
+  name : String
+  /-- Variables bound by the function parameters, in order. -/
+  params : List Var
+  /-- Number of variables; the environment is an array of this size. -/
+  nvals : Nat
+  entry : BlockId
+  blocks : Array (Block Op)
+  deriving Repr
+
+structure Prog (Op : Type) where
+  funcs : Array (Func Op)
+  /-- Width hint per havoc site, consumed by the search driver to generate values. -/
+  havocWidths : Array Nat := #[]
+  deriving Repr
+
+/-- Havoc oracle: site → iteration → value. -/
+abbrev Havoc (Val : Type) := Nat → Nat → Val
+
+/-- Run-time bookkeeping for havoc: how often each site fired and which
+values were handed out, so a counterexample can report them. -/
+structure HState (Val : Type) where
+  counts : Array Nat := #[]
+  log : Array (Nat × Nat × Val) := #[]
+
+namespace HState
+
+def take (h : Havoc Val) (s : HState Val) (site : Nat) : Val × HState Val :=
+  let counts :=
+    if site < s.counts.size then s.counts
+    else s.counts ++ Array.replicate (site + 1 - s.counts.size) 0
+  let iter := counts[site]!
+  let v := h site iter
+  (v, { counts := counts.set! site (iter + 1), log := s.log.push (site, iter, v) })
+
+end HState
+
+variable {Op Val Oracle : Type} [Dialect Op Val Oracle] [Inhabited Val]
+
+abbrev Env (Val : Type) := Array Val
+
+/-- Bind block/function parameters to argument values. -/
+def bindParams (env : Env Val) : List Var → List Val → Env Val
+  | p :: ps, v :: vs => bindParams (env.set! p v) ps vs
+  | _, _ => env
+
+/-- Execute the straight-line part of a block. -/
+def execInstrs (or : Oracle) (h : Havoc Val) :
+    List (Instr Op) → Env Val → HState Val → Res (Env Val) × HState Val
+  | [], env, s => (.ok env, s)
+  | .op dst o args :: rest, env, s =>
+    match Dialect.denote or o (args.map (env[·]!)) with
+    | .ok v => execInstrs or h rest (env.set! dst v) s
+    | .panic k => (.panic k, s)
+    | .outOfFuel => (.outOfFuel, s)
+  | .havoc dst site :: rest, env, s =>
+    let (v, s) := s.take h site
+    execInstrs or h rest (env.set! dst v) s
+
+/-- Bind the parameters of block `b` to the values of `args` in `env`. -/
+def enter (fn : Func Op) (b : BlockId) (env : Env Val) (args : List Var) : Env Val :=
+  match fn.blocks[b]? with
+  | some blk => bindParams env blk.params (args.map (env[·]!))
+  | none => env
+
+mutual
+
+/-- Run block `bid` of `fn` in environment `env`. Each block entry and each
+call consumes one unit of fuel. -/
+def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : BlockId)
+    (env : Env Val) (s : HState Val) : (fuel : Nat) → Res Val × HState Val
+  | 0 => (.outOfFuel, s)
+  | fuel + 1 =>
+    match fn.blocks[bid]? with
+    | none => (.panic .modelStuck, s)
+    | some blk =>
+      match execInstrs or h blk.instrs.toList env s with
+      | (.panic k, s) => (.panic k, s)
+      | (.outOfFuel, s) => (.outOfFuel, s)
+      | (.ok env, s) =>
+        match blk.term with
+        | .ret v => (.ok env[v]!, s)
+        | .panic k => (.panic k, s)
+        | .jump b args =>
+          runBlock p or h fn b (enter fn b env args) s fuel
+        | .br c t targs f fargs =>
+          match Dialect.toBool (Op := Op) env[c]! with
+          | some true => runBlock p or h fn t (enter fn t env targs) s fuel
+          | some false => runBlock p or h fn f (enter fn f env fargs) s fuel
+          | none => (.panic .modelStuck, s)
+        | .call f args dst next nargs =>
+          match runFunc p or h f (args.map (env[·]!)) s fuel with
+          | (.ok v, s) =>
+            let env := env.set! dst v
+            runBlock p or h fn next (enter fn next env nargs) s fuel
+          | (.panic k, s) => (.panic k, s)
+          | (.outOfFuel, s) => (.outOfFuel, s)
+
+/-- Run function `fid` on `args`. -/
+def runFunc (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val)
+    (s : HState Val) : (fuel : Nat) → Res Val × HState Val
+  | 0 => (.outOfFuel, s)
+  | fuel + 1 =>
+    match p.funcs[fid]? with
+    | none => (.panic .modelStuck, s)
+    | some fn =>
+      let env := bindParams (Array.replicate fn.nvals default) fn.params args
+      runBlock p or h fn fn.entry env s fuel
+
+end
+
+/-- Entry point: run a function with fresh havoc state. -/
+def run (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val) (fuel : Nat) :
+    Res Val × HState Val :=
+  runFunc p or h fid args {} fuel
+
+end Go2Lean.SSA

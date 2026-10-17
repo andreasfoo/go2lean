@@ -1,0 +1,4 @@
+/out/
+/lean/.lake/
+/lean/Search/
+*.test
