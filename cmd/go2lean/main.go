@@ -61,7 +61,8 @@ func openWorkspace(path string) (contract.Workspace, string, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
-	return contract.Workspace{Root: path}, root, nil
+	w := contract.Workspace{Root: path}
+	return w, root, w.Init()
 }
 
 func cmdCompile(args []string) error {

@@ -127,6 +127,7 @@ type Func struct {
 	Status  contract.ModelStatus
 	Issues  []string
 	SpecFor string
+	Consts  []string // integer literals, see contract.ModelFunc.Consts
 	ABI     contract.ABI
 }
 

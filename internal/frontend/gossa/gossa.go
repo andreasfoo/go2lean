@@ -15,6 +15,7 @@ import (
 	"go/token"
 	"go/types"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -213,6 +214,9 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 	cv, err := constVal(c)
 	if err != nil {
 		return 0, err
+	}
+	if iv, ok := cv.(ir.IntVal); ok && !slices.Contains(t.out.Consts, iv.Bits) {
+		t.out.Consts = append(t.out.Consts, iv.Bits)
 	}
 	v := t.fresh()
 	t.emit(ir.Instr{Dst: v, Op: ir.Const{V: cv}})

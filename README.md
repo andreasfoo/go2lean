@@ -52,14 +52,20 @@ Two property shapes are templated automatically:
   into the model with the same pipeline as the target, so the Lean property
   and the Go oracle agree by construction.
 
-See `examples/` for the ground-truth packages (`overflow`, `oob`, `divzero`).
+Two engines run on each property: seeded random search (value profiles plus
+the target's own integer literals), then, if nothing is found, exhaustive
+enumeration of a small domain, which records an `exhausted` proof result for
+the property.
+
+See `examples/` for the ground-truth packages (`overflow`, `oob`, `divzero`, `magic`).
 
 ## Commands
 
 ```
 go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
 go2lean props   [-workspace out]                  template properties from the model report
-go2lean hunt    [-workspace out] [-property id] [-seed n] [-trials n] [-fuel n] [-maxlen n]
+go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
+                [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id
 go2lean run     [-workspace out] <package>        all of the above
 ```

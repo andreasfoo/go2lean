@@ -22,6 +22,20 @@ type Workspace struct {
 	Root string
 }
 
+// Init creates the workspace root and marks it as a separate Go module, so
+// that the PoC tests it holds are not picked up by `go vet ./...` or
+// `go test ./...` in the enclosing repository.
+func (w Workspace) Init() error {
+	if err := os.MkdirAll(w.Root, 0o755); err != nil {
+		return err
+	}
+	gomod := filepath.Join(w.Root, "go.mod")
+	if _, err := os.Stat(gomod); err == nil {
+		return nil
+	}
+	return os.WriteFile(gomod, []byte("// go2lean workspace: keeps PoC tests out of the enclosing module.\nmodule go2lean.invalid/workspace\n"), 0o644)
+}
+
 func (w Workspace) path(kind, id string) string {
 	return filepath.Join(w.Root, kind, id+".json")
 }

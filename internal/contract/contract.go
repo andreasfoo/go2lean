@@ -155,6 +155,10 @@ const (
 	ProofBoundedProved ProofStatus = "bounded_proved"
 	ProofFailed        ProofStatus = "failed"
 	ProofUnknown       ProofStatus = "unknown"
+	// ProofExhausted: every input in a small, explicitly enumerated domain
+	// satisfies the property. Weaker than bounded_proved; Domain says what
+	// was covered.
+	ProofExhausted ProofStatus = "exhausted"
 )
 
 // ProofResult records a proof attempt on a Property.
@@ -163,6 +167,7 @@ type ProofResult struct {
 	Status   ProofStatus `json:"status"`
 	Fuel     int         `json:"fuel,omitempty"`
 	Tactic   string      `json:"tactic,omitempty"`
+	Domain   string      `json:"domain,omitempty"`
 	LeanFile string      `json:"lean_file,omitempty"`
 	TimeMs   int64       `json:"time_ms,omitempty"`
 	Error    string      `json:"error,omitempty"`
@@ -237,7 +242,10 @@ type ModelFunc struct {
 	Issues []string    `json:"issues,omitempty"`
 	// SpecFor names the function this one is a `go2lean:spec` for.
 	SpecFor string `json:"spec_for,omitempty"`
-	ABI     string `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+	// Consts are the integer literals in the body (two's-complement bit
+	// patterns as decimal strings); the engines seed their value pools with them.
+	Consts []string `json:"consts,omitempty"`
+	ABI    string   `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
 }
 
 // ModelReport is M1's summary of one package, read by M2 to decide what to

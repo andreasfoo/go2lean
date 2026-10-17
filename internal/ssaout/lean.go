@@ -134,7 +134,7 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		Havoc:      p.Havoc,
 	}
 	for i, f := range p.Funcs {
-		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor}
+		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Consts: f.Consts}
 		if f.Status != contract.ModelRejected {
 			abi := f.ABI
 			abiRel, err := ws.WriteABI(&abi, f.Name)

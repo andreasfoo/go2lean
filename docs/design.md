@@ -292,12 +292,26 @@ flagged separately.
 1. **Random search** (built): `Go2Lean.Search.run`, a seeded generator with
    per-trial *value profiles* (boundary-only, small, mixed) so that correlated
    inputs are likely; memory and havoc are re-drawn every trial from the trial
-   seed. Reports one JSON line. Seconds.
-2. **`bv_decide`**: `simp [run, denote, …]` with a fixed fuel to a bitvector
-   goal, then the built-in SAT solver; complete for the unrolled program,
-   gives an exact assignment.
-3. **Proof**: `simp`/`omega`/`bv_decide`/`decide`, then agent-written Lean.
-4. Optional: SMT-LIB export to Z3/cvc5.
+   seed. The value pool includes every integer literal of the target and its
+   spec, with off-by-one neighbours, so comparisons against magic constants
+   are reachable. Reports one JSON line. Seconds.
+2. **Exhaustive small domain** (built): `Go2Lean.Search.exhaust` enumerates
+   boundary values, mined literals and magnitudes ≤ 8 for every integer
+   parameter and slice element, slices up to length 3, with a domain-size
+   cap. No counterexample yields a `ProofResult` of status `exhausted`, a
+   weak but honest bounded certificate; havoc sites are not enumerated and
+   the record says so.
+3. **Proof for linear functions**: `bv_omega` after unfolding `run` for a
+   fixed fuel; polynomial, no SAT.
+4. **`bv_decide`, conditionally**: only for loop-free functions or fuel ≤ ~8,
+   with a hard timeout, after the engines above found nothing. Bit-blasting
+   is dominated by `mul`/`div` and by loop unrolling, and the interpreter has
+   to be `simp`-unfolded first (the `h ▸` width casts in `binInt` are hostile
+   to that). Measure on `Clamp` before investing further.
+5. **SMT export** (Z3/cvc5) when complete bug-finding on loops is needed:
+   external, asynchronous, better `mul`/`div` heuristics; no Lean certificate,
+   which bug-finding does not need because M3 is the certificate.
+6. **Proof**: `simp`/`omega`/`decide`, then agent-written Lean.
 
 Counterexamples are re-validated per P4. The random engine reports the values
 it actually executed, so revalidation is implicit.
@@ -455,6 +469,7 @@ and expected outcomes.
 | `overflow` | `Sum` wraps; `SpecSum` says non-negative inputs give a non-negative sum | `p_sum_specsum` confirmed; `p_sum_nopanic` none |
 | `oob` | `Last` has an off-by-one (`i <= len`) | `p_last_nopanic` confirmed (index out of range); `Clamp` none |
 | `divzero` | `Avg` divides by a caller-controlled count | `p_avg_nopanic` confirmed (divide by zero); `Ratio` none (`MinInt/-1` wraps, no panic) |
+| `magic` | `Decode` indexes an empty payload only when `tag == 0x5EC4E7` | `p_decode_nopanic` confirmed; reachable only because literals are mined into the value pool |
 
 Planned: `shift` (count ≥ 64 / negative count), `lenfield` (untrusted length
 driving `make`/slicing), `alias` (writes through aliased slices; GoSSA stage B only).

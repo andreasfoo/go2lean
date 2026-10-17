@@ -9,13 +9,27 @@ import (
 	"github.com/andreasfoo/go2lean/internal/poc"
 )
 
-func searchFlags(fs *flag.FlagSet) *constraint.SearchOptions {
+func searchFlags(fs *flag.FlagSet) *engineOptions {
 	o := &constraint.SearchOptions{}
+	engine := fs.String("engine", "all", "engine: random, exhaustive or all")
 	fs.IntVar(&o.Seed, "seed", 42, "random seed")
 	fs.IntVar(&o.Trials, "trials", 2000, "random trials per property")
 	fs.IntVar(&o.Fuel, "fuel", 1000, "interpreter fuel (block entries + calls)")
 	fs.IntVar(&o.MaxLen, "maxlen", 8, "maximum generated slice length")
-	return o
+	fs.IntVar(&o.ExhaustLen, "exhaust-len", 3, "maximum slice length in the exhaustive engine")
+	fs.IntVar(&o.ExhaustLimit, "exhaust-limit", 300000, "maximum domain size the exhaustive engine attempts")
+	return &engineOptions{o, engine}
+}
+
+// engineOptions defers reading the -engine flag until after Parse.
+type engineOptions struct {
+	*constraint.SearchOptions
+	engine *string
+}
+
+func (e *engineOptions) get() constraint.SearchOptions {
+	e.Engine = constraint.Engine(*e.engine)
+	return *e.SearchOptions
 }
 
 func cmdProps(args []string) error {
@@ -56,7 +70,7 @@ func cmdHunt(args []string) error {
 		return err
 	}
 	for _, p := range props {
-		if _, err := hunt(w, root, p, *opts); err != nil {
+		if _, err := hunt(w, root, p, opts.get()); err != nil {
 			return err
 		}
 	}
@@ -154,7 +168,7 @@ func cmdRun(args []string) error {
 	fmt.Println("== M2 hunt")
 	var cxs []*contract.Counterexample
 	for _, p := range props {
-		cx, err := hunt(w, root, p, *opts)
+		cx, err := hunt(w, root, p, opts.get())
 		if err != nil {
 			return err
 		}
