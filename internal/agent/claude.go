@@ -46,7 +46,7 @@ func (c *Claude) Name() string { return c.cfg.Model }
 func (c *Claude) Complete(ctx context.Context, system, user string) (string, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.cfg.Model),
-		MaxTokens: 16000,
+		MaxTokens: 32000,
 		System:    []anthropic.TextBlockParam{{Text: system}},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(user)),
@@ -56,8 +56,17 @@ func (c *Claude) Complete(ctx context.Context, system, user string) (string, err
 		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 	}
-	resp, err := c.client.Messages.New(ctx, params)
-	if err != nil {
+	// Streamed: the SDK refuses a plain request whose output budget could
+	// take more than ten minutes, and a provider that thinks at length
+	// needs that budget.
+	stream := c.client.Messages.NewStreaming(ctx, params)
+	var resp anthropic.Message
+	for stream.Next() {
+		if err := resp.Accumulate(stream.Current()); err != nil {
+			return "", err
+		}
+	}
+	if err := stream.Err(); err != nil {
 		return "", err
 	}
 	if resp.StopReason == anthropic.StopReasonRefusal {
@@ -68,6 +77,12 @@ func (c *Claude) Complete(ctx context.Context, system, user string) (string, err
 		if t, ok := block.AsAny().(anthropic.TextBlock); ok {
 			b.WriteString(t.Text)
 		}
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		// Say why, so a provider that spent the output budget thinking or
+		// dropped the request is told apart from an empty answer.
+		return "", fmt.Errorf("empty response from %s (stop_reason=%s, input_tokens=%d, output_tokens=%d, %d content blocks)",
+			c.cfg.Model, resp.StopReason, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Content))
 	}
 	return b.String(), nil
 }

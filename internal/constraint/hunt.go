@@ -92,6 +92,7 @@ type searchResult struct {
 	MaxLen      int                        `json:"max_len"`
 	HavocSites  int                        `json:"havoc_sites"`
 	BudgetHit   bool                       `json:"budget_hit"`
+	StuckSites  map[string]int             `json:"stuck_sites"` // where the model got stuck, by count
 	Checked     int                        `json:"checked"`
 	Inputs      map[string]string          `json:"inputs"`
 	Memory      map[string][]string        `json:"memory"`
@@ -292,7 +293,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		if res.BudgetHit {
 			note = fmt.Sprintf(" [stopped by the %ds budget]", opts.BudgetSeconds)
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s", res.Trials, res.OutOfFuel, res.Moot, note))
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s", res.Trials, res.OutOfFuel, res.Moot, note, stuckNote(res.StuckSites)))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
 		res, err := runSearch(leanDir, prop.ID+"_exhaustive", spec, "exhaustive")
@@ -324,6 +325,20 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		}
 	}
 	return nil, strings.Join(summary, "; "), nil
+}
+
+// stuckNote names the most frequent site at which the model got stuck.
+func stuckNote(sites map[string]int) string {
+	best, n := "", 0
+	for s, c := range sites {
+		if c > n || c == n && s < best {
+			best, n = s, c
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; stuck mostly at %s (%d)", best, n)
 }
 
 // driverBuilt remembers that the search executable is up to date with the

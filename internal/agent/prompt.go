@@ -155,15 +155,30 @@ func packageSource(dir string) (string, error) {
 	return b.String(), nil
 }
 
+// reportSummary lists the modelled functions with a few of their issues
+// each; a rejected function gets its reason in one line. Large packages
+// have hundreds of partial functions, so the issues are capped to keep the
+// prompt within what a model reads well.
 func reportSummary(r *contract.ModelReport) string {
+	const maxIssues = 3
 	var b strings.Builder
 	for _, f := range r.Funcs {
 		fmt.Fprintf(&b, "- %s: %s (%s)", f.Name, f.GoSig, f.Status)
 		if f.SpecFor != "" {
 			fmt.Fprintf(&b, " [spec for %s]", f.SpecFor)
 		}
+		if f.Status == "rejected" && len(f.Issues) > 0 {
+			fmt.Fprintf(&b, ": %s", f.Issues[len(f.Issues)-1])
+		}
 		b.WriteString("\n")
-		for _, is := range f.Issues {
+		if f.Status == "rejected" {
+			continue
+		}
+		for i, is := range f.Issues {
+			if i == maxIssues {
+				fmt.Fprintf(&b, "    ... %d more\n", len(f.Issues)-maxIssues)
+				break
+			}
 			fmt.Fprintf(&b, "    issue: %s\n", is)
 		}
 	}

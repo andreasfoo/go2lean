@@ -126,6 +126,9 @@ structure HState (Val : Type) where
   log : Array (Nat × Nat × Val) := #[]
   /-- Objects allocated before or during the run; `heap[0]` is the nil slot. -/
   heap : Heap Val := #[]
+  /-- The op (with its operands) at which the model got stuck, for the
+  engines' diagnostics. -/
+  stuck : Option String := none
 
 namespace HState
 
@@ -135,11 +138,11 @@ def take (h : Havoc Val) (s : HState Val) (site : Nat) : Val × HState Val :=
     else s.counts ++ Array.replicate (site + 1 - s.counts.size) 0
   let iter := counts[site]!
   let v := h site iter
-  (v, { counts := counts.set! site (iter + 1), log := s.log.push (site, iter, v) })
+  (v, { s with counts := counts.set! site (iter + 1), log := s.log.push (site, iter, v) })
 
 end HState
 
-variable {Op Val Oracle : Type} [Dialect Op Val Oracle] [Inhabited Val]
+variable {Op Val Oracle : Type} [Dialect Op Val Oracle] [Inhabited Val] [Repr Op] [Repr Val]
 
 abbrev Env (Val : Type) := Array Val
 
@@ -153,8 +156,13 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
     List (Instr Op) → Env Val → HState Val → Res (Env Val) × HState Val
   | [], env, s => (.ok env, s)
   | .op dst o args :: rest, env, s =>
-    match Dialect.denote or s.heap o (args.map (env[·]!)) with
+    let vals := args.map (env[·]!)
+    match Dialect.denote or s.heap o vals with
     | .ok (v, heap) => execInstrs or h rest (env.set! dst v) { s with heap := heap }
+    | .panic .modelStuck =>
+      -- Record where (op and operand shapes, truncated) for the engines.
+      let site := (s!"{repr o} {repr vals}".take 160).toString
+      (.panic .modelStuck, { s with stuck := s.stuck <|> some site })
     | .panic k => (.panic k, s)
     | .outOfFuel => (.outOfFuel, s)
   | .havoc dst site :: rest, env, s =>

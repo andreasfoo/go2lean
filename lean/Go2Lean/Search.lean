@@ -414,6 +414,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let mut g := mkStdGen seed
   let mut fuelOuts := 0
   let mut moots := 0
+  let mut stuckSites : List (String × Nat) := []
   let start ← IO.monoMsNow
   let mut done := 0
   for trial in [0:trials] do
@@ -436,9 +437,18 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       IO.println (report or heap gens args trial seed o s ret).compress
       return
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
-    if o.moot prop then moots := moots + 1
+    if o.moot prop then
+      moots := moots + 1
+      if let some site := s.stuck then stuckSites := bump stuckSites site
+  let top := (stuckSites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 5
   IO.println (Json.mkObj [("found", false), ("trials", done), ("out_of_fuel", fuelOuts),
-    ("moot", moots), ("budget_hit", decide (done < trials))]).compress
+    ("moot", moots), ("budget_hit", decide (done < trials)),
+    ("stuck_sites", Json.mkObj (top.map fun (site, n) => (site, (n : Json))))]).compress
+where
+  bump (sites : List (String × Nat)) (site : String) : List (String × Nat) :=
+    match sites.lookup site with
+    | some n => (site, n + 1) :: sites.filter (·.1 != site)
+    | none => (site, 1) :: sites
 
 -- Exhaustive engine ---------------------------------------------------------
 
@@ -564,7 +574,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let n := domainSize extra maxLen pool gens table allowNil
   if n > limit then
     IO.println (Json.mkObj [("found", false), ("exhaustive", false),
-      ("reason", "domain too large"), ("domain", n), ("limit", limit)]).compress
+      ("reason", "domain too large"), ("domain", (min n (10 ^ 300) : Nat)), ("limit", limit)]).compress
     return
   let h := havocOf 0 p.havocWidths
   let or := oracleOf .mixed extra 0

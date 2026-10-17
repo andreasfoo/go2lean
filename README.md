@@ -75,7 +75,9 @@ the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
 the ones the frontend rejects, runs the pipeline, and writes a report from
 the verdicts.
 
-**M3 — poc.** A counterexample becomes a Go test in the target package. The
+**M3 — poc.** A counterexample becomes a Go test in the target package,
+which executes the real function with the generated inputs: run go2lean on
+a scratch clone, since a function that writes files will write them. The
 test never fails by itself; it prints what happened and the `poc` package
 judges: `confirmed` (the real run violates the oracle the way the property
 says), `spurious` (it does not — with a diagnosis of what the model got
