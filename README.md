@@ -69,7 +69,8 @@ exhaustive enumeration of a small domain, which records an `exhausted`
 certificate when it passes. Both run in `go2lean-search`, a native
 executable built by lake from the Lean engines and every generated model,
 driven by a JSON description of the search; properties are searched in
-parallel. The agent sits on top: it reads the source and
+parallel, and each engine stops at a wall-clock budget (10 s by default)
+so one function with expensive inputs cannot stall a sweep. The agent sits on top: it reads the source and
 the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
 the ones the frontend rejects, runs the pipeline, and writes a report from
 the verdicts.
@@ -106,7 +107,7 @@ revised spec file in the report round triggers one more pass.
 ```
 go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
 go2lean props   [-workspace out] -package <path>  template properties from the model report
-go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all] [-jobs n]
+go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all] [-jobs n] [-budget s]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id [more ids...]   one go test per package
 go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, hunt, poc (./... allowed)
