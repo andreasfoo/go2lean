@@ -495,6 +495,21 @@ Metrics: counterexample recall, spurious rate, unknown rate, proof rate,
 crosscheck agreement, end-to-end time. All of `examples/` runs on every
 change to M1's modelling rules.
 
+## 9b. Smoke test on a real module (2026-10-17)
+
+`tingly-box` (156 packages, 1152 Go files, an LLM gateway) was compiled with
+the go/ssa frontend in one pass (15 s). What it taught:
+
+| finding | consequence |
+|---|---|
+| 3783 top-level functions, **15 complete, 2 partial, 3766 rejected** — all at the signature | stage A's subset is the ceiling, not the engines; bodies were never reached |
+| rejections by type kind: pointer 1324, string 897, named struct/interface 727, other slices 272, map 126, `[]string` 104, `context.Context` 91, interface 86, multiple results 51, `error` 35 | order of work: (1) multiple results + opaque `error` (cheap, unlocks the `(T, error)` idiom); (2) strings as `(ref, len)` over the memory oracle; (3) the heap model for pointers, structs, maps — the bulk |
+| the module's `replace` target was a git submodule missing from a shallow clone; the tool said only "package has errors" | load errors are now reported with their causes |
+| per-package loads re-type-checked the whole dependency graph (minutes per package) | `compile ./...` loads once; 156 packages in 15 s |
+| packages sharing a base name (`types`, `util`) overwrote each other's records and Lean modules | workspace records and Lean modules are keyed by the full import path |
+| `init#N` package initialisers were modelled as functions | skipped |
+| the modelled functions are byte/rune classifiers, `gcd`, `max`, small budget arithmetic — exactly the shape the engines handle | real bugs in such helpers are rare; the value of go2lean on real code depends on the type-coverage work above |
+
 ## 10. Milestones
 
 - **Done — end-to-end PoC slice.** Contract and workspace; Lean SSA core;

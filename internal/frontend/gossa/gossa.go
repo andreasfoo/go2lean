@@ -95,7 +95,7 @@ func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
 	// Pass 1: pick candidates and assign FuncIds so calls can be resolved.
 	var fns []*ssa.Function
 	for _, m := range spkg.Members {
-		if f, ok := m.(*ssa.Function); ok && f.Name() != "init" && f.Synthetic == "" && !isTestFunc(f.Name()) {
+		if f, ok := m.(*ssa.Function); ok && !isInit(f.Name()) && f.Synthetic == "" && !isTestFunc(f.Name()) {
 			fns = append(fns, f)
 		}
 	}
@@ -156,6 +156,12 @@ func selectVariant(loaded []*packages.Package) []*packages.Package {
 		out = append(out, p)
 	}
 	return out
+}
+
+// isInit matches the package initialiser and the per-file init#N functions
+// go/ssa synthesises for `func init()` bodies.
+func isInit(name string) bool {
+	return name == "init" || strings.HasPrefix(name, "init#")
 }
 
 func isTestFunc(name string) bool {
