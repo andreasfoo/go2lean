@@ -48,26 +48,27 @@ def f1 : GoSSA.Func := {
 
 /-- func(ctx context.Context, m map[string]int, keys []string) int (status: partial) -/
 def f2 : GoSSA.Func := {
-  name := "Lookup", params := [0, 1, 2], nvals := 10, entry := 0,
+  name := "Lookup", params := [0, 1, 2], nvals := 11, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[.havoc 3 2,
-                 .havoc 4 3],
-      term := .br 4 1 [] 2 [] },
+                 .op 4 (.const (.err false)) [],
+                 .op 5 .ne [3, 4]],
+      term := .br 5 1 [] 2 [] },
     -- 1: if.then
     { params := [],
-      instrs := #[.op 5 (.const (.int 64 18446744073709551615#64)) []],
-      term := .ret 5 },
+      instrs := #[.op 6 (.const (.int 64 18446744073709551615#64)) []],
+      term := .ret 6 },
     -- 2: if.done
     { params := [],
-      instrs := #[.op 6 (.const (.int 64 0#64)) [],
-                 .op 7 .indexAddr [2, 6],
-                 .op 8 .loadPath [7],
-                 .havoc 9 4],
-      term := .ret 9 }
+      instrs := #[.op 7 (.const (.int 64 0#64)) [],
+                 .op 8 .indexAddr [2, 7],
+                 .op 9 .loadPath [8],
+                 .havoc 10 3],
+      term := .ret 10 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2], havocWidths := #[1, 64, 0, 1, 64] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2], havocWidths := #[1, 64, 0, 64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_opaque

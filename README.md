@@ -138,7 +138,7 @@ go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model Mi
     -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
 ```
 
-On tingly-box (7498 functions and methods) the model covers 6198; a full
+On tingly-box (7498 functions and methods) the model covers 6588; a full
 pass over the 111 packages with a model takes about an hour and ends with
 11 confirmed findings and 26 spurious counterexamples (see the design doc,
 §9b): seven `truncate(s, n)` helpers that panic on a negative `n`, two
@@ -168,8 +168,8 @@ runs zero times, and M3 passes their zero value (`context.Background()`
 for a context). A deferred call the model does not look into (a mutex
 unlock, a close) is ignored. Closures, goroutines and `defer` of a modelled
 function still reject the function, with the reason in the model report.
-On tingly-box (7498 functions and methods) this models 6198 (1873
-completely); 304 of the 1300 rejected are test helpers taking `*testing.T`.
+On tingly-box (7498 functions and methods) this models 6588 (1988
+completely); 319 of the 910 rejected are test helpers taking `*testing.T`.
 
 ## Layout
 

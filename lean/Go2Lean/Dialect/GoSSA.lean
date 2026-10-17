@@ -176,6 +176,9 @@ def eqVal : Val → Val → Option Bool
   | .bool a, .bool b => some (a == b)
   | .err a, .err b => some (a == b)
   | .ptr r p, .ptr r' p' => some (r == r' && p == p')
+  -- Go only compares slices against nil: equal when both are nil.
+  | .slice r .., .slice r' .. => some ((r == 0) == (r' == 0))
+  | .unit, .unit => none -- opaque values: the frontend havocs these comparisons
   | _, _ => none
 
 

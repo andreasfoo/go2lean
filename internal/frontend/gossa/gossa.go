@@ -334,6 +334,14 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 	if v, ok := t.vars[x]; ok {
 		return v, nil
 	}
+	switch x.(type) {
+	case *ssa.Function, *ssa.Builtin:
+		// A function used as a value: opaque, like any func-typed value.
+		v := t.fresh()
+		t.vars[x] = v
+		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.Opaque{}}})
+		return v, nil
+	}
 	c, ok := x.(*ssa.Const)
 	if !ok {
 		return 0, fmt.Errorf("unsupported value %s (%T)", x.Name(), x)
@@ -369,6 +377,10 @@ func constVal(c *ssa.Const) (ir.Val, error) {
 			return ir.NilSlice{}, nil
 		case isOpaqueType(c.Type()):
 			return ir.Opaque{}, nil
+		}
+		// go/ssa writes the zero value of any type as a nil constant.
+		if z, ok := zeroVal(c.Type()); ok {
+			return z, nil
 		}
 		return nil, fmt.Errorf("nil constant of type %s", c.Type())
 	}
@@ -465,7 +477,7 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		// floats: the model does not look inside them, so the outcome is
 		// havoc (a bool, or an opaque number).
 		return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
-	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()))) {
+	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()) || isSlice(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
 	a, err := t.val(x.X)
@@ -632,6 +644,10 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.issue("map %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
 		return nil
+	case *ssa.MakeChan:
+		t.issue("channel %s is opaque (not modelled)", x.Name())
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		return nil
 	case *ssa.MapUpdate:
 		t.issue("map update %s[%s] ignored (maps are opaque)", x.Map.Name(), x.Key.Name())
 		return nil
@@ -688,7 +704,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			if i > 0 {
 				var ok bool
 				if zero, ok = assumedValue(tu.At(i).Type()); !ok {
-					return fmt.Errorf("range over map with %s elements", tu.At(i).Type())
+					zero = ir.Opaque{} // an unused component has the invalid type
 				}
 			}
 			t.emit(ir.Instr{Dst: v, Op: ir.Const{V: zero}})
@@ -1203,6 +1219,9 @@ func isSlice(t types.Type) bool {
 // maps, funcs, channels, and the basic types the dialect has no arithmetic
 // for (floats, complex numbers, unsafe pointers).
 func isOpaqueType(t types.Type) bool {
+	if isError(t) {
+		return false // the error interface is modelled precisely (nil or not)
+	}
 	switch u := t.Underlying().(type) {
 	case *types.Interface, *types.Map, *types.Signature, *types.Chan:
 		return true
