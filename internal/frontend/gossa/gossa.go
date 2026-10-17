@@ -42,8 +42,8 @@ func Translate(dir, pattern string) (*ir.Prog, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if packages.PrintErrors(loaded) > 0 {
-		return nil, "", fmt.Errorf("package %s has errors", pattern)
+	if errs := loadErrors(loaded); len(errs) > 0 {
+		return nil, "", fmt.Errorf("package %s does not load:\n  %s", pattern, strings.Join(errs, "\n  "))
 	}
 	pkgs := selectVariant(loaded)
 	if len(pkgs) != 1 {
@@ -84,6 +84,25 @@ func Translate(dir, pattern string) (*ir.Prog, string, error) {
 		return nil, "", fmt.Errorf("internal error: generated program is malformed: %w", err)
 	}
 	return p, modPath, nil
+}
+
+// loadErrors collects the first few type/load errors of the packages (and
+// their dependencies), so a broken module graph is reported with its cause
+// rather than as "has errors".
+func loadErrors(loaded []*packages.Package) []string {
+	var errs []string
+	seen := map[string]bool{}
+	packages.Visit(loaded, nil, func(p *packages.Package) {
+		for _, e := range p.Errors {
+			msg := e.Error()
+			if seen[msg] || len(errs) >= 8 {
+				continue
+			}
+			seen[msg] = true
+			errs = append(errs, msg)
+		}
+	})
+	return errs
 }
 
 // selectVariant keeps the internal test variant of each package when one was
