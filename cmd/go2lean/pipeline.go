@@ -88,16 +88,20 @@ func selectProps(w contract.Workspace, id string) ([]*contract.Property, error) 
 func cmdPoc(args []string) error {
 	fs := flag.NewFlagSet("poc", flag.ExitOnError)
 	ws := workspaceFlag(fs)
-	id := fs.String("counterexample", "", "counterexample id")
+	id := fs.String("counterexample", "", "counterexample id (more ids may follow as arguments)")
 	fs.Parse(args)
-	if *id == "" {
-		return fmt.Errorf("poc: -counterexample is required")
+	ids := fs.Args()
+	if *id != "" {
+		ids = append([]string{*id}, ids...)
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("poc: at least one counterexample id is required")
 	}
 	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
-	_, err = pipeline.Verify(w, env, *id, os.Stdout)
+	_, err = pipeline.VerifyAll(w, env, ids, os.Stdout)
 	return err
 }
 

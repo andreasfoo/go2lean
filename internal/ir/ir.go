@@ -168,6 +168,20 @@ var StdlibOps = map[string]Op{
 	"strings.TrimSuffix": Simple("strTrimSuffix"),
 	"strconv.Atoi":       Simple("strAtoi"),
 	"strconv.Itoa":       Simple("strItoa"),
+	"strings.IndexByte":  Simple("strIndexByte"),
+	"strings.LastIndex":  Simple("strLastIndex"),
+	"strings.Count":      Simple("strCount"),
+	"strings.EqualFold":  Simple("strEqualFold"),
+	"strings.Trim":       Simple("strTrim"),
+	"strings.TrimLeft":   Simple("strTrimLeft"),
+	"strings.TrimRight":  Simple("strTrimRight"),
+	"strings.ToLower":    Simple("strToLower"),
+	"strings.ToUpper":    Simple("strToUpper"),
+	"strings.ReplaceAll": Simple("strReplaceAll"),
+	"strings.Split":      Simple("strSplit"),
+	"strings.Fields":     Simple("strFields"),
+	"strings.Join":       Simple("strJoin"),
+	"strings.Repeat":     Simple("strRepeat"),
 }
 
 // Havoc site kinds, encoded in Prog.HavocWidths: 0 is an opaque error, 1 a

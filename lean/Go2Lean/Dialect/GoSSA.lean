@@ -116,6 +116,17 @@ inductive Op where
   | strAtoi
   /-- `strconv.Itoa`. -/
   | strItoa
+  | strIndexByte | strLastIndex | strCount | strEqualFold
+  | strTrim | strTrimLeft | strTrimRight
+  | strToLower | strToUpper | strReplaceAll
+  /-- `strings.Split`: a slice of strings. -/
+  | strSplit
+  /-- `strings.Fields`. -/
+  | strFields
+  /-- `strings.Join`; args `[elems, sep]`. -/
+  | strJoin
+  /-- `strings.Repeat`; a negative count panics as in Go. -/
+  | strRepeat
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -237,6 +248,47 @@ def atoiBytes (bs : List Nat) : Option Int :=
 def itoaBytes (v : Int) : List Nat :=
   let digits := (toString v.natAbs).toUTF8.toList.map (·.toNat)
   if v < 0 then 45 :: digits else digits
+
+/-- Every index at which `pat` occurs in `s`, left to right. -/
+def allIndexOf (s pat : List Nat) : List Nat :=
+  (List.range (s.length + 1)).filter fun i => (s.drop i).take pat.length == pat && i + pat.length ≤ s.length
+
+/-- `strings.Split` on bytes: Go's semantics for an empty separator (every
+byte) and for an empty string (one empty field). -/
+partial def splitBytes (s sep : List Nat) : List (List Nat) :=
+  if sep.isEmpty then s.map fun b => [b]
+  else
+    match listIndexOf s sep with
+    | some i => s.take i :: splitBytes (s.drop (i + sep.length)) sep
+    | none => [s]
+
+/-- `strings.Fields` on bytes: runs of non-space bytes. -/
+partial def fieldsBytes (s : List Nat) : List (List Nat) :=
+  let s := s.dropWhile isSpaceByte
+  if s.isEmpty then []
+  else
+    let w := s.takeWhile fun b => !isSpaceByte b
+    w :: fieldsBytes (s.drop w.length)
+
+/-- Replace every non-overlapping occurrence of `old` by `new`. -/
+partial def replaceBytes (s old new : List Nat) : List Nat :=
+  if old.isEmpty then s
+  else
+    match listIndexOf s old with
+    | some i => s.take i ++ new ++ replaceBytes (s.drop (i + old.length)) old new
+    | none => s
+
+def lowerByte (b : Nat) : Nat := if 65 ≤ b && b ≤ 90 then b + 32 else b
+def upperByte (b : Nat) : Nat := if 97 ≤ b && b ≤ 122 then b - 32 else b
+
+/-- The bytes of each string in a slice of strings on the heap. -/
+def strSliceBytes (heap : Heap Val) : Val → Option (List (List Nat))
+  | .slice _ _ 0#64 _ => some []
+  | .slice ref off len _ =>
+    match heap[ref]? with
+    | some (.arr es) => ((es.drop off.toNat).take len.toNat).mapM (strBytes heap)
+    | _ => none
+  | _ => none
 
 /-- Go index semantics: a negative index is out of range, so compare unsigned
 after sign-extending to 64 bits. -/
@@ -414,6 +466,44 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
       | some v => .ok (.tuple [.int 64 (BitVec.ofInt 64 v), .err false])
       | none => .ok (.tuple [.int 64 0#64, .err true])
     | none => .panic .modelStuck
+  | .strIndexByte, [s, .int _ b] =>
+    match strBytes heap s with
+    | some x => .ok (.int 64 (match listIndexOf x [b.toNat % 256] with | some i => BitVec.ofNat 64 i | none => -1#64))
+    | none => .panic .modelStuck
+  | .strLastIndex, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y => .ok (.int 64 (match (allIndexOf x y).getLast? with | some i => BitVec.ofNat 64 i | none => -1#64))
+    | _, _ => .panic .modelStuck
+  | .strCount, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y =>
+      if y.isEmpty then .ok (.int 64 (BitVec.ofNat 64 (x.length + 1)))
+      else .ok (.int 64 (BitVec.ofNat 64 (splitBytes x y).length.pred))
+    | _, _ => .panic .modelStuck
+  | .strEqualFold, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y => .ok (.bool (x.map lowerByte == y.map lowerByte))
+    | _, _ => .panic .modelStuck
+  | .strTrimLeft, [s@(.str ref off len), c] =>
+    match strBytes heap s, strBytes heap c with
+    | some x, some cut =>
+      let n := (x.takeWhile (cut.contains ·)).length
+      .ok (.str ref (off + BitVec.ofNat 64 n) (len - BitVec.ofNat 64 n))
+    | _, _ => .panic .modelStuck
+  | .strTrimRight, [s@(.str ref off len), c] =>
+    match strBytes heap s, strBytes heap c with
+    | some x, some cut =>
+      let n := (x.reverse.takeWhile (cut.contains ·)).length
+      .ok (.str ref off (len - BitVec.ofNat 64 n))
+    | _, _ => .panic .modelStuck
+  | .strTrim, [s@(.str ref off len), c] =>
+    match strBytes heap s, strBytes heap c with
+    | some x, some cut =>
+      let l := (x.takeWhile (cut.contains ·)).length
+      let r := (x.reverse.takeWhile (cut.contains ·)).length
+      if l + r ≥ x.length then .ok (.str 0 0#64 0#64)
+      else .ok (.str ref (off + BitVec.ofNat 64 l) (len - BitVec.ofNat 64 (l + r)))
+    | _, _ => .panic .modelStuck
   | .mkTuple, vs => .ok (.tuple vs)
   | .extract i, [.tuple vs] =>
     match vs[i]? with
@@ -426,6 +516,16 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
       else .panic .sliceBounds
     | _, _ => .panic .modelStuck
   | _, _ => .panic .modelStuck
+
+/-- Allocate each string, then a slice holding them. -/
+def allocStrSlice (heap : Heap Val) (parts : List (List Nat)) : Val × Heap Val :=
+  let (vals, heap) := parts.foldl (fun (acc, heap) bs =>
+    let (v, heap) := strAlloc heap bs
+    (acc ++ [v], heap)) ([], heap)
+  let (p, heap) := heapAlloc heap (.arr vals)
+  match p with
+  | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 vals.length) (BitVec.ofNat 64 vals.length), heap)
+  | _ => (.unit, heap)
 
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
@@ -458,6 +558,38 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | _ => .panic .modelStuck
     | none => .panic .modelStuck
   | .strItoa, [.int _ v] => .ok (strAlloc heap (itoaBytes v.toInt))
+  | .strToLower, [s] =>
+    match strBytes heap s with
+    | some x => .ok (strAlloc heap (x.map lowerByte))
+    | none => .panic .modelStuck
+  | .strToUpper, [s] =>
+    match strBytes heap s with
+    | some x => .ok (strAlloc heap (x.map upperByte))
+    | none => .panic .modelStuck
+  | .strReplaceAll, [s, o, n] =>
+    match strBytes heap s, strBytes heap o, strBytes heap n with
+    | some x, some old, some new => .ok (strAlloc heap (replaceBytes x old new))
+    | _, _, _ => .panic .modelStuck
+  | .strRepeat, [s, .int _ n] =>
+    if n.msb then .panic .explicit -- strings: negative Repeat count
+    else
+      match strBytes heap s with
+      | some x =>
+        if n.toNat * x.length > 4096 then .panic .modelStuck
+        else .ok (strAlloc heap ((List.replicate n.toNat x).flatten))
+      | none => .panic .modelStuck
+  | .strSplit, [s, sep] =>
+    match strBytes heap s, strBytes heap sep with
+    | some x, some y => .ok (allocStrSlice heap (splitBytes x y))
+    | _, _ => .panic .modelStuck
+  | .strFields, [s] =>
+    match strBytes heap s with
+    | some x => .ok (allocStrSlice heap (fieldsBytes x))
+    | none => .panic .modelStuck
+  | .strJoin, [elems, sep] =>
+    match strSliceBytes heap elems, strBytes heap sep with
+    | some xs, some y => .ok (strAlloc heap (xs.intersperse y).flatten)
+    | _, _ => .panic .modelStuck
   | .makeSlice zero, [len, cap] =>
     match asIndex len, asIndex cap with
     | some len, some cap =>

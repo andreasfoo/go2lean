@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
@@ -24,6 +25,85 @@ type result struct {
 // Verify realises and runs one counterexample and writes the verdict and the
 // PoC deliverables to the workspace.
 func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error) {
+	vs, err := VerifyAll(ws, root, []string{cxID})
+	if err != nil {
+		return nil, err
+	}
+	return vs[0], nil
+}
+
+// prepared is one counterexample with its records and rendered test.
+type prepared struct {
+	cx     *contract.Counterexample
+	prop   *contract.Property
+	target *contract.Target
+	fn     string
+	imps   []string
+	v      *contract.Verdict // set early when the harness cannot be built
+}
+
+// VerifyAll realises the counterexamples, runs those of each package in a
+// single `go test` invocation (compiling the package's tests once), and
+// writes a verdict and PoC deliverables for each. If a batch fails to
+// compile, its members are run one by one so a single bad harness only
+// affects itself.
+func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.Verdict, error) {
+	byPkg := map[string][]*prepared{}
+	var order []string
+	all := map[string]*prepared{}
+	for _, id := range cxIDs {
+		p, err := prepare(ws, id)
+		if err != nil {
+			return nil, err
+		}
+		all[id] = p
+		if p.v == nil {
+			if _, seen := byPkg[p.target.Package]; !seen {
+				order = append(order, p.target.Package)
+			}
+			byPkg[p.target.Package] = append(byPkg[p.target.Package], p)
+		}
+	}
+	for _, pkg := range order {
+		batch := byPkg[pkg]
+		pkgDir, pkgName, err := goList(root, pkg)
+		if err != nil {
+			return nil, err
+		}
+		results, cmd, exit, out, errOut, err := runBatch(root, pkgDir, pkgName, pkg, batch)
+		if err != nil {
+			return nil, err
+		}
+		if results == nil && len(batch) > 1 {
+			// The batch did not compile: fall back to one test per run.
+			for _, p := range batch {
+				r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{p})
+				if err != nil {
+					return nil, err
+				}
+				p.v = verdictOf(p, r, c, e, o, eo)
+			}
+			continue
+		}
+		for _, p := range batch {
+			p.v = verdictOf(p, results, cmd, exit, out, errOut)
+		}
+	}
+	var vs []*contract.Verdict
+	for _, id := range cxIDs {
+		p := all[id]
+		if p.v == nil {
+			return nil, fmt.Errorf("%s: no verdict produced", id)
+		}
+		if err := deliver(ws, root, p); err != nil {
+			return nil, err
+		}
+		vs = append(vs, p.v)
+	}
+	return vs, nil
+}
+
+func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 	cx, err := ws.Counterexample(cxID)
 	if err != nil {
 		return nil, err
@@ -40,34 +120,43 @@ func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error)
 	if err != nil {
 		return nil, err
 	}
-	pkgDir, pkgName, err := goList(root, target.Package)
+	p := &prepared{cx: cx, prop: prop, target: target}
+	p.fn, p.imps, err = HarnessFunc(target, prop, cx, abi)
 	if err != nil {
-		return nil, err
-	}
-	src, err := Harness(pkgName, target, prop, cx, abi)
-	if err != nil {
-		v := &contract.Verdict{Counterexample: cx.ID, Status: contract.VerdictInconclusive,
+		p.v = &contract.Verdict{Counterexample: cx.ID, Status: contract.VerdictInconclusive,
 			Diagnosis: &contract.Diagnosis{Reason: "cannot_materialise", Notes: []string{err.Error()}}}
-		return v, ws.WriteVerdict(v)
 	}
+	return p, nil
+}
 
-	pocDir := ws.PocDir(cx.ID)
-	if err := os.MkdirAll(pocDir, 0o755); err != nil {
-		return nil, err
+// runBatch writes one test file holding every test of the batch into the
+// package, runs it, and returns the parsed results keyed by counterexample
+// id (nil when the file did not compile).
+func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]result, string, int, string, string, error) {
+	imports := map[string]bool{}
+	var funcs []string
+	for _, p := range batch {
+		funcs = append(funcs, p.fn)
+		for _, ip := range p.imps {
+			imports[ip] = true
+		}
 	}
-	testName := "zz_go2lean_poc_" + cx.ID + "_test.go"
-	if err := os.WriteFile(filepath.Join(pocDir, testName), []byte(src), 0o644); err != nil {
-		return nil, err
+	var imps []string
+	for ip := range imports {
+		imps = append(imps, ip)
 	}
-	// Drop the test into the package, run it, remove it.
-	testPath := filepath.Join(pkgDir, testName)
+	sort.Strings(imps)
+	src := File(pkgName, imps, funcs)
+	testPath := filepath.Join(pkgDir, fmt.Sprintf("zz_go2lean_poc_%d_test.go", os.Getpid()))
 	if err := os.WriteFile(testPath, []byte(src), 0o644); err != nil {
-		return nil, err
+		return nil, "", 0, "", "", err
 	}
 	defer os.Remove(testPath)
-
-	run := "^TestGo2LeanPoC_" + cx.ID + "$"
-	cmd := exec.Command("go", "test", "-count=1", "-v", "-run", run, target.Package)
+	run := "^TestGo2LeanPoC_"
+	if len(batch) == 1 {
+		run += batch[0].cx.ID + "$"
+	}
+	cmd := exec.Command("go", "test", "-count=1", "-v", "-run", run, pkg)
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -77,31 +166,57 @@ func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error)
 	if ee, ok := runErr.(*exec.ExitError); ok {
 		exit = ee.ExitCode()
 	} else if runErr != nil {
-		return nil, runErr
+		return nil, "", 0, "", "", runErr
 	}
+	cmdLine := "go test -count=1 -v -run '" + run + "' " + pkg
+	results := parseResults(stdout.String())
+	if len(results) == 0 {
+		return nil, cmdLine, exit, stdout.String(), stderr.String(), nil
+	}
+	return results, cmdLine, exit, stdout.String(), stderr.String(), nil
+}
+
+func verdictOf(p *prepared, results map[string]result, cmd string, exit int, stdout, stderr string) *contract.Verdict {
 	v := &contract.Verdict{
-		Counterexample: cx.ID,
-		PocDir:         pocDir,
-		Evidence: contract.Evidence{
-			Cmd:        "go test -count=1 -v -run '" + run + "' " + target.Package,
-			Exit:       exit,
-			StdoutTail: tail(stdout.String()),
-			StderrTail: tail(stderr.String()),
-		},
+		Counterexample: p.cx.ID,
+		Evidence:       contract.Evidence{Cmd: cmd, Exit: exit, StdoutTail: tail(stdout), StderrTail: tail(stderr)},
 	}
-	res, ok := parseResult(stdout.String())
+	res, ok := results[p.cx.ID]
 	if !ok {
 		v.Status = contract.VerdictInconclusive
 		v.Diagnosis = &contract.Diagnosis{Reason: "harness_failed", Notes: []string{"no GO2LEAN_RESULT line; see stdout/stderr"}}
-	} else {
-		judge(v, prop, cx, res)
+		return v
 	}
-	readme := fmt.Sprintf("# PoC %s\n\nProperty: %s (%s)\n\n%s\n\nVerdict: **%s**\n\nReproduce: copy `%s` into `%s` and run\n\n    %s\n",
-		cx.ID, prop.ID, prop.Kind, prop.NL, v.Status, testName, pkgDir, v.Evidence.Cmd)
-	if err := os.WriteFile(filepath.Join(pocDir, "README.md"), []byte(readme), 0o644); err != nil {
-		return nil, err
+	judge(v, p.prop, p.cx, res)
+	return v
+}
+
+// deliver writes the PoC directory (a standalone test file and a README)
+// and the verdict.
+func deliver(ws contract.Workspace, root string, p *prepared) error {
+	v := p.v
+	if p.fn != "" {
+		pocDir := ws.PocDir(p.cx.ID)
+		if err := os.MkdirAll(pocDir, 0o755); err != nil {
+			return err
+		}
+		pkgDir, pkgName, err := goList(root, p.target.Package)
+		if err != nil {
+			return err
+		}
+		testName := "zz_go2lean_poc_" + p.cx.ID + "_test.go"
+		if err := os.WriteFile(filepath.Join(pocDir, testName), []byte(File(pkgName, p.imps, []string{p.fn})), 0o644); err != nil {
+			return err
+		}
+		cmd := "go test -count=1 -v -run '^TestGo2LeanPoC_" + p.cx.ID + "$' " + p.target.Package
+		readme := fmt.Sprintf("# PoC %s\n\nProperty: %s (%s)\n\n%s\n\nVerdict: **%s**\n\nReproduce: copy `%s` into `%s` and run\n\n    %s\n",
+			p.cx.ID, p.prop.ID, p.prop.Kind, p.prop.NL, v.Status, testName, pkgDir, cmd)
+		if err := os.WriteFile(filepath.Join(pocDir, "README.md"), []byte(readme), 0o644); err != nil {
+			return err
+		}
+		v.PocDir = pocDir
 	}
-	return v, ws.WriteVerdict(v)
+	return ws.WriteVerdict(v)
 }
 
 // judge fills Status, Observed and Diagnosis from the harness result.
@@ -200,17 +315,25 @@ func ClassifyPanic(msg string) contract.PanicKind {
 	return contract.PanicExplicit
 }
 
-func parseResult(stdout string) (result, bool) {
+// parseResults maps each test's result line to its counterexample id,
+// using the "=== RUN TestGo2LeanPoC_<id>" line that precedes it.
+func parseResults(stdout string) map[string]result {
+	out := map[string]result{}
+	current := ""
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(line, "GO2LEAN_RESULT "); ok {
+		if name, ok := strings.CutPrefix(line, "=== RUN   TestGo2LeanPoC_"); ok {
+			current = name
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "GO2LEAN_RESULT "); ok && current != "" {
 			var r result
 			if json.Unmarshal([]byte(rest), &r) == nil {
-				return r, true
+				out[current] = r
 			}
 		}
 	}
-	return result{}, false
+	return out
 }
 
 func tail(s string) string {

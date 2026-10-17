@@ -105,10 +105,27 @@ func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.S
 
 // Verify runs M3 on one counterexample and prints the verdict.
 func Verify(w contract.Workspace, env Env, id string, out io.Writer) (*contract.Verdict, error) {
-	v, err := poc.Verify(w, env.module(), id)
+	vs, err := VerifyAll(w, env, []string{id}, out)
 	if err != nil {
-		return nil, fmt.Errorf("poc %s: %w", id, err)
+		return nil, err
 	}
+	return vs[0], nil
+}
+
+// VerifyAll runs M3 on several counterexamples (one go test per package).
+func VerifyAll(w contract.Workspace, env Env, ids []string, out io.Writer) ([]*contract.Verdict, error) {
+	vs, err := poc.VerifyAll(w, env.module(), ids)
+	if err != nil {
+		return nil, fmt.Errorf("poc: %w", err)
+	}
+	for _, v := range vs {
+		printVerdict(v, out)
+	}
+	return vs, nil
+}
+
+func printVerdict(v *contract.Verdict, out io.Writer) {
+	id := v.Counterexample
 	fmt.Fprintf(out, "  %-28s %-12s", id, v.Status)
 	if v.Observed != nil {
 		fmt.Fprintf(out, " real: %v", v.Observed)
@@ -120,7 +137,6 @@ func Verify(w contract.Workspace, env Env, id string, out io.Writer) (*contract.
 	if v.Status == contract.VerdictConfirmed {
 		fmt.Fprintf(out, "      PoC: %s\n", v.PocDir)
 	}
-	return v, nil
 }
 
 // Result is what one full pass over a package produced.
@@ -195,13 +211,16 @@ func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts
 	res := &Result{Report: report, Properties: props}
 	if len(cxs) == 0 {
 		fmt.Fprintln(out, "  nothing to verify")
+		return res, nil
 	}
+	var ids []string
 	for _, cx := range cxs {
-		v, err := Verify(w, env, cx.ID, out)
-		if err != nil {
-			return nil, err
-		}
-		res.Verdicts = append(res.Verdicts, v)
+		ids = append(ids, cx.ID)
 	}
+	vs, err := VerifyAll(w, env, ids, out)
+	if err != nil {
+		return nil, err
+	}
+	res.Verdicts = vs
 	return res, nil
 }

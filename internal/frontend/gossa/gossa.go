@@ -534,13 +534,39 @@ func (t *fnState) havoc(x ssa.Value, site, reason, goHint string) error {
 	return nil
 }
 
-// havocInto binds dst to a havoc value of type ty, or to the assumed value
-// when the type cannot be havoc'd.
+// havocInto binds dst to a havoc value of type ty, or to an assumed value
+// when the type cannot be havoc'd: a pointer to a fresh zero object (nil
+// would make every later dereference a spurious panic), a slice of a small
+// havoc'd length holding zero values, else the zero or opaque value.
 func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint string) error {
 	if k, ok := havocKind(ty); ok {
 		idx := t.prog.newHavoc(k, site, reason, goHint)
 		t.emit(ir.Instr{Dst: dst, HavocSite: idx})
 		return nil
+	}
+	switch u := ty.Underlying().(type) {
+	case *types.Pointer:
+		if zero, ok := zeroVal(u.Elem()); ok {
+			t.issue("%s: assumed a pointer to a fresh zero %s (not modelled)", site, u.Elem())
+			t.emit(ir.Instr{Dst: dst, Op: ir.Alloc{Zero: zero}})
+			return nil
+		}
+	case *types.Slice:
+		zero, ok := zeroVal(u.Elem())
+		if !ok {
+			zero, ok = assumedValue(u.Elem())
+		}
+		if ok {
+			t.issue("%s: assumed a slice of 0..3 zero values of %s (not modelled)", site, u.Elem())
+			raw := t.fresh()
+			t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, site+" (length)", reason, goHint)})
+			four := t.fresh()
+			t.emit(ir.Instr{Dst: four, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "4"}}})
+			n := t.fresh()
+			t.emit(ir.Instr{Dst: n, Op: ir.Simple("urem"), Args: []ir.Var{raw, four}})
+			t.emit(ir.Instr{Dst: dst, Op: ir.MakeSlice{Zero: zero}, Args: []ir.Var{n, n}})
+			return nil
+		}
 	}
 	v, ok := assumedValue(ty)
 	if !ok {
