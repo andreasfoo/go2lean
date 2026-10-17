@@ -311,6 +311,9 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 	case contract.ABIBool:
 		return fmt.Sprint(v), nil
 	case contract.ABIOpaque:
+		if p.Zero != "" {
+			return p.Zero, nil
+		}
 		return "nil", nil
 	case contract.ABIString:
 		sv, _ := v.(string)
@@ -325,7 +328,7 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if !ok || len(fields) != len(p.Fields) {
 			return "", fmt.Errorf("%s: expected %d fields, got %v", p.Go, len(p.Fields), v)
 		}
-		if strings.Contains(p.TypePkg, "/internal/") || strings.HasPrefix(p.TypePkg, "internal/") {
+		if !canImport(abi.Package, p.TypePkg) {
 			return "", fmt.Errorf("%s: type %s lives in an internal package the test cannot import", p.Go, p.GoType)
 		}
 		var parts []string
@@ -378,6 +381,28 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		return fmt.Sprintf("func() %s { v := %s; return &v }()", p.GoType, inner), nil
 	}
 	return "", fmt.Errorf("%s: cannot render kind %s", p.Go, p.Kind)
+}
+
+// canImport applies Go's internal-package rule: a package under
+// `<root>/internal/` is importable only from within `<root>`. Without the
+// importing package (older ABI records) an internal path is refused.
+func canImport(from, pkg string) bool {
+	idx := strings.Index(pkg, "/internal/")
+	root := ""
+	switch {
+	case idx >= 0:
+		root = pkg[:idx]
+	case strings.HasPrefix(pkg, "internal/"):
+		root = ""
+	case pkg == "internal" || strings.HasSuffix(pkg, "/internal"):
+		root = strings.TrimSuffix(strings.TrimSuffix(pkg, "internal"), "/")
+	default:
+		return true
+	}
+	if from == "" {
+		return false
+	}
+	return from == root || strings.HasPrefix(from, root+"/")
 }
 
 // isZeroJSON says whether the model's value is the Go zero value of p.

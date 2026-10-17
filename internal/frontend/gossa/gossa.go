@@ -1255,6 +1255,18 @@ func isForeignOpaqueStruct(pkg *types.Package, t types.Type) bool {
 	return true
 }
 
+// zeroLit is the Go literal of t's zero value where the harness needs one
+// for an opaque element: "0" for numbers, "nil" for everything else.
+func zeroLit(t types.Type, src string) string {
+	if b, ok := t.Underlying().(*types.Basic); ok && b.Info()&types.IsNumeric != 0 {
+		return "0"
+	}
+	if _, ok := t.Underlying().(*types.Struct); ok {
+		return src + "{}"
+	}
+	return "nil"
+}
+
 // abiArrayLimit bounds the arrays described element by element in the
 // ABI; longer ones are opaque parameters (zero in M3, `.unit` in the model).
 const abiArrayLimit = 64
@@ -1390,7 +1402,7 @@ func spell(pkg *types.Package, t types.Type) (src, importPath string) {
 }
 
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
-	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend}
+	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path()}
 	if f.Signature.Recv() != nil {
 		abi.Method = f.Name()
 	}
@@ -1457,7 +1469,7 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 	}
 	switch {
 	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t):
-		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque}, nil
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
 	case isBool(t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
 	case isError(t):
@@ -1504,10 +1516,18 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		return ap, nil
 	case *types.Struct:
 		ap := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct}
+		foreign := ipath != ""
 		for i := 0; i < u.NumFields(); i++ {
-			f, err := ab.param(u.Field(i).Name(), u.Field(i).Type(), stack)
+			fld := u.Field(i)
+			if foreign && !fld.Exported() {
+				// A test in the target package cannot set it: the model keeps
+				// the zero value there.
+				ap.Fields = append(ap.Fields, contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: zeroLit(fld.Type(), types.TypeString(fld.Type(), nil))})
+				continue
+			}
+			f, err := ab.param(fld.Name(), fld.Type(), stack)
 			if err != nil {
-				return contract.ABIParam{}, fmt.Errorf("field %s: %w", u.Field(i).Name(), err)
+				return contract.ABIParam{}, fmt.Errorf("field %s: %w", fld.Name(), err)
 			}
 			ap.Fields = append(ap.Fields, f)
 		}

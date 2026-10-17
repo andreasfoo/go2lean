@@ -219,6 +219,7 @@ type ModelGap struct {
 // several.
 type ABI struct {
 	GoFunc   string `json:"go_func"`
+	Package  string `json:"package,omitempty"` // import path of the target's package (decides what the test may import)
 	GoSig    string `json:"go_sig"`
 	Frontend string `json:"frontend"`
 	// Method is set for methods: the receiver is Params[0] and a call is
@@ -271,6 +272,9 @@ type ABIParam struct {
 	ElemParam *ABIParam `json:"elem_param,omitempty"`
 	// Len is the length of an array.
 	Len int `json:"len,omitempty"`
+	// Zero is the Go literal of an opaque value's zero ("0" for a float,
+	// "nil" otherwise), used for elements of slices and arrays.
+	Zero string `json:"zero,omitempty"`
 	// Struct fields (Go holds the field name) and the pointee of a pointer.
 	Fields  []ABIParam `json:"fields,omitempty"`
 	Pointee *ABIParam  `json:"pointee,omitempty"`

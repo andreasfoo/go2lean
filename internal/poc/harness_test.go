@@ -80,3 +80,22 @@ func TestParseResultsMapsByTestName(t *testing.T) {
 		t.Fatal("panic not classified")
 	}
 }
+
+func TestCanImport(t *testing.T) {
+	cases := []struct {
+		from, pkg string
+		ok        bool
+	}{
+		{"example.com/m/internal/typ", "example.com/m/internal/other", true},
+		{"example.com/m/cli", "example.com/m/internal/typ", true},
+		{"example.com/other", "example.com/m/internal/typ", false},
+		{"example.com/m", "example.com/m/internal", true},
+		{"", "example.com/m/internal/typ", false},
+		{"example.com/other", "example.com/m/typ", true},
+	}
+	for _, c := range cases {
+		if got := canImport(c.from, c.pkg); got != c.ok {
+			t.Errorf("canImport(%q, %q) = %v, want %v", c.from, c.pkg, got, c.ok)
+		}
+	}
+}

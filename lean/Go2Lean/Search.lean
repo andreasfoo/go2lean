@@ -45,6 +45,12 @@ inductive Gen where
   /-- A fixed-size array of `n` elements from `elem`. -/
   | arrOf (name : String) (elem : Gen) (n : Nat)
 
+/-- Whether the generator is a reference into the type table (a link of a
+recursive structure). -/
+def Gen.isRef : Gen → Bool
+  | .ref .. => true
+  | _ => false
+
 /-- The type table: field generators per named struct type. -/
 abbrev TypeTable := Array (List Gen)
 
@@ -153,12 +159,13 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
     (.structv vs, g, heap)
   | .ptr _ pointee =>
-    -- nil one time in five at the top (never when `allowNil` is off and this
-    -- is a top-level argument), more often as the depth budget runs out,
-    -- always once it is spent.
+    -- With `allowNil` off (the default) a pointer is nil only once the
+    -- depth budget is spent: "a field was never set" findings drown the
+    -- ones people act on. A link of a recursive structure (the pointee is
+    -- a table reference) may still be nil, so lists of every length occur.
+    -- With it on: nil one time in five, more often as the budget runs out.
     let (roll, g) := randNat g 0 4
-    let top := depth == topDepth && !allowNil
-    if depth == 0 || (!top && roll < (if depth ≤ 1 then 3 else 1)) then (.ptr 0 [], g, heap)
+    if depth == 0 || ((allowNil || pointee.isRef) && roll < (if depth ≤ 1 then 3 else 1)) then (.ptr 0 [], g, heap)
     else
       let (obj, g, heap) := genVal pf extra g heap pool table (depth - 1) allowNil pointee
       let (p, heap) := heapAlloc heap obj
@@ -478,7 +485,7 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
       let (vs, heap) := build heap
       (.structv vs, heap)
   | .ptr _ pointee =>
-    (if depth == 2 && !allowNil then [] else [fun heap => (.ptr 0 [], heap)]) ++
+    (if depth > 0 && !allowNil && !pointee.isRef then [] else [fun heap => (.ptr 0 [], heap)]) ++
       (if depth == 0 then [] else
         (enumGen extra maxLen pool table (depth - 1) allowNil pointee).map fun build heap =>
           let (obj, heap) := build heap
@@ -522,7 +529,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     let k := genSize extra maxLen pool table (depth - 1) allowNil elem
     (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
   | .structv _ fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
-  | .ptr _ pointee => (if depth == 2 && !allowNil then 0 else 1) + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
+  | .ptr _ pointee => (if depth > 0 && !allowNil && !pointee.isRef then 0 else 1) + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .ref _ tyIdx =>
     match table[tyIdx]? with
     | some fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
