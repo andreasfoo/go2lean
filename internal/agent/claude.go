@@ -3,20 +3,27 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // Claude calls the Anthropic Messages API. Credentials come from the
-// environment (ANTHROPIC_API_KEY, or an `ant auth login` profile).
+// environment (ANTHROPIC_API_KEY, or an `ant auth login` profile). The SDK
+// also honours ANTHROPIC_BASE_URL, so Anthropic-compatible gateways work;
+// GO2LEAN_MODEL overrides the model name for them.
 type Claude struct {
 	client anthropic.Client
 	model  string
 }
 
 func NewClaude() *Claude {
-	return &Claude{client: anthropic.NewClient(), model: "claude-opus-5-5"}
+	model := "claude-opus-5-5"
+	if m := os.Getenv("GO2LEAN_MODEL"); m != "" {
+		model = m
+	}
+	return &Claude{client: anthropic.NewClient(), model: model}
 }
 
 func (c *Claude) Name() string { return c.model }
