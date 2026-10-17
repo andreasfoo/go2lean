@@ -6,6 +6,7 @@ package poc
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -16,6 +17,7 @@ import (
 // harnessData feeds the test template.
 type harnessData struct {
 	Package  string
+	Imports  []string // extra import paths for named parameter/result types
 	ID       string
 	Decls    []string // parameter declarations
 	Args     string   // comma-separated parameter names
@@ -35,6 +37,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+{{- range .Imports}}
+	"{{.}}"
+{{- end}}
 )
 
 func TestGo2LeanPoC_{{.ID}}(t *testing.T) {
@@ -75,6 +80,10 @@ func TestGo2LeanPoC_{{.ID}}(t *testing.T) {
 // Harness renders the Go test for a counterexample.
 func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contract.Counterexample, abi *contract.ABI) (string, error) {
 	d := harnessData{Package: pkgName, ID: cx.ID, Func: t.Func, RetType: abi.Result.GoType}
+	imports := map[string]bool{}
+	if abi.Result.TypePkg != "" {
+		imports[abi.Result.TypePkg] = true
+	}
 	var names []string
 	for _, prm := range abi.Params {
 		decl, err := paramDecl(prm, cx)
@@ -83,7 +92,16 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 		}
 		d.Decls = append(d.Decls, decl)
 		names = append(names, prm.Go)
+		for _, ip := range []string{prm.TypePkg, prm.ElemPkg} {
+			if ip != "" {
+				imports[ip] = true
+			}
+		}
 	}
+	for ip := range imports {
+		d.Imports = append(d.Imports, ip)
+	}
+	sort.Strings(d.Imports)
 	d.Args = strings.Join(names, ", ")
 	if p.Precondition != nil {
 		d.Pre = p.Precondition.Go

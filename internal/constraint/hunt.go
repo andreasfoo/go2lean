@@ -84,7 +84,7 @@ func gens(abi *contract.ABI, maxLen int) (string, error) {
 	for _, p := range abi.Params {
 		switch p.Kind {
 		case contract.ABIInt:
-			w, signed, ok := contract.GoIntType(p.GoType)
+			w, signed, ok := p.IntInfo()
 			if !ok {
 				return "", fmt.Errorf("parameter %s: unsupported int type %s", p.Go, p.GoType)
 			}
@@ -92,7 +92,7 @@ func gens(abi *contract.ABI, maxLen int) (string, error) {
 		case contract.ABIBool:
 			parts = append(parts, fmt.Sprintf("(.bool %q)", p.Go))
 		case contract.ABISlice:
-			w, signed, ok := contract.GoIntType(p.Elem)
+			w, signed, ok := p.ElemInfo()
 			if !ok {
 				return "", fmt.Errorf("parameter %s: unsupported element type %s", p.Go, p.Elem)
 			}

@@ -683,21 +683,42 @@ func isUnitTuple(t types.Type) bool {
 	return ok && tu.Len() == 0
 }
 
+// spell renders a type as source in package pkg would: unqualified for
+// pkg's own types, `pkgname.T` otherwise. It also returns the import path
+// of a named type from another package.
+func spell(pkg *types.Package, t types.Type) (src, importPath string) {
+	qual := func(p *types.Package) string {
+		if p == pkg {
+			return ""
+		}
+		return p.Name()
+	}
+	src = types.TypeString(t, qual)
+	if n, ok := t.(*types.Named); ok && n.Obj().Pkg() != nil && n.Obj().Pkg() != pkg {
+		importPath = n.Obj().Pkg().Path()
+	}
+	return src, importPath
+}
+
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend}
+	pkg := f.Pkg.Pkg
 	for _, p := range f.Params {
 		name := p.Name()
+		src, ipath := spell(pkg, p.Type())
 		switch {
 		case isBool(p.Type()):
-			abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: p.Type().String(), Model: []string{name}, Kind: contract.ABIBool})
+			abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool})
 		default:
-			if _, _, ok := intWidth(p.Type()); ok {
-				abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: p.Type().String(), Model: []string{name}, Kind: contract.ABIInt})
-			} else if _, _, ok := sliceElem(p.Type()); ok {
+			if w, signed, ok := intWidth(p.Type()); ok {
+				abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt})
+			} else if ew, esigned, ok := sliceElem(p.Type()); ok {
+				elem := p.Type().Underlying().(*types.Slice).Elem()
+				esrc, epath := spell(pkg, elem)
 				abi.Params = append(abi.Params, contract.ABIParam{
-					Go: name, GoType: p.Type().String(), Kind: contract.ABISlice,
+					Go: name, GoType: src, TypePkg: ipath, Kind: contract.ABISlice,
 					Model: []string{name + "_ref", name + "_off", name + "_len", name + "_cap"},
-					Elem:  p.Type().Underlying().(*types.Slice).Elem().String(),
+					Elem:  esrc, ElemPkg: epath, ElemWidth: ew, ElemSigned: esigned,
 				})
 			} else {
 				return nil, fmt.Errorf("parameter %s has unsupported type %s", name, p.Type())
@@ -713,7 +734,7 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		if !isInt && !isBool(rt) {
 			return nil, fmt.Errorf("result type %s not supported", rt)
 		}
-		abi.Result.GoType = rt.String()
+		abi.Result.GoType, abi.Result.TypePkg = spell(pkg, rt)
 	default:
 		return nil, fmt.Errorf("multiple results not supported")
 	}

@@ -202,18 +202,47 @@ const (
 	ABISlice ABIParamKind = "slice" // model: ref, off, len, cap (gossa) or ptr, len, cap (llvm)
 )
 
-// ABIParam describes one Go parameter.
+// ABIParam describes one Go parameter. GoType is spelled as Go source in
+// the target package would spell it (`time.Duration`, `Level`); TypePkg is
+// the import path a test file needs for it, empty for builtins and types of
+// the target package. Width/Signed come from the underlying type, so named
+// integer types are handled without parsing names.
 type ABIParam struct {
-	Go     string       `json:"go"`
-	GoType string       `json:"go_type"`
-	Model  []string     `json:"model"` // model parameter names, in order
-	Kind   ABIParamKind `json:"kind"`
-	Elem   string       `json:"elem,omitempty"` // element Go type for slices
+	Go      string       `json:"go"`
+	GoType  string       `json:"go_type"`
+	TypePkg string       `json:"type_pkg,omitempty"`
+	Width   int          `json:"width,omitempty"`
+	Signed  bool         `json:"signed,omitempty"`
+	Model   []string     `json:"model"` // model parameter names, in order
+	Kind    ABIParamKind `json:"kind"`
+	// Slice element type, spelled like GoType, with its own package and width.
+	Elem       string `json:"elem,omitempty"`
+	ElemPkg    string `json:"elem_pkg,omitempty"`
+	ElemWidth  int    `json:"elem_width,omitempty"`
+	ElemSigned bool   `json:"elem_signed,omitempty"`
 }
 
 // ABIResult describes the Go result.
 type ABIResult struct {
-	GoType string `json:"go_type"`
+	GoType  string `json:"go_type"`
+	TypePkg string `json:"type_pkg,omitempty"`
+}
+
+// IntInfo returns the width and signedness of an integer parameter,
+// falling back to the type name for records written before Width existed.
+func (p ABIParam) IntInfo() (width int, signed bool, ok bool) {
+	if p.Width > 0 {
+		return p.Width, p.Signed, true
+	}
+	return GoIntType(p.GoType)
+}
+
+// ElemInfo is IntInfo for a slice's element type.
+func (p ABIParam) ElemInfo() (width int, signed bool, ok bool) {
+	if p.ElemWidth > 0 {
+		return p.ElemWidth, p.ElemSigned, true
+	}
+	return GoIntType(p.Elem)
 }
 
 // ABIHavoc describes one havoc site in the model.
