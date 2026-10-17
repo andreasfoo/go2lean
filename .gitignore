@@ -3,3 +3,6 @@
 /lean/.lake/
 /lean/Search/
 *.test
+# Generated models: only the go2lean examples are tracked.
+/lean/Go2Lean/Generated/gossa/*
+!/lean/Go2Lean/Generated/gossa/github_com_andreasfoo_go2lean_examples_*.lean
