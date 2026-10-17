@@ -1464,21 +1464,45 @@ func (ab *abiBuilder) register(n *types.Named, src, ipath string) int {
 	return idx
 }
 
+// fields describes the fields of a struct; unexported fields of a foreign
+// struct are opaque, since a test in the target package cannot set them.
+func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named) ([]contract.ABIParam, error) {
+	var fields []contract.ABIParam
+	for i := 0; i < u.NumFields(); i++ {
+		fld := u.Field(i)
+		if foreign && !fld.Exported() {
+			fields = append(fields, contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: zeroLit(fld.Type(), types.TypeString(fld.Type(), nil))})
+			continue
+		}
+		f, err := ab.param(fld.Name(), fld.Type(), stack)
+		if err != nil {
+			return nil, fmt.Errorf("field %s: %w", fld.Name(), err)
+		}
+		fields = append(fields, f)
+	}
+	return fields, nil
+}
+
 // param describes one value of type t named name. `stack` holds the named
 // struct types under construction; meeting one again means recursion.
 func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (contract.ABIParam, error) {
 	pkg := ab.pkg
 	src, ipath := spell(pkg, t)
 	if n, ok := t.(*types.Named); ok {
-		if _, isStruct := n.Underlying().(*types.Struct); isStruct {
+		if st, isStruct := n.Underlying().(*types.Struct); isStruct && !isForeignOpaqueStruct(pkg, t) && !isForeignUnexported(pkg, t) {
+			// Every named struct lives in the type table once and parameters
+			// and fields refer to it: recursion resolves through the index,
+			// and a type nested many times (gin.Context) is described once.
 			if idx, done := ab.index[n]; done {
 				return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
 			}
-			if slices.Contains(stack, n) {
-				idx := ab.register(n, src, ipath)
-				return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
+			idx := ab.register(n, src, ipath)
+			fields, err := ab.fields(st, ipath != "", stack)
+			if err != nil {
+				return contract.ABIParam{}, err
 			}
-			stack = append(stack, n)
+			ab.abi.Types[idx].Fields = fields
+			return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
 		}
 	}
 	switch {
@@ -1529,31 +1553,13 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		ap.ElemParam = &elem
 		return ap, nil
 	case *types.Struct:
-		ap := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct}
-		foreign := ipath != ""
-		for i := 0; i < u.NumFields(); i++ {
-			fld := u.Field(i)
-			if foreign && !fld.Exported() {
-				// A test in the target package cannot set it: the model keeps
-				// the zero value there.
-				ap.Fields = append(ap.Fields, contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: zeroLit(fld.Type(), types.TypeString(fld.Type(), nil))})
-				continue
-			}
-			f, err := ab.param(fld.Name(), fld.Type(), stack)
-			if err != nil {
-				return contract.ABIParam{}, fmt.Errorf("field %s: %w", fld.Name(), err)
-			}
-			ap.Fields = append(ap.Fields, f)
+		// An anonymous struct (or a named one of an opaque kind handled
+		// above): described inline.
+		fields, err := ab.fields(u, ipath != "", stack)
+		if err != nil {
+			return contract.ABIParam{}, err
 		}
-		if n, ok := t.(*types.Named); ok {
-			if idx, rec := ab.index[n]; rec {
-				// Found recursive while describing its fields: it lives in
-				// the table and this parameter refers to it.
-				ab.abi.Types[idx].Fields = ap.Fields
-				return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
-			}
-		}
-		return ap, nil
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, Fields: fields}, nil
 	case *types.Pointer:
 		pointee, err := ab.param(name, u.Elem(), stack)
 		if err != nil {

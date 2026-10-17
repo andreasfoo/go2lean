@@ -149,6 +149,17 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 			imports["errors"] = true
 		}
 	}
+	// Types in the table may be reached only through references; their
+	// imports join the candidates, which are kept only when the generated
+	// code names the package.
+	for _, t := range abi.Types {
+		if t.TypePkg != "" {
+			imports[t.TypePkg] = true
+		}
+		for _, f := range t.Fields {
+			collectImports(f, imports)
+		}
+	}
 	// A nil pointer or an empty literal may leave a type package unused, and
 	// an unused import does not compile: keep only the packages whose
 	// qualifier the generated declarations mention.
