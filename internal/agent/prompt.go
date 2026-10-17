@@ -22,9 +22,19 @@ result makes the spec return false, and then runs the real Go code on those
 inputs. A spec that returns false on a real run is a confirmed bug.
 
 Rules for a spec function:
-- Signature: func Spec<Name>(<exactly the parameters of the target, same names and
-  types>, ret <the target's result type>) bool
-- Doc comment line: // go2lean:spec <Target>
+- Signature: func Spec<Target><Suffix>(<exactly the parameters of the target, same
+  names and types>, ret <the target's result type>) bool
+- The marker line // go2lean:spec <Target> is part of the doc comment of EACH
+  spec function: directly above its func line, no blank line in between. Example:
+
+      // go2lean:spec Clamp
+      // SpecClampInRange: the result lies within [lo, hi] whenever lo <= hi.
+      func SpecClampInRange(v, lo, hi int, ret int) bool {
+          if lo > hi {
+              return true
+          }
+          return lo <= ret && ret <= hi
+      }
 - Return true when the property is vacuously satisfied (the inputs do not meet
   its precondition). Return false only when the result is wrong.
 - Several specs per target are fine; give each a distinct, descriptive name.

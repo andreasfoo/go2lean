@@ -100,10 +100,13 @@ func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
 		}
 	}
 	sort.Slice(fns, func(i, j int) bool { return fns[i].Name() < fns[j].Name() })
+	byName := map[string]*ssa.Function{}
 	for _, f := range fns {
 		st.ids[f] = len(p.Funcs)
 		p.Funcs = append(p.Funcs, &ir.Func{Name: f.Name(), GoSig: f.Signature.String()})
+		byName[f.Name()] = f
 	}
+	st.specFor = func(f *ssa.Function) string { return specTarget(f, byName) }
 	// Pass 2: bodies.
 	for _, f := range fns {
 		out := p.Funcs[st.ids[f]]
@@ -171,8 +174,9 @@ func isTestFunc(name string) bool {
 
 // progState is per-program translation state.
 type progState struct {
-	prog *ir.Prog
-	ids  map[*ssa.Function]int
+	prog    *ir.Prog
+	ids     map[*ssa.Function]int
+	specFor func(*ssa.Function) string
 }
 
 func (s *progState) newHavoc(width int, site, reason, goHint string) int {
@@ -230,7 +234,7 @@ func (t *fnState) translate() error {
 		return err
 	}
 	t.out.ABI = *abi
-	t.out.SpecFor = specFor(f)
+	t.out.SpecFor = t.prog.specFor(f)
 	if f.Blocks == nil {
 		return fmt.Errorf("no body")
 	}
@@ -741,15 +745,51 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	return abi, nil
 }
 
-func specFor(f *ssa.Function) string {
-	decl, ok := f.Syntax().(*ast.FuncDecl)
-	if !ok || decl.Doc == nil {
+// specTarget names the function f is a spec for. A `go2lean:spec X` doc
+// comment wins; otherwise a function named Spec<X>... whose parameters are
+// X's parameters followed by X's result is taken as a spec for X, so a
+// misplaced marker does not turn a spec into a target.
+func specTarget(f *ssa.Function, byName map[string]*ssa.Function) string {
+	if decl, ok := f.Syntax().(*ast.FuncDecl); ok && decl.Doc != nil {
+		if m := specRe.FindStringSubmatch(decl.Doc.Text()); m != nil {
+			return m[1]
+		}
+	}
+	name := f.Name()
+	if !strings.HasPrefix(name, "Spec") || f.Signature.Results().Len() != 1 || !isBool(f.Signature.Results().At(0).Type()) {
 		return ""
 	}
-	if m := specRe.FindStringSubmatch(decl.Doc.Text()); m != nil {
-		return m[1]
+	rest := name[len("Spec"):]
+	// Longest target name that is a prefix of the rest and whose signature fits.
+	best := ""
+	for tname, target := range byName {
+		if target == f || !strings.HasPrefix(rest, tname) || len(tname) <= len(best) {
+			continue
+		}
+		if specSignatureFits(f.Signature, target.Signature) {
+			best = tname
+		}
 	}
-	return ""
+	return best
+}
+
+// specSignatureFits checks spec(params of target..., ret result) bool.
+func specSignatureFits(spec, target *types.Signature) bool {
+	tp, sp := target.Params(), spec.Params()
+	if spec.Results().Len() != 1 || sp.Len() != tp.Len()+target.Results().Len() {
+		return false
+	}
+	for i := 0; i < tp.Len(); i++ {
+		if !types.Identical(sp.At(i).Type(), tp.At(i).Type()) {
+			return false
+		}
+	}
+	for i := 0; i < target.Results().Len(); i++ {
+		if !types.Identical(sp.At(tp.Len()+i).Type(), target.Results().At(i).Type()) {
+			return false
+		}
+	}
+	return true
 }
 
 // GoName strips the package qualifier from an ssa function name.

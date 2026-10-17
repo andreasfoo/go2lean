@@ -512,6 +512,8 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | named integer types (`time.Duration`, `logrus.Level`) passed the frontend but broke the engines (which parsed type names) and the harness (no import) | the ABI carries width, signedness and the type's import path |
 | **first real finding**: the agent (MiniMax-M3 through the Anthropic-compatible endpoint) proposed `SpecBudgetDurationNonNegative` for `claudecode.budgetDuration(seconds int) time.Duration`; the random engine found `seconds = MaxInt64` at trial 12; the real run returned `-1s` — `time.Duration(seconds) * time.Second` wraps for `seconds ≥ 9 223 372 037` | the loop works on real code once a function is modelled; the agent's report named the line and the threshold |
 | the agent needs `import "time"` for `time.Duration` in spec signatures; the prompt forbade imports | the rule is now "imports only for the types in spec signatures"; package-level variables of the target are explicitly out of the subset |
+| the model put one `go2lean:spec` marker at the top of the file, separated by a blank line; go/ssa saw no doc comment and the specs became targets with `no_panic` properties | a function `Spec<X>...` whose parameters are X's parameters plus `ret` of X's result is taken as a spec for X regardless of the marker; the prompt shows the marker placement |
+| agent logs of a second package overwrote the first's | one log directory per package under `<workspace>/agent/` |
 
 ## 10. Milestones
 
