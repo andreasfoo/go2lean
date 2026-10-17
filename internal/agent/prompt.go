@@ -43,12 +43,17 @@ Rules for a spec function:
 - Return true when the property is vacuously satisfied (the inputs do not meet
   its precondition). Return false only when the result is wrong.
 - Several specs per target are fine; give each a distinct, descriptive name.
-- Stay inside the modelled subset: integers of any width, bools, slices of
-  integers (read only: index and len/cap, no append/make/assignment), error
-  values compared with nil, multiple results, if/for, arithmetic, comparisons,
-  calls to other functions of the same package (including the target itself).
-  No maps, strings, structs, pointers, closures, fmt, panics, or
-  standard-library calls.
+- Stay inside the modelled subset: integers of any width, bools, strings
+  (len, indexing, slicing, ==, +, and strings.HasPrefix/HasSuffix/Contains/
+  Index/TrimSpace/TrimPrefix/TrimSuffix, strconv.Atoi/Itoa), structs and
+  pointers to them (field reads and writes, nil checks), arrays, slices of
+  integers (index, len/cap, element assignment, make), error values compared
+  with nil, multiple results, if/for, arithmetic, comparisons, calls to other
+  functions and methods of the same package (including the target itself).
+  No maps, interfaces, closures, append, fmt, panics, or other
+  standard-library calls. A spec may read fields of struct and pointer
+  arguments after the call, so it can state what a method did to its
+  receiver.
 - A loop is fine; the model runs it with bounded fuel.
 - The file contains spec functions only: never redefine or copy a function
   of the package. Import only the packages that the parameter and result
