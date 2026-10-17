@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -129,7 +130,7 @@ func typeTable(abi *contract.ABI, maxLen int) ([][]map[string]any, error) {
 	for _, t := range abi.Types {
 		fs := []map[string]any{}
 		for _, f := range t.Fields {
-			g, err := gen(abi, f, maxLen)
+			g, err := genIn(abi, f, maxLen, []string{t.GoType})
 			if err != nil {
 				return nil, err
 			}
@@ -143,6 +144,13 @@ func typeTable(abi *contract.ABI, maxLen int) ([][]map[string]any, error) {
 // gen describes the Search.Gen for one parameter as JSON; the shape is
 // decoded by `genOfJson` in lean/Go2Lean/Driver.lean.
 func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, error) {
+	return genIn(abi, p, maxLen, nil)
+}
+
+// genIn is gen along a path of the struct types under construction: a
+// pointer to one of them is a back-edge of a recursive type (`link`),
+// nullable at every depth, where any other pointer is non-nil by default.
+func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (map[string]any, error) {
 	switch p.Kind {
 	case contract.ABIInt:
 		w, signed, ok := p.IntInfo()
@@ -156,7 +164,7 @@ func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, er
 		return map[string]any{"k": "err", "name": p.Go}, nil
 	case contract.ABISlice:
 		if p.ElemParam != nil {
-			e, err := gen(abi, *p.ElemParam, maxLen)
+			e, err := genIn(abi, *p.ElemParam, maxLen, open)
 			if err != nil {
 				return nil, err
 			}
@@ -173,7 +181,7 @@ func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, er
 		}
 		fs := []map[string]any{}
 		for _, f := range p.Fields {
-			g, err := gen(abi, f, maxLen)
+			g, err := genIn(abi, f, maxLen, append(open, p.GoType))
 			if err != nil {
 				return nil, err
 			}
@@ -185,7 +193,7 @@ func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, er
 	case contract.ABIOpaque:
 		return map[string]any{"k": "opaque", "name": p.Go}, nil
 	case contract.ABIArray:
-		e, err := gen(abi, p.ElemAsParam(), maxLen)
+		e, err := genIn(abi, p.ElemAsParam(), maxLen, open)
 		if err != nil {
 			return nil, err
 		}
@@ -195,11 +203,15 @@ func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, er
 			// The frontend's depth cut-off for recursive types: always nil.
 			return map[string]any{"k": "nilptr", "name": p.Go}, nil
 		}
-		g, err := gen(abi, *p.Pointee, maxLen)
+		g, err := genIn(abi, *p.Pointee, maxLen, open)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"k": "ptr", "name": p.Go, "pointee": g}, nil
+		kind := "ptr"
+		if p.Pointee.TypeRef != "" && slices.Contains(open, p.Pointee.TypeRef) {
+			kind = "link"
+		}
+		return map[string]any{"k": kind, "name": p.Go, "pointee": g}, nil
 	}
 	return nil, fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
 }

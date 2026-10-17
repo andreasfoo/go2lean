@@ -22,6 +22,7 @@ partial def genOfJson (j : Json) : Except String Gen := do
   | "sliceOf" => return .sliceOf name (← genOfJson (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "maxLen")
   | "structv" => return .structv name (← (← j.getObjValAs? (Array Json) "fields").toList.mapM genOfJson)
   | "ptr" => return .ptr name (← genOfJson (← j.getObjVal? "pointee"))
+  | "link" => return .link name (← genOfJson (← j.getObjVal? "pointee"))
   | "str" => return .str name (← j.getObjValAs? Nat "maxLen")
   | "nilptr" => return .nilptr name
   | "ref" => return .ref name (← j.getObjValAs? Nat "ty")

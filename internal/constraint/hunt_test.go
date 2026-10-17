@@ -36,7 +36,7 @@ func TestGensAndTypeTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	tj, _ := json.Marshal(tbl)
-	if string(tj) != `[[{"k":"int","name":"Val","signed":true,"w":64},{"k":"ptr","name":"Next","pointee":{"k":"ref","name":"Next","ty":0}}]]` {
+	if string(tj) != `[[{"k":"int","name":"Val","signed":true,"w":64},{"k":"link","name":"Next","pointee":{"k":"ref","name":"Next","ty":0}}]]` {
 		t.Fatalf("type table: %s", tj)
 	}
 }
