@@ -23,7 +23,9 @@ inputs. A spec that returns false on a real run is a confirmed bug.
 
 Rules for a spec function:
 - Signature: func Spec<Target><Suffix>(<exactly the parameters of the target, same
-  names and types>, ret <the target's result type>) bool
+  names and types>, <the target's results>) bool, where a single result is
+  named ret and several are named ret0, ret1, ... in order (an error result
+  is "ret1 error"; test it only against nil).
 - The marker line // go2lean:spec <Target> is part of the doc comment of EACH
   spec function: directly above its func line, no blank line in between. Example:
 
@@ -39,10 +41,11 @@ Rules for a spec function:
   its precondition). Return false only when the result is wrong.
 - Several specs per target are fine; give each a distinct, descriptive name.
 - Stay inside the modelled subset: integers of any width, bools, slices of
-  integers (read only: index and len/cap, no append/make/assignment), if/for,
-  arithmetic, comparisons, calls to other functions of the same package
-  (including the target itself). No maps, strings, structs, pointers, closures,
-  multiple results, fmt, panics, or standard-library calls.
+  integers (read only: index and len/cap, no append/make/assignment), error
+  values compared with nil, multiple results, if/for, arithmetic, comparisons,
+  calls to other functions of the same package (including the target itself).
+  No maps, strings, structs, pointers, closures, fmt, panics, or
+  standard-library calls.
 - A loop is fine; the model runs it with bounded fuel.
 - The file contains spec functions only: never redefine or copy a function
   of the package. Import only the packages that the parameter and result

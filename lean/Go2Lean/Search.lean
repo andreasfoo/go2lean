@@ -19,6 +19,8 @@ open Go2Lean.SSA Go2Lean.GoSSA Lean
 inductive Gen where
   | int (name : String) (w : Nat) (signed : Bool)
   | bool (name : String)
+  /-- An opaque `error` parameter: nil or non-nil. -/
+  | err (name : String)
   /-- Slice of `w`-bit integers; `maxLen` bounds the generated length. -/
   | slice (name : String) (w : Nat) (signed : Bool) (maxLen : Nat)
 
@@ -86,6 +88,9 @@ def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (fresh : Nat) : Gen �
   | .bool _ =>
     let (b, g) := randBool g
     (.bool b, g, fresh)
+  | .err _ =>
+    let (b, g) := randBool g
+    (.err b, g, fresh)
   | .slice _ _ _ maxLen =>
     let (len, g) := randNat g 0 maxLen
     let (extra, g) := randNat g 0 2
@@ -106,13 +111,18 @@ def oracleOf (pf : Profile) (extra : List Nat) (seed : Nat) : Oracle :=
       let h := mixHash (mixHash (UInt64.ofNat (seed + 7)) (UInt64.ofNat ref)) (UInt64.ofNat idx.toNat)
       (genBits pf extra (mkStdGen h.toNat) 64).1 }
 
-/-- A havoc oracle derived from the seed. -/
+/-- A havoc oracle derived from the seed. Site widths encode the kind of
+value: 0 is an opaque `error` (nil or non-nil), 1 is a bool, anything else
+is an integer of that width. -/
 def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
   let w := widths[site]?.getD 64
   let h := mixHash (mixHash (UInt64.ofNat seed) (UInt64.ofNat site)) (UInt64.ofNat (iter + 1))
   let g := mkStdGen h.toNat
-  let (v, _) := genBits .mixed [] g w
-  .int w v
+  if w == 0 then .err (randBool g).1
+  else if w == 1 then .bool (randBool g).1
+  else
+    let (v, _) := genBits .mixed [] g w
+    .int w v
 
 -- Checking -------------------------------------------------------------------
 
@@ -127,7 +137,9 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
   | .postcondition f spec =>
     match run p or h f args fuel with
     | (.ok v, s) =>
-      match runFunc p or h spec (args ++ [v]) s fuel with
+      -- A spec takes every result of the target after its parameters.
+      let results := match v with | .tuple vs => vs | v => [v]
+      match runFunc p or h spec (args ++ results) s fuel with
       | (.ok (.bool true), s) => (.holds, s, some v)
       | (.ok (.bool false), s) => (.violated, s, some v)
       | (.ok _, s) => (.specPanicked .modelStuck, s, some v)
@@ -159,13 +171,14 @@ def renderInt (signed : Bool) (v : BitVec w) : String :=
 def flatten : Gen → Val → List (String × Json)
   | .int name _ signed, .int _ v => [(name, renderInt signed v)]
   | .bool name, .bool b => [(name, toString b)]
+  | .err name, .err nonNil => [(name, if nonNil then "error" else "nil")]
   | .slice name _ _ _, .slice ref off len cap =>
     [(name ++ "_ref", toString ref), (name ++ "_off", renderInt false off),
      (name ++ "_len", renderInt false len), (name ++ "_cap", renderInt false cap)]
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
-    | .int n .. => n | .bool n => n | .slice n .. => n
+    | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n
 
 /-- The slice contents the oracle holds for each slice argument, keyed by
 parameter name, so M3 can materialise them. -/
@@ -177,11 +190,13 @@ def memoryOf (or : Oracle) (gens : List Gen) (args : List Val) : List (String ×
       some (name, Json.arr elems.toArray)
     | _ => none
 
-def renderVal : Val → Json
+partial def renderVal : Val → Json
   | .int _ v => Json.str (renderInt true v)
   | .bool b => Json.str (toString b)
   | .slice ref off len cap =>
     Json.str s!"slice(ref={ref}, off={off.toNat}, len={len.toNat}, cap={cap.toNat})"
+  | .tuple vs => Json.arr (vs.map renderVal).toArray
+  | .err nonNil => Json.str (if nonNil then "error" else "nil")
   | .unit => Json.str "unit"
 
 def modelOutput : Outcome → Option Val → Json
@@ -244,6 +259,7 @@ table for its `ref`). -/
 def enumGen (extra : List Nat) (maxLen fresh : Nat) : Gen → List (Val × Option (List (BitVec 64)))
   | .int _ w _ => (smallInts w extra).map fun v => (.int w v, none)
   | .bool _ => [(.bool true, none), (.bool false, none)]
+  | .err _ => [(.err false, none), (.err true, none)]
   | .slice _ w _ maxLen' =>
     let elems := (smallInts w extra).map (·.zeroExtend 64)
     (List.range (min maxLen maxLen' + 1)).flatMap fun len =>
@@ -257,6 +273,7 @@ def domainSize (extra : List Nat) (maxLen : Nat) : List Gen → Nat
     let here := match g with
       | .int _ w _ => (smallInts w extra).length
       | .bool _ => 2
+      | .err _ => 2
       | .slice _ w _ maxLen' =>
         let k := (smallInts w extra).length
         (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0

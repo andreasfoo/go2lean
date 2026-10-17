@@ -36,6 +36,11 @@ type UnitVal struct{}
 
 func (UnitVal) Lean() string { return ".unit" }
 
+// ErrVal is an opaque error value; only nil-ness is modelled.
+type ErrVal struct{ NonNil bool }
+
+func (v ErrVal) Lean() string { return fmt.Sprintf("(.err %v)", v.NonNil) }
+
 // Op is a dialect instruction.
 type Op interface{ Lean() string }
 
@@ -71,6 +76,18 @@ func (c Conv) Lean() string { return fmt.Sprintf("(.conv %d %v)", c.Width, c.Sig
 type Load struct{ Width int }
 
 func (l Load) Lean() string { return fmt.Sprintf("(.load %d)", l.Width) }
+
+// Extract takes component I of a tuple.
+type Extract struct{ I int }
+
+func (e Extract) Lean() string { return fmt.Sprintf("(.extract %d)", e.I) }
+
+// Havoc site kinds, encoded in Prog.HavocWidths: 0 is an opaque error, 1 a
+// bool, any other value the width of an integer.
+const (
+	HavocError = 0
+	HavocBool  = 1
+)
 
 // Instr is `Dst := Op(Args)`, or a havoc when Op is nil.
 type Instr struct {

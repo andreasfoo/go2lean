@@ -91,6 +91,8 @@ func gens(abi *contract.ABI, maxLen int) (string, error) {
 			parts = append(parts, fmt.Sprintf("(.int %q %d %v)", p.Go, w, signed))
 		case contract.ABIBool:
 			parts = append(parts, fmt.Sprintf("(.bool %q)", p.Go))
+		case contract.ABIError:
+			parts = append(parts, fmt.Sprintf("(.err %q)", p.Go))
 		case contract.ABISlice:
 			w, signed, ok := p.ElemInfo()
 			if !ok {

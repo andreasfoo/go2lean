@@ -22,10 +22,13 @@ type harnessData struct {
 	Decls    []string // parameter declarations
 	Args     string   // comma-separated parameter names
 	Func     string
-	RetType  string // "" when the function has no result
+	Rets     []string // result variable names (ret, or ret0, ret1, ...); empty when none
+	RetTypes []string
 	Pre      string // Go expression or ""
 	SpecCall string // e.g. SpecSum(xs, ret) or ""
 }
+
+func (d harnessData) RetList() string { return strings.Join(d.Rets, ", ") }
 
 var harnessTmpl = template.Must(template.New("poc").Parse(`package {{.Package}}
 
@@ -46,8 +49,8 @@ func TestGo2LeanPoC_{{.ID}}(t *testing.T) {
 {{- range .Decls}}
 	{{.}}
 {{- end}}
-{{- if .RetType}}
-	var ret {{.RetType}}
+{{- range $i, $r := .Rets}}
+	var {{$r}} {{index $.RetTypes $i}}
 {{- end}}
 	res := map[string]any{"panicked": false}
 	func() {
@@ -57,9 +60,9 @@ func TestGo2LeanPoC_{{.ID}}(t *testing.T) {
 				res["panic"] = fmt.Sprint(r)
 			}
 		}()
-{{- if .RetType}}
-		ret = {{.Func}}({{.Args}})
-		res["ret"] = fmt.Sprint(ret)
+{{- if .Rets}}
+		{{.RetList}} = {{.Func}}({{.Args}})
+		res["ret"] = fmt.Sprint({{.RetList}})
 {{- else}}
 		{{.Func}}({{.Args}})
 {{- end}}
@@ -79,10 +82,18 @@ func TestGo2LeanPoC_{{.ID}}(t *testing.T) {
 
 // Harness renders the Go test for a counterexample.
 func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contract.Counterexample, abi *contract.ABI) (string, error) {
-	d := harnessData{Package: pkgName, ID: cx.ID, Func: t.Func, RetType: abi.Result.GoType}
+	d := harnessData{Package: pkgName, ID: cx.ID, Func: t.Func}
 	imports := map[string]bool{}
-	if abi.Result.TypePkg != "" {
-		imports[abi.Result.TypePkg] = true
+	for i, r := range abi.Results {
+		name := "ret"
+		if len(abi.Results) > 1 {
+			name = fmt.Sprintf("ret%d", i)
+		}
+		d.Rets = append(d.Rets, name)
+		d.RetTypes = append(d.RetTypes, r.GoType)
+		if r.TypePkg != "" {
+			imports[r.TypePkg] = true
+		}
 	}
 	var names []string
 	for _, prm := range abi.Params {
@@ -97,6 +108,9 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 				imports[ip] = true
 			}
 		}
+		if prm.Kind == contract.ABIError && cx.Inputs[prm.Model[0]] != "nil" {
+			imports["errors"] = true
+		}
 	}
 	for ip := range imports {
 		d.Imports = append(d.Imports, ip)
@@ -107,10 +121,7 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 		d.Pre = p.Precondition.Go
 	}
 	if p.Spec != nil {
-		specArgs := names
-		if abi.Result.GoType != "" {
-			specArgs = append(append([]string{}, names...), "ret")
-		}
+		specArgs := append(append([]string{}, names...), d.Rets...)
 		d.SpecCall = fmt.Sprintf("%s(%s)", p.Spec.GoFunc, strings.Join(specArgs, ", "))
 	}
 	var b strings.Builder
@@ -136,6 +147,11 @@ func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error)
 			return "", fmt.Errorf("counterexample has no value for %s", p.Go)
 		}
 		return fmt.Sprintf("%s := %s", p.Go, v), nil
+	case contract.ABIError:
+		if cx.Inputs[p.Model[0]] == "nil" {
+			return fmt.Sprintf("var %s error", p.Go), nil
+		}
+		return fmt.Sprintf("%s := errors.New(\"go2lean: opaque error\")", p.Go), nil
 	case contract.ABISlice:
 		n, err := strconv.Atoi(cx.Inputs[p.Go+"_len"])
 		if err != nil {

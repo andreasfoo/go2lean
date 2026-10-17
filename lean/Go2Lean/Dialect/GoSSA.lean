@@ -20,6 +20,10 @@ inductive Val where
   | bool (b : Bool)
   /-- A slice header. `ref` abstracts the backing array; contents are havoc. -/
   | slice (ref : Nat) (off len cap : BitVec 64)
+  /-- Multiple results of a call or return. -/
+  | tuple (vs : List Val)
+  /-- An opaque `error` value: only nil-ness is modelled. -/
+  | err (nonNil : Bool)
   | unit
   deriving Repr
 
@@ -57,6 +61,10 @@ inductive Op where
   | load (w : Nat)
   /-- `xs[lo:hi]` -/
   | reslice
+  /-- Pack the operands as a tuple (multiple return values). -/
+  | mkTuple
+  /-- Component `i` of a tuple. -/
+  | extract (i : Nat)
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -83,9 +91,12 @@ def shiftCount (countSigned : Bool) : Val → Res Nat
   | .int _ n => if countSigned && n.msb then .panic .negativeShift else .ok n.toNat
   | _ => .panic .modelStuck
 
+/-- Equality where Go defines it for modelled values. Two non-nil errors
+compare equal (an over-approximation of identity; M3 filters the fallout). -/
 def eqVal : Val → Val → Option Bool
   | .int w a, .int w' b => if h : w' = w then some (a = (h ▸ b)) else none
   | .bool a, .bool b => some (a == b)
+  | .err a, .err b => some (a == b)
   | _, _ => none
 
 /-- Go index semantics: a negative index is out of range, so compare unsigned
@@ -143,6 +154,11 @@ def denote (or : Oracle) : Op → List Val → Res Val
     | some i =>
       if i.ult len then .ok (.int w ((or.mem ref (off + i)).zeroExtend w))
       else .panic .indexOutOfRange
+    | none => .panic .modelStuck
+  | .mkTuple, vs => .ok (.tuple vs)
+  | .extract i, [.tuple vs] =>
+    match vs[i]? with
+    | some v => .ok v
     | none => .panic .modelStuck
   | .reslice, [.slice ref off _ cap, lo, hi] =>
     match asIndex lo, asIndex hi with

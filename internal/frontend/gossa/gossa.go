@@ -319,6 +319,9 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 
 func constVal(c *ssa.Const) (ir.Val, error) {
 	if c.Value == nil {
+		if isError(c.Type()) {
+			return ir.ErrVal{NonNil: false}, nil
+		}
 		return nil, fmt.Errorf("nil constant of type %s", c.Type())
 	}
 	if isBool(c.Type()) {
@@ -394,7 +397,8 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 	default:
 		return fmt.Errorf("unsupported binary operator %s", x.Op)
 	}
-	if !isInt && !(isBool(x.X.Type()) && (x.Op == token.EQL || x.Op == token.NEQ)) {
+	eqOp := x.Op == token.EQL || x.Op == token.NEQ
+	if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
 	a, err := t.val(x.X)
@@ -422,12 +426,41 @@ func (t *fnState) def(x ssa.Value) ir.Var {
 	return v
 }
 
+// havocKind maps a type to the havoc site encoding (see ir.HavocError).
+func havocKind(t types.Type) (int, bool) {
+	switch {
+	case isError(t):
+		return ir.HavocError, true
+	case isBool(t):
+		return ir.HavocBool, true
+	}
+	w, _, ok := intWidth(t)
+	return w, ok
+}
+
 func (t *fnState) havoc(x ssa.Value, site, reason, goHint string) error {
-	w, _, ok := intWidth(x.Type())
+	if tu, ok := x.Type().(*types.Tuple); ok {
+		// A multi-result call: havoc each component and pack them.
+		var parts []ir.Var
+		for i := 0; i < tu.Len(); i++ {
+			k, ok := havocKind(tu.At(i).Type())
+			if !ok {
+				return fmt.Errorf("cannot havoc result %d of type %s", i, tu.At(i).Type())
+			}
+			idx := t.prog.newHavoc(k, fmt.Sprintf("%s: %s #%d", t.f.Name(), site, i), reason, goHint)
+			v := t.fresh()
+			t.emit(ir.Instr{Dst: v, HavocSite: idx})
+			parts = append(parts, v)
+		}
+		t.issue("%s: %s is havoc (%s)", site, x.Name(), reason)
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: parts})
+		return nil
+	}
+	k, ok := havocKind(x.Type())
 	if !ok {
 		return fmt.Errorf("cannot havoc a value of type %s", x.Type())
 	}
-	idx := t.prog.newHavoc(w, t.f.Name()+": "+site, reason, goHint)
+	idx := t.prog.newHavoc(k, t.f.Name()+": "+site, reason, goHint)
 	t.issue("%s: %s is havoc (%s)", site, x.Name(), reason)
 	t.emit(ir.Instr{Dst: t.def(x), HavocSite: idx})
 	return nil
@@ -462,6 +495,13 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		return nil
 	case *ssa.Slice:
 		return t.slice(x)
+	case *ssa.Extract:
+		tup, err := t.val(x.Tuple)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Extract{I: x.Index}, Args: []ir.Var{tup}})
+		return nil
 	case *ssa.Store:
 		if _, ok := t.addrs[x.Addr]; ok {
 			t.issue("store to slice element %s ignored (read-only slice model)", x.Addr.Name())
@@ -483,7 +523,17 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			}
 			t.cur.Term = ir.Term{Kind: ir.TermRet, V: v}
 		default:
-			return fmt.Errorf("multiple results not supported")
+			var parts []ir.Var
+			for _, r := range x.Results {
+				v, err := t.val(r)
+				if err != nil {
+					return err
+				}
+				parts = append(parts, v)
+			}
+			tup := t.fresh()
+			t.emit(ir.Instr{Dst: tup, Op: ir.Simple("mkTuple"), Args: parts})
+			t.cur.Term = ir.Term{Kind: ir.TermRet, V: tup}
 		}
 		return nil
 	case *ssa.Jump:
@@ -674,6 +724,16 @@ func isBool(t types.Type) bool {
 	return ok && b.Info()&types.IsBoolean != 0
 }
 
+var errorType = types.Universe.Lookup("error").Type()
+
+func isError(t types.Type) bool { return types.Identical(t, errorType) }
+
+// resultOK says whether a result type can be returned by a modelled function.
+func resultOK(t types.Type) bool {
+	_, _, isInt := intWidth(t)
+	return isInt || isBool(t) || isError(t)
+}
+
 func sliceElem(t types.Type) (w int, signed bool, ok bool) {
 	s, isSlice := t.Underlying().(*types.Slice)
 	if !isSlice {
@@ -713,6 +773,8 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		switch {
 		case isBool(p.Type()):
 			abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool})
+		case isError(p.Type()):
+			abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: "error", Model: []string{name}, Kind: contract.ABIError})
 		default:
 			if w, signed, ok := intWidth(p.Type()); ok {
 				abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt})
@@ -730,17 +792,14 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		}
 	}
 	res := f.Signature.Results()
-	switch res.Len() {
-	case 0:
-	case 1:
-		rt := res.At(0).Type()
-		_, _, isInt := intWidth(rt)
-		if !isInt && !isBool(rt) {
+	for i := 0; i < res.Len(); i++ {
+		rt := res.At(i).Type()
+		if !resultOK(rt) {
 			return nil, fmt.Errorf("result type %s not supported", rt)
 		}
-		abi.Result.GoType, abi.Result.TypePkg = spell(pkg, rt)
-	default:
-		return nil, fmt.Errorf("multiple results not supported")
+		var r contract.ABIResult
+		r.GoType, r.TypePkg = spell(pkg, rt)
+		abi.Results = append(abi.Results, r)
 	}
 	return abi, nil
 }

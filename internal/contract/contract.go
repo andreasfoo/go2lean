@@ -8,6 +8,11 @@
 // "true"/"false" for bool.
 package contract
 
+import (
+	"encoding/json"
+	"strings"
+)
+
 // Target identifies one Go function and the model(s) M1 built for it.
 type Target struct {
 	ID      string `json:"id"`
@@ -89,8 +94,30 @@ type HavocValue struct {
 // ModelOutput is what the Lean model returned on the counterexample.
 type ModelOutput struct {
 	Res   string    `json:"res"` // "ok" | "panic" | "out_of_fuel"
-	Value string    `json:"value,omitempty"`
+	Value FlexValue `json:"value,omitempty"`
 	Panic PanicKind `json:"panic,omitempty"`
+}
+
+// FlexValue is a rendered model value: a single value as a string, or
+// several results (a tuple) as a JSON array, read as "[v0, v1, ...]".
+type FlexValue string
+
+func (v *FlexValue) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*v = FlexValue(s)
+		return nil
+	}
+	var parts []FlexValue
+	if err := json.Unmarshal(b, &parts); err != nil {
+		return err
+	}
+	strs := make([]string, len(parts))
+	for i, p := range parts {
+		strs[i] = string(p)
+	}
+	*v = FlexValue("[" + strings.Join(strs, ", ") + "]")
+	return nil
 }
 
 // Counterexample is a concrete assignment under which the model violates a
@@ -184,13 +211,16 @@ type ModelGap struct {
 }
 
 // ABI maps the Go signature of a function onto the parameters of its model.
+// Results lists every result in order; a spec-in-Go function takes them
+// after the parameters, named ret for one result or ret0, ret1, ... for
+// several.
 type ABI struct {
-	GoFunc   string     `json:"go_func"`
-	GoSig    string     `json:"go_sig"`
-	Frontend string     `json:"frontend"`
-	Params   []ABIParam `json:"params"`
-	Result   ABIResult  `json:"result"`
-	Havoc    []ABIHavoc `json:"havoc,omitempty"`
+	GoFunc   string      `json:"go_func"`
+	GoSig    string      `json:"go_sig"`
+	Frontend string      `json:"frontend"`
+	Params   []ABIParam  `json:"params"`
+	Results  []ABIResult `json:"results,omitempty"`
+	Havoc    []ABIHavoc  `json:"havoc,omitempty"`
 }
 
 // ABIParamKind classifies how a Go parameter is split into model values.
@@ -199,6 +229,7 @@ type ABIParamKind string
 const (
 	ABIInt   ABIParamKind = "int"   // one model value
 	ABIBool  ABIParamKind = "bool"  // one model value
+	ABIError ABIParamKind = "error" // one model value: nil or an opaque non-nil error
 	ABISlice ABIParamKind = "slice" // model: ref, off, len, cap (gossa) or ptr, len, cap (llvm)
 )
 
