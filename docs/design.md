@@ -255,6 +255,38 @@ Acceptance for stage B: `examples/alias` (writes through aliased slices),
 a struct-returning constructor with an invariant spec, and a re-sweep of
 tingly-box with the pointer/struct rejection counts as the metric.
 
+### 4.3c What lean-mlir does for memory (read 2026-10-17, `SSA/Projects/SLLVM`)
+
+lean-mlir's *structured LLVM* dialect is the closest prior art and confirms
+the shape of our heap model while pointing at two things to borrow:
+
+- **Memory is a map from block ids to blocks**, a pointer is `(block id,
+  offset)`, a block holds its contents as one wide bitvector plus a
+  live/freed flag; loads and stores are range-checked against the block and
+  raise UB otherwise. That is our `ref` + path model at byte granularity.
+  Go has no pointer arithmetic, so the typed path form is right for GoSSA;
+  the byte form is what the LLVM dialect (§4.4) should port directly,
+  including `PoisonOr` for UB where we use `Res.panic`/`modelStuck`.
+- **Every memory op exists in two forms**: an *impure* one that runs in an
+  effect monad (`load : ptr → m (bitvec w)`), and a *pure* one that takes
+  and returns the memory as an explicit SSA value (`loadPure : (mem, ptr) →
+  (mem, bitvec w)`, "memory SSA"). Pure programs stay in the fragment that
+  `simp`/`bv_decide` handle. Our `Dialect.denote : Oracle → Heap → Op → args →
+  Res (Val × Heap)` is exactly the pure form, threaded by the interpreter
+  rather than appearing as a variable; when the proof engines arrive, an
+  explicit `mem` value in the generated program is the representation to
+  switch to, and lean-mlir shows it costs nothing in the dialect.
+- `EffectKind` (`pure`/`impure`) tags each op so the framework knows which
+  ops touch state; our `denotePure`/`denote` split is the same idea and
+  should become an `Op.effect` function so the unfolding lemmas can skip
+  heap threading for pure ops.
+- Recursive data types are not a dialect concern in lean-mlir either: they
+  are pointers into blocks. The type-directed generation of bounded linked
+  structures (§4.3b, the ABI type table) is go2lean-specific because our
+  inputs are Go values, not memory images.
+- Their model has no deallocation and models a single function body; ours
+  allocates across calls and never frees, which Go's GC makes sound.
+
 ### 4.4 `LLVM` dialect (not built yet)
 
 **Build it on lean-mlir.** lean-mlir already defines per-operation semantics
