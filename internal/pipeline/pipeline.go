@@ -14,13 +14,27 @@ import (
 	"github.com/andreasfoo/go2lean/internal/ssaout"
 )
 
+// Env says where things are: Root is the go2lean checkout (Lean project),
+// Module is the directory of the Go module under analysis (defaults to Root).
+type Env struct {
+	Root   string
+	Module string
+}
+
+func (e Env) module() string {
+	if e.Module != "" {
+		return e.Module
+	}
+	return e.Root
+}
+
 // Compile runs M1 on one package and prints a summary to out.
-func Compile(w contract.Workspace, root, pattern string, out io.Writer) (*contract.ModelReport, error) {
-	prog, modPath, err := gossa.Translate(root, pattern)
+func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*contract.ModelReport, error) {
+	prog, modPath, err := gossa.Translate(env.module(), pattern)
 	if err != nil {
 		return nil, err
 	}
-	report, err := ssaout.Emit(prog, repo.LeanDir(root), w, modPath)
+	report, err := ssaout.Emit(prog, repo.LeanDir(env.Root), w, modPath)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +65,8 @@ func Propose(w contract.Workspace, report *contract.ModelReport, out io.Writer) 
 }
 
 // Hunt runs the engines on one property and prints the outcome.
-func Hunt(w contract.Workspace, root string, p *contract.Property, opts constraint.SearchOptions, out io.Writer) (*contract.Counterexample, error) {
-	cx, summary, err := constraint.Hunt(w, root, p, opts)
+func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.SearchOptions, out io.Writer) (*contract.Counterexample, error) {
+	cx, summary, err := constraint.Hunt(w, env.Root, p, opts)
 	if err != nil {
 		return nil, fmt.Errorf("hunt %s: %w", p.ID, err)
 	}
@@ -73,8 +87,8 @@ func Hunt(w contract.Workspace, root string, p *contract.Property, opts constrai
 }
 
 // Verify runs M3 on one counterexample and prints the verdict.
-func Verify(w contract.Workspace, root, id string, out io.Writer) (*contract.Verdict, error) {
-	v, err := poc.Verify(w, root, id)
+func Verify(w contract.Workspace, env Env, id string, out io.Writer) (*contract.Verdict, error) {
+	v, err := poc.Verify(w, env.module(), id)
 	if err != nil {
 		return nil, fmt.Errorf("poc %s: %w", id, err)
 	}
@@ -100,9 +114,9 @@ type Result struct {
 }
 
 // Run executes all three modules on one package.
-func Run(w contract.Workspace, root, pattern string, opts constraint.SearchOptions, out io.Writer) (*Result, error) {
+func Run(w contract.Workspace, env Env, pattern string, opts constraint.SearchOptions, out io.Writer) (*Result, error) {
 	fmt.Fprintln(out, "== M1 compile")
-	report, err := Compile(w, root, pattern, out)
+	report, err := Compile(w, env, pattern, out)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +128,7 @@ func Run(w contract.Workspace, root, pattern string, opts constraint.SearchOptio
 	fmt.Fprintln(out, "== M2 hunt")
 	var cxs []*contract.Counterexample
 	for _, p := range props {
-		cx, err := Hunt(w, root, p, opts, out)
+		cx, err := Hunt(w, env, p, opts, out)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +142,7 @@ func Run(w contract.Workspace, root, pattern string, opts constraint.SearchOptio
 		fmt.Fprintln(out, "  nothing to verify")
 	}
 	for _, cx := range cxs {
-		v, err := Verify(w, root, cx.ID, out)
+		v, err := Verify(w, env, cx.ID, out)
 		if err != nil {
 			return nil, err
 		}

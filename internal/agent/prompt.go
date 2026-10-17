@@ -34,6 +34,8 @@ Rules for a spec function:
   (including the target itself). No maps, strings, structs, pointers, closures,
   multiple results, fmt, panics, or standard-library calls.
 - A loop is fine; the model runs it with bounded fuel.
+- The file contains spec functions only: never redefine or copy a function
+  of the package, and never add imports. Plain ASCII in code and comments.
 
 Good properties are ones a real bug could violate: results inside a range,
 sign and overflow behaviour on large inputs, off-by-one at boundaries
@@ -45,9 +47,10 @@ Output exactly one fenced Go code block containing the complete contents of a
 file named go2lean_specs_test.go, starting with the package clause of the
 target package. Outside the block, at most a few short lines of rationale.`
 
-const reportPrompt = `You are the reporting agent of go2lean. Below are the properties that were
-checked for a package and the verdicts the pipeline produced. Write a concise
-Markdown report for the package's maintainers:
+const reportPrompt = `You are the reporting agent of go2lean. You will get the package source, the
+properties that were checked and the verdicts the pipeline produced. Write a
+concise Markdown report for the package's maintainers, grounded in the source
+(point at the actual line that is wrong, not a guess):
 
 1. Confirmed bugs: for each, the property, the concrete input, what the real
    Go run did, and the one-line fix you would suggest.
@@ -56,18 +59,47 @@ Markdown report for the package's maintainers:
 3. Properties that held: what the exhaustive engine certified and over what domain,
    and which ones are still only "no counterexample found".
 
+Suggested fixes to the package belong in prose or in a Go block that contains
+no "go2lean:spec" comment.
+
 If some spec should be restated, you may also output one fenced Go code block
-with a revised go2lean_specs_test.go; the pipeline will run it again. Omit the
-block if nothing should change.`
+with a revised go2lean_specs_test.go; the pipeline will run it again. It is
+recognised by its "go2lean:spec" comments. The file must follow the same
+rules as before: the package clause of the target package (given below), no
+imports, spec functions only, never a copy of a package function, plain
+ASCII, inside the modelled subset. Omit the block if nothing should change.`
 
-var goBlock = regexp.MustCompile("(?s)```go\\s*\\n(.*?)\\n```")
+// goBlock matches a fenced Go block whose fences each stand on their own
+// line (indentation allowed, as inside a list item). Anchoring both fences
+// keeps an indented fix snippet from swallowing the spec block after it.
+var goBlock = regexp.MustCompile("(?ms)^[ \\t]*```go[ \\t]*$\\n(.*?)\\n[ \\t]*```[ \\t]*$")
 
-// extractGo returns the first fenced Go block in a response, or "".
+// extractGo returns the spec file in a response: the last fenced Go block
+// that carries a go2lean:spec comment, so that fix suggestions in other Go
+// blocks are not mistaken for it. Without such a block it falls back to the
+// first Go block; "" when there is none.
 func extractGo(resp string) string {
-	if m := goBlock.FindStringSubmatch(resp); m != nil {
-		return strings.TrimSpace(m[1]) + "\n"
+	blocks := goBlock.FindAllStringSubmatch(resp, -1)
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if strings.Contains(blocks[i][1], "go2lean:spec") {
+			return strings.TrimSpace(blocks[i][1]) + "\n"
+		}
+	}
+	if len(blocks) > 0 {
+		return strings.TrimSpace(blocks[0][1]) + "\n"
 	}
 	return ""
+}
+
+// hasSpecBlock reports whether a response carries a spec file (used in the
+// report round, where a plain fix snippet must not trigger a rerun).
+func hasSpecBlock(resp string) bool {
+	for _, b := range goBlock.FindAllStringSubmatch(resp, -1) {
+		if strings.Contains(b[1], "go2lean:spec") {
+			return true
+		}
+	}
+	return false
 }
 
 // packageSource concatenates the package's non-test Go files.
@@ -118,6 +150,25 @@ Source:
 Model report (which functions go2lean could model, and how):
 %s
 Write go2lean_specs_test.go for this package.`, pkgPath, pkgName, fence(source), reportSummary(r))
+}
+
+func reportUserPrompt(pkgPath, pkgName, source, verdicts string) string {
+	return fmt.Sprintf(`Package %s (package clause: "package %s").
+
+Source:
+%s
+%s`, pkgPath, pkgName, fence(source), verdicts)
+}
+
+var packageClause = regexp.MustCompile(`(?m)^package\s+\S+`)
+
+// normalizeSpec forces the package clause to the target package; models
+// sometimes echo a placeholder name.
+func normalizeSpec(spec, pkgName string) string {
+	if loc := packageClause.FindStringIndex(spec); loc != nil {
+		return spec[:loc[0]] + "package " + pkgName + spec[loc[1]:]
+	}
+	return "package " + pkgName + "\n\n" + spec
 }
 
 func repairPrompt(issues []string, previous string) string {

@@ -42,6 +42,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
+  common flags: -workspace out   -module <dir of the Go module to analyse>
   go2lean compile [-workspace out] <package>      M1: Go -> Lean model, ABI, targets
   go2lean props   [-workspace out]                M2: template properties from the model report
   go2lean hunt    [-workspace out] [-property id] M2: search for counterexamples
@@ -52,20 +53,40 @@ func usage() {
 	os.Exit(2)
 }
 
-func workspaceFlag(fs *flag.FlagSet) *string {
-	return fs.String("workspace", "out", "workspace directory for JSON records")
+// commonFlags are shared by every subcommand: where records go and which Go
+// module is analysed.
+type commonFlags struct {
+	workspace *string
+	module    *string
 }
 
-func openWorkspace(path string) (contract.Workspace, string, error) {
+func workspaceFlag(fs *flag.FlagSet) *commonFlags {
+	return &commonFlags{
+		workspace: fs.String("workspace", "out", "workspace directory for JSON records"),
+		module:    fs.String("module", "", "directory of the Go module to analyse (default: this checkout)"),
+	}
+}
+
+// openWorkspace resolves the workspace and the environment. The Lean project
+// always lives in the go2lean checkout; -module points package loading and
+// go test at another Go module.
+func openWorkspace(cf *commonFlags) (contract.Workspace, pipeline.Env, error) {
 	root, err := repo.Root()
 	if err != nil {
-		return contract.Workspace{}, "", err
+		return contract.Workspace{}, pipeline.Env{}, err
 	}
+	path := *cf.workspace
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
+	env := pipeline.Env{Root: root}
+	if *cf.module != "" {
+		if env.Module, err = filepath.Abs(*cf.module); err != nil {
+			return contract.Workspace{}, pipeline.Env{}, err
+		}
+	}
 	w := contract.Workspace{Root: path}
-	return w, root, w.Init()
+	return w, env, w.Init()
 }
 
 func cmdCompile(args []string) error {
@@ -75,10 +96,10 @@ func cmdCompile(args []string) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("compile: exactly one package pattern expected")
 	}
-	w, root, err := openWorkspace(*ws)
+	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
-	_, err = pipeline.Compile(w, root, fs.Arg(0), os.Stdout)
+	_, err = pipeline.Compile(w, env, fs.Arg(0), os.Stdout)
 	return err
 }

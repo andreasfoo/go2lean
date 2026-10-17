@@ -126,10 +126,11 @@ func (w Workspace) WriteTarget(t *Target) error {
 	return writeJSON(w.path("targets", t.ID), t)
 }
 
-// PackageKey is the workspace directory name for a package: its last path
-// element, with anything that is not an identifier character replaced.
+// PackageKey is the workspace directory name for a package: the full import
+// path with anything that is not an identifier character replaced, so that
+// packages sharing a base name (util, types, ...) never collide.
 func PackageKey(pkgPath string) string {
-	return nonIdent.ReplaceAllString(filepath.Base(pkgPath), "_")
+	return nonIdent.ReplaceAllString(pkgPath, "_")
 }
 
 var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)

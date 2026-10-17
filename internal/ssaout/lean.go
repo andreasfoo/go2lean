@@ -6,19 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/ir"
 )
 
-var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)
-
-// ModuleName is the Lean module a package's model is written to.
+// ModuleName is the Lean module a package's model is written to. The full
+// import path is folded into one identifier so packages with the same base
+// name get distinct modules.
 func ModuleName(frontend, pkgPath string) string {
-	base := nonIdent.ReplaceAllString(filepath.Base(pkgPath), "_")
-	return "Go2Lean.Generated." + frontend + "." + base
+	return "Go2Lean.Generated." + frontend + "." + contract.PackageKey(pkgPath)
 }
 
 // ModuleFile is the path of a module relative to the lake project.

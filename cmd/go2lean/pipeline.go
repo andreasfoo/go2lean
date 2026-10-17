@@ -42,7 +42,7 @@ func cmdProps(args []string) error {
 	if *pkg == "" {
 		return fmt.Errorf("props: -package is required")
 	}
-	w, _, err := openWorkspace(*ws)
+	w, _, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func cmdHunt(args []string) error {
 	id := fs.String("property", "", "property id (default: all)")
 	opts := searchFlags(fs)
 	fs.Parse(args)
-	w, root, err := openWorkspace(*ws)
+	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func cmdHunt(args []string) error {
 		return err
 	}
 	for _, p := range props {
-		if _, err := pipeline.Hunt(w, root, p, opts.get(), os.Stdout); err != nil {
+		if _, err := pipeline.Hunt(w, env, p, opts.get(), os.Stdout); err != nil {
 			return err
 		}
 	}
@@ -92,11 +92,11 @@ func cmdPoc(args []string) error {
 	if *id == "" {
 		return fmt.Errorf("poc: -counterexample is required")
 	}
-	w, root, err := openWorkspace(*ws)
+	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
-	_, err = pipeline.Verify(w, root, *id, os.Stdout)
+	_, err = pipeline.Verify(w, env, *id, os.Stdout)
 	return err
 }
 
@@ -108,10 +108,10 @@ func cmdRun(args []string) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("run: exactly one package pattern expected")
 	}
-	w, root, err := openWorkspace(*ws)
+	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
-	_, err = pipeline.Run(w, root, fs.Arg(0), opts.get(), os.Stdout)
+	_, err = pipeline.Run(w, env, fs.Arg(0), opts.get(), os.Stdout)
 	return err
 }

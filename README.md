@@ -86,9 +86,15 @@ go run ./cmd/go2lean agent ./examples/oob
 go run ./cmd/go2lean agent -llm mock:internal/agent/testdata/oob ./examples/oob   # offline replay
 ```
 
-The LLM (Claude Opus 5.5 through the Anthropic SDK) is behind a one-method
-interface; `mock:<dir>` replays scripted responses (`round-1.md`,
-`round-2.md`, …) for tests and offline runs. Every prompt and response is
+The LLM (Claude Opus 5.5 through the Anthropic SDK by default) is behind a
+one-method interface. `-model` and `-base-url` point the same client at any
+Anthropic-compatible endpoint (`-thinking=false` if the provider rejects the
+parameter); `mock:<dir>` replays scripted responses (`round-1.md`,
+`round-2.md`, …) for tests and offline runs.
+
+```sh
+go run ./cmd/go2lean agent -model MiniMax-M3 -base-url https://api.minimaxi.com/anthropic ./examples/oob
+``` Every prompt and response is
 written to `out/agent/`, and the report lands in `out/agent/report.md`. A
 revised spec file in the report round triggers one more pass.
 
@@ -101,7 +107,8 @@ go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id
 go2lean run     [-workspace out] <package>        compile, props, hunt, poc
-go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-repairs n] [-report] <package>
+go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
+                [-repairs n] [-report] <package>
 ```
 
 ## Ground truth

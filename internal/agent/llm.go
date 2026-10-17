@@ -21,10 +21,14 @@ type LLM interface {
 
 // New builds an LLM from a spec: "claude" or "mock:<file-or-dir>". A mock
 // directory holds round-1.md, round-2.md, ...; a mock file answers every call.
-func New(spec string) (LLM, error) {
+// cfg applies to "claude" only.
+func New(spec string, cfg ClaudeConfig) (LLM, error) {
 	switch {
 	case spec == "" || spec == "claude":
-		return NewClaude(), nil
+		if cfg.Model == "" && cfg.BaseURL == "" {
+			return NewClaude(), nil
+		}
+		return NewClaudeWith(cfg), nil
 	case strings.HasPrefix(spec, "mock:"):
 		return &Mock{Path: strings.TrimPrefix(spec, "mock:")}, nil
 	}

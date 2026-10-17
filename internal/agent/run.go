@@ -27,7 +27,7 @@ type Options struct {
 // Run drives the agent on one package: propose specs, repair until they
 // model, run the pipeline, then (optionally) ask for a report and a revised
 // spec file and run once more.
-func Run(ctx context.Context, ws contract.Workspace, root, pattern string, llm LLM, opts Options, out io.Writer) error {
+func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern string, llm LLM, opts Options, out io.Writer) error {
 	if opts.MaxRepairs == 0 {
 		opts.MaxRepairs = 2
 	}
@@ -48,12 +48,16 @@ func Run(ctx context.Context, ws contract.Workspace, root, pattern string, llm L
 		return resp, nil
 	}
 
-	pkgDir, pkgName, pkgPath, err := goList(root, pattern)
+	moduleDir := env.Module
+	if moduleDir == "" {
+		moduleDir = env.Root
+	}
+	pkgDir, pkgName, pkgPath, err := goList(moduleDir, pattern)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "== M1 compile (before specs)")
-	report, err := pipeline.Compile(ws, root, pattern, out)
+	report, err := pipeline.Compile(ws, env, pattern, out)
 	if err != nil {
 		return err
 	}
@@ -62,7 +66,45 @@ func Run(ctx context.Context, ws contract.Workspace, root, pattern string, llm L
 		return err
 	}
 
-	// Propose, then repair until every spec is modelled or the budget is spent.
+	// install writes a spec file into the package and compiles, sending
+	// build errors and rejected specs back to the model until everything is
+	// modelled or the repair budget is spent. It returns the installed spec.
+	install := func(spec string) (string, *contract.ModelReport, error) {
+		for repair := 0; ; repair++ {
+			spec = normalizeSpec(spec, pkgName)
+			if err := os.WriteFile(filepath.Join(pkgDir, SpecFile), []byte(spec), 0o644); err != nil {
+				return "", nil, err
+			}
+			fmt.Fprintf(out, "== M1 compile (specs, attempt %d)\n", repair+1)
+			report, err := pipeline.Compile(ws, env, pattern, out)
+			var issues []string
+			if err != nil {
+				// A spec that does not even type-check is an issue for the agent, not a crash.
+				issues = []string{"go build: " + err.Error()}
+			} else {
+				issues = specIssues(report)
+			}
+			if len(issues) == 0 {
+				_ = os.WriteFile(filepath.Join(logDir, SpecFile), []byte(spec), 0o644)
+				return spec, report, nil
+			}
+			if repair >= opts.MaxRepairs {
+				if err != nil {
+					return "", nil, fmt.Errorf("specs still do not compile after %d repairs: %w", repair, err)
+				}
+				_ = os.WriteFile(filepath.Join(logDir, SpecFile), []byte(spec), 0o644)
+				return spec, report, nil // rejected specs are reported, not fatal
+			}
+			resp, err := ask(systemPrompt, repairPrompt(issues, spec))
+			if err != nil {
+				return "", nil, err
+			}
+			if next := extractGo(resp); next != "" {
+				spec = next
+			}
+		}
+	}
+
 	resp, err := ask(systemPrompt, proposePrompt(pkgPath, pkgName, source, report))
 	if err != nil {
 		return err
@@ -71,37 +113,12 @@ func Run(ctx context.Context, ws contract.Workspace, root, pattern string, llm L
 	if spec == "" {
 		return fmt.Errorf("agent response contained no Go code block")
 	}
-	for repair := 0; ; repair++ {
-		if err := os.WriteFile(filepath.Join(pkgDir, SpecFile), []byte(spec), 0o644); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "== M1 compile (specs, attempt %d)\n", repair+1)
-		report, err = pipeline.Compile(ws, root, pattern, out)
-		if err != nil {
-			// A spec that does not even type-check is an issue for the agent, not a crash.
-			if repair >= opts.MaxRepairs {
-				return fmt.Errorf("specs still do not compile after %d repairs: %w", repair, err)
-			}
-			if resp, err = ask(systemPrompt, repairPrompt([]string{"go build: " + err.Error()}, spec)); err != nil {
-				return err
-			}
-			spec = extractGo(resp)
-			continue
-		}
-		issues := specIssues(report)
-		if len(issues) == 0 || repair >= opts.MaxRepairs {
-			break
-		}
-		if resp, err = ask(systemPrompt, repairPrompt(issues, spec)); err != nil {
-			return err
-		}
-		if next := extractGo(resp); next != "" {
-			spec = next
-		}
+	spec, report, err = install(spec)
+	if err != nil {
+		return err
 	}
-	_ = os.WriteFile(filepath.Join(logDir, SpecFile), []byte(spec), 0o644)
 
-	res, err := runRest(ws, root, report, opts.Search, out)
+	res, err := runRest(ws, env, report, opts.Search, out)
 	if err != nil {
 		return err
 	}
@@ -109,8 +126,9 @@ func Run(ctx context.Context, ws contract.Workspace, root, pattern string, llm L
 		return nil
 	}
 
-	// Report round: verdicts back to the agent; a revised spec file triggers one more pass.
-	resp, err = ask(reportPrompt, verdictSummary(ws, res))
+	// Report round: source and verdicts back to the agent; a revised spec
+	// file triggers one more pass.
+	resp, err = ask(reportPrompt, reportUserPrompt(pkgPath, pkgName, source, verdictSummary(ws, res)))
 	if err != nil {
 		return err
 	}
@@ -119,24 +137,19 @@ func Run(ctx context.Context, ws contract.Workspace, root, pattern string, llm L
 		return err
 	}
 	fmt.Fprintf(out, "== report written to %s\n", reportPath)
-	if revised := extractGo(resp); revised != "" && revised != spec {
+	if revised := extractGo(resp); hasSpecBlock(resp) && normalizeSpec(revised, pkgName) != spec {
 		fmt.Fprintln(out, "== agent revised the specs; running again")
-		if err := os.WriteFile(filepath.Join(pkgDir, SpecFile), []byte(revised), 0o644); err != nil {
+		if _, report, err = install(revised); err != nil {
 			return err
 		}
-		report, err = pipeline.Compile(ws, root, pattern, out)
-		if err != nil {
-			return err
-		}
-		_ = os.WriteFile(filepath.Join(logDir, SpecFile), []byte(revised), 0o644)
-		if _, err := runRest(ws, root, report, opts.Search, out); err != nil {
+		if _, err := runRest(ws, env, report, opts.Search, out); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func runRest(ws contract.Workspace, root string, report *contract.ModelReport, so constraint.SearchOptions, out io.Writer) (*pipeline.Result, error) {
+func runRest(ws contract.Workspace, env pipeline.Env, report *contract.ModelReport, so constraint.SearchOptions, out io.Writer) (*pipeline.Result, error) {
 	fmt.Fprintln(out, "== M2 properties")
 	props, err := pipeline.Propose(ws, report, out)
 	if err != nil {
@@ -146,7 +159,7 @@ func runRest(ws contract.Workspace, root string, report *contract.ModelReport, s
 	res := &pipeline.Result{Report: report, Properties: props}
 	var cxs []*contract.Counterexample
 	for _, p := range props {
-		cx, err := pipeline.Hunt(ws, root, p, so, out)
+		cx, err := pipeline.Hunt(ws, env, p, so, out)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +172,7 @@ func runRest(ws contract.Workspace, root string, report *contract.ModelReport, s
 		fmt.Fprintln(out, "  nothing to verify")
 	}
 	for _, cx := range cxs {
-		v, err := pipeline.Verify(ws, root, cx.ID, out)
+		v, err := pipeline.Verify(ws, env, cx.ID, out)
 		if err != nil {
 			return nil, err
 		}
