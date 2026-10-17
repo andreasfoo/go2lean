@@ -96,6 +96,99 @@ def f2 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2], havocWidths := #[] }
+/-- func(v int, lo int, hi int, ret int) bool (status: complete) -/
+def f3 : GoSSA.Func := {
+  name := "SpecClampIdempotent", params := [0, 1, 2, 3], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 4 .sgt [1, 2]],
+      term := .br 4 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[],
+      term := .call 0 [3, 1, 2] 6 3 [] },
+    -- 3: if.done.after-call
+    { params := [],
+      instrs := #[.op 7 .eq [6, 3]],
+      term := .ret 7 }
+  ] }
+
+/-- func(v int, lo int, hi int, ret int) bool (status: complete) -/
+def f4 : GoSSA.Func := {
+  name := "SpecClampIdentity", params := [0, 1, 2, 3], nvals := 9, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 4 .sgt [1, 2]],
+      term := .br 4 1 [] 4 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 6 .eq [3, 0]],
+      term := .ret 6 },
+    -- 3: cond.false
+    { params := [],
+      instrs := #[.op 7 .sgt [0, 2]],
+      term := .br 7 1 [] 2 [] },
+    -- 4: cond.false
+    { params := [],
+      instrs := #[.op 8 .slt [0, 1]],
+      term := .br 8 1 [] 3 [] }
+  ] }
+
+/-- func(xs []int, ret int) bool (status: complete) -/
+def f5 : GoSSA.Func := {
+  name := "SpecLastEmpty", params := [0, 1], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 .len [0],
+                 .op 3 (.const (.int 64 0#64)) [],
+                 .op 4 .ne [2, 3]],
+      term := .br 4 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 6 (.const (.int 64 0#64)) [],
+                 .op 7 .eq [1, 6]],
+      term := .ret 7 }
+  ] }
+
+/-- func(xs []int, ret int) bool (status: complete) -/
+def f6 : GoSSA.Func := {
+  name := "SpecLastIsLast", params := [0, 1], nvals := 11, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 .len [0],
+                 .op 3 (.const (.int 64 0#64)) [],
+                 .op 4 .eq [2, 3]],
+      term := .br 4 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 6 .len [0],
+                 .op 7 (.const (.int 64 1#64)) [],
+                 .op 8 .sub [6, 7],
+                 .op 9 (.load 64) [0, 8],
+                 .op 10 .eq [1, 9]],
+      term := .ret 10 }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[] }
 
 end Go2Lean.Generated.gossa.oob

@@ -34,16 +34,20 @@ var specRe = regexp.MustCompile(`go2lean:spec\s+(\w+)`)
 // Translate loads the package matching pattern (relative to dir) and lowers
 // every top-level function. It returns the program and the Go module path.
 func Translate(dir, pattern string) (*ir.Prog, string, error) {
-	cfg := &packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: dir}
-	pkgs, err := packages.Load(cfg, pattern)
+	// Tests: true also loads the package's internal test variant
+	// ("path [path.test]"), which includes *_test.go files of the same
+	// package: that is where agent-written spec-in-Go functions live.
+	cfg := &packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: dir, Tests: true}
+	loaded, err := packages.Load(cfg, pattern)
 	if err != nil {
 		return nil, "", err
 	}
-	if packages.PrintErrors(pkgs) > 0 {
+	if packages.PrintErrors(loaded) > 0 {
 		return nil, "", fmt.Errorf("package %s has errors", pattern)
 	}
+	pkgs := selectVariant(loaded)
 	if len(pkgs) != 1 {
-		return nil, "", fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(pkgs))
+		return nil, "", fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(loaded))
 	}
 	sprog, spkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
 	sprog.Build()
@@ -59,7 +63,7 @@ func Translate(dir, pattern string) (*ir.Prog, string, error) {
 	// Pass 1: pick candidates and assign FuncIds so calls can be resolved.
 	var fns []*ssa.Function
 	for _, m := range spkg.Members {
-		if f, ok := m.(*ssa.Function); ok && f.Name() != "init" && f.Synthetic == "" {
+		if f, ok := m.(*ssa.Function); ok && f.Name() != "init" && f.Synthetic == "" && !isTestFunc(f.Name()) {
 			fns = append(fns, f)
 		}
 	}
@@ -76,7 +80,36 @@ func Translate(dir, pattern string) (*ir.Prog, string, error) {
 			rejectStub(out, err)
 		}
 	}
+	if err := p.Validate(); err != nil {
+		return nil, "", fmt.Errorf("internal error: generated program is malformed: %w", err)
+	}
 	return p, modPath, nil
+}
+
+// selectVariant keeps the internal test variant of each package when one was
+// loaded, else the plain package; external test packages and test mains are
+// dropped.
+func selectVariant(loaded []*packages.Package) []*packages.Package {
+	best := map[string]*packages.Package{}
+	for _, p := range loaded {
+		if strings.HasSuffix(p.PkgPath, "_test") || strings.HasSuffix(p.PkgPath, ".test") {
+			continue
+		}
+		isTestVariant := strings.HasSuffix(p.ID, ".test]")
+		if cur, ok := best[p.PkgPath]; !ok || (isTestVariant && !strings.HasSuffix(cur.ID, ".test]")) {
+			best[p.PkgPath] = p
+		}
+	}
+	var out []*packages.Package
+	for _, p := range best {
+		out = append(out, p)
+	}
+	return out
+}
+
+func isTestFunc(name string) bool {
+	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
+		strings.HasPrefix(name, "Fuzz") || strings.HasPrefix(name, "Example")
 }
 
 // progState is per-program translation state.
@@ -529,8 +562,10 @@ func (t *fnState) call(x *ssa.Call) error {
 		}
 		dst := t.def(x)
 		next := len(t.out.Blocks)
-		t.out.Blocks = append(t.out.Blocks, ir.Block{Name: t.cur.Name + ".after-call"})
+		// Terminate the current block before appending: append may move the
+		// backing array and t.cur would then point at a stale copy.
 		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: id, CArgs: args, Dst: dst, Next: next}
+		t.out.Blocks = append(t.out.Blocks, ir.Block{Name: t.cur.Name + ".after-call"})
 		t.cur = &t.out.Blocks[next]
 		return nil
 	}

@@ -59,6 +59,21 @@ the property.
 
 See `examples/` for the ground-truth packages (`overflow`, `oob`, `divzero`, `magic`).
 
+## The agent
+
+```sh
+export ANTHROPIC_API_KEY=...        # or `ant auth login`
+go run ./cmd/go2lean agent ./examples/oob
+go run ./cmd/go2lean agent -llm mock:internal/agent/testdata/oob ./examples/oob   # offline replay
+```
+
+The agent reads the package source and the model report, writes spec-in-Go
+functions into `<pkg>/go2lean_specs_test.go`, repairs any the frontend rejects,
+runs the pipeline, and turns the verdicts into `out/agent/report.md`
+(optionally with revised specs, which trigger one more pass). Every prompt and
+response is logged under `out/agent/`. The LLM is behind an interface; `mock:`
+replays scripted responses for tests and offline runs.
+
 ## Commands
 
 ```
@@ -68,6 +83,7 @@ go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id
 go2lean run     [-workspace out] <package>        all of the above
+go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-repairs n] [-report] <package>
 ```
 
 ## Supported Go subset (stage A)

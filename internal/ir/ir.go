@@ -83,7 +83,10 @@ type Instr struct {
 type TermKind int
 
 const (
-	TermRet TermKind = iota
+	// TermNone is the zero value: a block the frontend never terminated.
+	// Validate rejects it so a lost write cannot become a silent wrong model.
+	TermNone TermKind = iota
+	TermRet
 	TermJump
 	TermBr
 	TermPanic
@@ -138,6 +141,77 @@ type Prog struct {
 	Funcs       []*Func
 	HavocWidths []int
 	Havoc       []contract.ABIHavoc
+}
+
+// Validate checks structural invariants the Lean printer and interpreter
+// rely on: every block has a terminator, and every block, function and
+// variable reference is in range.
+func (p *Prog) Validate() error {
+	for fi, f := range p.Funcs {
+		checkVar := func(v Var, where string) error {
+			if int(v) < 0 || int(v) >= f.NVals {
+				return fmt.Errorf("%s: %s references variable %d outside 0..%d", f.Name, where, v, f.NVals-1)
+			}
+			return nil
+		}
+		checkBlock := func(b int, where string) error {
+			if b < 0 || b >= len(f.Blocks) {
+				return fmt.Errorf("%s: %s targets block %d of %d", f.Name, where, b, len(f.Blocks))
+			}
+			return nil
+		}
+		if f.Status == contract.ModelRejected {
+			continue
+		}
+		if err := checkBlock(f.Entry, "entry"); err != nil {
+			return err
+		}
+		for bi, blk := range f.Blocks {
+			where := fmt.Sprintf("block %d (%s)", bi, blk.Name)
+			for _, in := range blk.Instrs {
+				if err := checkVar(in.Dst, where); err != nil {
+					return err
+				}
+				for _, a := range in.Args {
+					if err := checkVar(a, where); err != nil {
+						return err
+					}
+				}
+			}
+			t := blk.Term
+			switch t.Kind {
+			case TermNone:
+				return fmt.Errorf("%s: %s has no terminator (frontend bug)", f.Name, where)
+			case TermRet:
+				if err := checkVar(t.V, where+" ret"); err != nil {
+					return err
+				}
+			case TermJump:
+				if err := checkBlock(t.B, where+" jump"); err != nil {
+					return err
+				}
+			case TermBr:
+				if err := checkBlock(t.T, where+" br"); err != nil {
+					return err
+				}
+				if err := checkBlock(t.F, where+" br"); err != nil {
+					return err
+				}
+			case TermCall:
+				if t.Callee < 0 || t.Callee >= len(p.Funcs) {
+					return fmt.Errorf("%s: %s calls function %d of %d", f.Name, where, t.Callee, len(p.Funcs))
+				}
+				if err := checkBlock(t.Next, where+" call continuation"); err != nil {
+					return err
+				}
+				if err := checkVar(t.Dst, where+" call result"); err != nil {
+					return err
+				}
+			}
+		}
+		_ = fi
+	}
+	return nil
 }
 
 // FuncID returns the index of the function named name, or -1.

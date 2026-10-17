@@ -316,23 +316,40 @@ flagged separately.
 Counterexamples are re-validated per P4. The random engine reports the values
 it actually executed, so revalidation is implicit.
 
-### 5.4 Agent loop (not built; the constraint core is)
+### 5.4 Agent loop (built, first version)
+
+`internal/agent` drives one package:
 
 ```
-loop:
-  1. read model report / ABI / crosscheck / source / existing verdicts
-  2. propose N properties (ranked by checkability × expected yield; crosscheck disagreements first)
-  3. run the engine ladder on each
-  4. hand counterexamples to M3, wait for verdicts
-  5. spurious: diagnosis names havoc → ask M3 to retry with concretised values;
-              names an unmodelled call → write a ModelGap, add a precondition or drop;
-              property wrong → fix it
-  6. confirmed: report; try to generalise to neighbouring functions
-  7. unknown: decide whether to invest in a proof
+1. compile the package (M1) to learn which functions are modelled
+2. ask the LLM for go2lean_specs_test.go: spec-in-Go functions for the modelled
+   functions, inside the supported subset (system prompt states the rules)
+3. write the file into the package, compile again; specs the frontend rejects
+   go back to the LLM with the frontend's issues (up to -repairs rounds)
+4. propose (templates: no_panic + one postcondition per spec), hunt, verify (M2/M3)
+5. report round: verdicts, counterexamples and proof results go back to the LLM,
+   which writes out/agent/report.md and may return a revised spec file; a
+   revision triggers one more pass through 3–4
 ```
 
-The agent works through the CLI subcommands (§8) so every step is logged and
-replayable. The LLM defaults to Claude behind a Go interface so it can be mocked.
+Design choices:
+- Specs live in a `_test.go` file of the target package, so production code is
+  untouched and the frontend sees them by loading the package's internal test
+  variant (`go/packages` with `Tests: true`).
+- The LLM is behind a one-method Go interface (`Complete(system, user)`).
+  `Claude` uses the Anthropic SDK (Claude Opus 5.5, adaptive thinking);
+  `Mock` replays scripted responses from a directory, used by tests and for
+  offline demonstration.
+- Every prompt and response is written to `<workspace>/agent/`, so a run is
+  inspectable and replayable without the model.
+- A postcondition run where the target panicked before the oracle could be
+  evaluated is *moot*: it neither refutes nor supports the property, and the
+  exhaustive engine issues no certificate when any input was moot. The
+  `no_panic` property carries that finding instead.
+
+Not yet: ranking properties by expected yield, `ModelGap` records from
+spurious verdicts, generalising a confirmed bug to neighbouring functions, and
+proof attempts.
 
 ## 6. M3: counterexample → real verification (built)
 
@@ -481,9 +498,12 @@ change to M1's modelling rules.
 ## 10. Milestones
 
 - **Done — end-to-end PoC slice.** Contract and workspace; Lean SSA core;
-  GoSSA stage A; random engine; go/ssa frontend; property templates
-  (`no_panic`, spec-in-Go `postcondition`); M3 harness, runner and verdicts;
-  three ground-truth packages confirmed end to end (~2–4 s per package).
+  GoSSA stage A; random engine with mined literals and value profiles;
+  exhaustive small-domain engine; go/ssa frontend (package test variants);
+  property templates (`no_panic`, spec-in-Go `postcondition`); M3 harness,
+  runner and verdicts; agent loop (propose → repair → run → report) behind a
+  mockable LLM interface; four ground-truth packages confirmed end to end
+  (~2–5 s per package).
 - **M1b — `bv_decide` engine.** simp lemma set unfolding `run` for fixed fuel,
   counterexample extraction and re-validation, `ProofResult` for bounded proofs.
 - **M2a — agent.** Property proposal over the model report, the engine

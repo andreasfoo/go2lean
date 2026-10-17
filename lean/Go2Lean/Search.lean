@@ -142,6 +142,14 @@ def Outcome.refutes : Property → Outcome → Bool
   | .postcondition .., .violated => true
   | _, _ => false
 
+/-- A postcondition is neither refuted nor established when the function
+panicked before the oracle ran; such runs are counted so a clean pass is not
+mistaken for a certificate. -/
+def Outcome.moot : Property → Outcome → Bool
+  | .postcondition .., .panicked _ => true
+  | .postcondition .., .specPanicked _ => true
+  | _, _ => false
+
 -- Reporting ------------------------------------------------------------------
 
 def renderInt (signed : Bool) (v : BitVec w) : String :=
@@ -198,6 +206,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (seed trials fuel : Nat) : IO Unit := do
   let mut g := mkStdGen seed
   let mut fuelOuts := 0
+  let mut moots := 0
   for trial in [0:trials] do
     let (pfn, g') := randNat g 0 2
     g := g'
@@ -213,7 +222,9 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       IO.println (report or gens args trial seed o s ret).compress
       return
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
-  IO.println (Json.mkObj [("found", false), ("trials", trials), ("out_of_fuel", fuelOuts)]).compress
+    if o.moot prop then moots := moots + 1
+  IO.println (Json.mkObj [("found", false), ("trials", trials), ("out_of_fuel", fuelOuts),
+    ("moot", moots)]).compress
 
 -- Exhaustive engine ---------------------------------------------------------
 
@@ -277,6 +288,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     return
   let h := havocOf 0 p.havocWidths
   let mut fuelOuts := 0
+  let mut moots := 0
   let mut i := 0
   for (args, tbls) in enumArgs extra maxLen gens 0 do
     let or := tableOracle tbls
@@ -285,9 +297,10 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       IO.println (report or gens args i 0 o s ret).compress
       return
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
+    if o.moot prop then moots := moots + 1
     i := i + 1
-  IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0), ("domain", n),
-    ("out_of_fuel", fuelOuts), ("max_len", maxLen),
+  IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
+    ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
     ("havoc_sites", p.havocWidths.size)]).compress
 
 end Go2Lean.Search

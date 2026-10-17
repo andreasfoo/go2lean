@@ -9,9 +9,8 @@ import (
 	"path/filepath"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
-	"github.com/andreasfoo/go2lean/internal/frontend/gossa"
+	"github.com/andreasfoo/go2lean/internal/pipeline"
 	"github.com/andreasfoo/go2lean/internal/repo"
-	"github.com/andreasfoo/go2lean/internal/ssaout"
 )
 
 func main() {
@@ -30,6 +29,8 @@ func main() {
 		err = cmdPoc(os.Args[2:])
 	case "run":
 		err = cmdRun(os.Args[2:])
+	case "agent":
+		err = cmdAgent(os.Args[2:])
 	default:
 		usage()
 	}
@@ -45,7 +46,9 @@ func usage() {
   go2lean props   [-workspace out]                M2: template properties from the model report
   go2lean hunt    [-workspace out] [-property id] M2: search for counterexamples
   go2lean poc     [-workspace out] -counterexample id   M3: realise and verify
-  go2lean run     [-workspace out] <package>      all of the above`)
+  go2lean run     [-workspace out] <package>      all of the above
+  go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>
+                                                  M2 agent: propose spec-in-Go properties, run, report`)
 	os.Exit(2)
 }
 
@@ -76,29 +79,6 @@ func cmdCompile(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = compile(w, root, fs.Arg(0))
+	_, err = pipeline.Compile(w, root, fs.Arg(0), os.Stdout)
 	return err
-}
-
-func compile(w contract.Workspace, root, pattern string) (*contract.ModelReport, error) {
-	prog, modPath, err := gossa.Translate(root, pattern)
-	if err != nil {
-		return nil, err
-	}
-	report, err := ssaout.Emit(prog, repo.LeanDir(root), w, modPath)
-	if err != nil {
-		return nil, err
-	}
-	fmt.Printf("compiled %s -> %s\n", prog.Package, report.LeanFile)
-	for _, f := range report.Funcs {
-		fmt.Printf("  %-12s %-9s %s", f.Name, f.Status, f.GoSig)
-		if f.SpecFor != "" {
-			fmt.Printf("  [spec for %s]", f.SpecFor)
-		}
-		fmt.Println()
-		for _, is := range f.Issues {
-			fmt.Printf("      - %s\n", is)
-		}
-	}
-	return report, nil
 }

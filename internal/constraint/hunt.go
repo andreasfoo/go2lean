@@ -66,6 +66,7 @@ type searchResult struct {
 	Seed        int                   `json:"seed"`
 	Trials      int                   `json:"trials"`
 	OutOfFuel   int                   `json:"out_of_fuel"`
+	Moot        int                   `json:"moot"` // postcondition runs where the target panicked first
 	Exhaustive  bool                  `json:"exhaustive"`
 	Domain      int                   `json:"domain"`
 	Reason      string                `json:"reason"`
@@ -169,7 +170,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			cx, err := writeCx(ws, prop, res, "random", opts)
 			return cx, fmt.Sprintf("random: found at trial %d", res.Trial), err
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel)", res.Trials, res.OutOfFuel))
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot)", res.Trials, res.OutOfFuel, res.Moot))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
 		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel)
@@ -193,8 +194,10 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			summary = append(summary, fmt.Sprintf("exhaustive: holds on %d inputs (recorded as %s)", res.Domain, pr.Status))
 		case res.Reason != "":
 			summary = append(summary, fmt.Sprintf("exhaustive: skipped (%s: %d > %d)", res.Reason, res.Domain, opts.ExhaustLimit))
+		case res.Moot > 0:
+			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d of %d inputs panicked before the oracle ran (see the no_panic property)", res.Moot, res.Domain))
 		default:
-			summary = append(summary, fmt.Sprintf("exhaustive: none, but %d inputs ran out of fuel", res.OutOfFuel))
+			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d inputs ran out of fuel", res.OutOfFuel))
 		}
 	}
 	return nil, strings.Join(summary, "; "), nil
