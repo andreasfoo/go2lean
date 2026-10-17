@@ -30,26 +30,43 @@ func (e Env) module() string {
 
 // Compile runs M1 on one package and prints a summary to out.
 func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*contract.ModelReport, error) {
-	prog, modPath, err := gossa.Translate(env.module(), pattern)
+	reports, err := CompileAll(w, env, out, pattern)
 	if err != nil {
 		return nil, err
 	}
-	report, err := ssaout.Emit(prog, repo.LeanDir(env.Root), w, modPath)
+	if len(reports) != 1 {
+		return nil, fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(reports))
+	}
+	return reports[0], nil
+}
+
+// CompileAll runs M1 on every package matching the patterns (e.g. "./...")
+// with a single load of the dependency graph.
+func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string) ([]*contract.ModelReport, error) {
+	progs, modPath, err := gossa.TranslateAll(env.module(), patterns...)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(out, "compiled %s -> %s\n", prog.Package, report.LeanFile)
-	for _, f := range report.Funcs {
-		fmt.Fprintf(out, "  %-12s %-9s %s", f.Name, f.Status, f.GoSig)
-		if f.SpecFor != "" {
-			fmt.Fprintf(out, "  [spec for %s]", f.SpecFor)
+	var reports []*contract.ModelReport
+	for _, prog := range progs {
+		report, err := ssaout.Emit(prog, repo.LeanDir(env.Root), w, modPath)
+		if err != nil {
+			return nil, err
 		}
-		fmt.Fprintln(out)
-		for _, is := range f.Issues {
-			fmt.Fprintf(out, "      - %s\n", is)
+		fmt.Fprintf(out, "compiled %s -> %s\n", prog.Package, report.LeanFile)
+		for _, f := range report.Funcs {
+			fmt.Fprintf(out, "  %-12s %-9s %s", f.Name, f.Status, f.GoSig)
+			if f.SpecFor != "" {
+				fmt.Fprintf(out, "  [spec for %s]", f.SpecFor)
+			}
+			fmt.Fprintln(out)
+			for _, is := range f.Issues {
+				fmt.Fprintf(out, "      - %s\n", is)
+			}
 		}
+		reports = append(reports, report)
 	}
-	return report, nil
+	return reports, nil
 }
 
 // Propose runs M2's property templates and prints them.

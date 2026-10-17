@@ -43,7 +43,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   common flags: -workspace out   -module <dir of the Go module to analyse>
-  go2lean compile [-workspace out] <package>      M1: Go -> Lean model, ABI, targets
+  go2lean compile [-workspace out] <packages...>  M1: Go -> Lean model, ABI, targets (./... allowed)
   go2lean props   [-workspace out]                M2: template properties from the model report
   go2lean hunt    [-workspace out] [-property id] M2: search for counterexamples
   go2lean poc     [-workspace out] -counterexample id   M3: realise and verify
@@ -93,13 +93,13 @@ func cmdCompile(args []string) error {
 	fs := flag.NewFlagSet("compile", flag.ExitOnError)
 	ws := workspaceFlag(fs)
 	fs.Parse(args)
-	if fs.NArg() != 1 {
-		return fmt.Errorf("compile: exactly one package pattern expected")
+	if fs.NArg() < 1 {
+		return fmt.Errorf("compile: at least one package pattern expected (e.g. ./...)")
 	}
 	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
-	_, err = pipeline.Compile(w, env, fs.Arg(0), os.Stdout)
+	_, err = pipeline.CompileAll(w, env, os.Stdout, fs.Args()...)
 	return err
 }

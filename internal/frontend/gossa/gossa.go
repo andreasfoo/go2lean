@@ -31,33 +31,65 @@ const Frontend = "gossa"
 
 var specRe = regexp.MustCompile(`go2lean:spec\s+(\w+)`)
 
-// Translate loads the package matching pattern (relative to dir) and lowers
-// every top-level function. It returns the program and the Go module path.
+// Translate loads the single package matching pattern (relative to dir) and
+// lowers every top-level function. It returns the program and the Go module
+// path.
 func Translate(dir, pattern string) (*ir.Prog, string, error) {
+	progs, modPath, err := TranslateAll(dir, pattern)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(progs) != 1 {
+		return nil, "", fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(progs))
+	}
+	return progs[0], modPath, nil
+}
+
+// TranslateAll loads every package matching the patterns in one go (one
+// type-check of the dependency graph, which dominates the cost on real
+// modules) and lowers each. Packages that fail to load are skipped with
+// their errors reported through the returned map, so one broken package
+// does not stop a sweep.
+func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
 	// Tests: true also loads the package's internal test variant
 	// ("path [path.test]"), which includes *_test.go files of the same
 	// package: that is where agent-written spec-in-Go functions live.
 	cfg := &packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: dir, Tests: true}
-	loaded, err := packages.Load(cfg, pattern)
+	loaded, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, "", err
 	}
 	if errs := loadErrors(loaded); len(errs) > 0 {
-		return nil, "", fmt.Errorf("package %s does not load:\n  %s", pattern, strings.Join(errs, "\n  "))
+		return nil, "", fmt.Errorf("packages %s do not load:\n  %s", strings.Join(patterns, " "), strings.Join(errs, "\n  "))
 	}
 	pkgs := selectVariant(loaded)
-	if len(pkgs) != 1 {
-		return nil, "", fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(loaded))
+	if len(pkgs) == 0 {
+		return nil, "", fmt.Errorf("patterns %s matched no packages", strings.Join(patterns, " "))
 	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].PkgPath < pkgs[j].PkgPath })
 	sprog, spkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
 	sprog.Build()
-	spkg := spkgs[0]
 
 	modPath := ""
 	if pkgs[0].Module != nil {
 		modPath = pkgs[0].Module.Path
 	}
-	p := &ir.Prog{Package: pkgs[0].PkgPath, Frontend: Frontend}
+	var progs []*ir.Prog
+	for i, spkg := range spkgs {
+		if spkg == nil {
+			continue
+		}
+		p, err := translatePackage(pkgs[i].PkgPath, spkg)
+		if err != nil {
+			return nil, "", err
+		}
+		progs = append(progs, p)
+	}
+	return progs, modPath, nil
+}
+
+func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
+	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}}
 
 	// Pass 1: pick candidates and assign FuncIds so calls can be resolved.
@@ -81,9 +113,9 @@ func Translate(dir, pattern string) (*ir.Prog, string, error) {
 		}
 	}
 	if err := p.Validate(); err != nil {
-		return nil, "", fmt.Errorf("internal error: generated program is malformed: %w", err)
+		return nil, fmt.Errorf("internal error: generated program is malformed: %w", err)
 	}
-	return p, modPath, nil
+	return p, nil
 }
 
 // loadErrors collects the first few type/load errors of the packages (and
