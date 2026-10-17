@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_alias
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func (a github.com/andreasfoo/go2lean/examples/alias.Account) Available() int (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "Account.Available", params := [0], nvals := 8, entry := 0,

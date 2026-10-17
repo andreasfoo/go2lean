@@ -60,7 +60,21 @@ func (v ArrVal) Lean() string {
 	for i, e := range v.Elems {
 		parts[i] = e.Lean()
 	}
+	// A zero array is one element replicated: a long list literal would
+	// exceed Lean's elaboration depth.
+	if len(parts) > 1 && allEqual(parts) {
+		return fmt.Sprintf("(.arr (List.replicate %d %s))", len(parts), parts[0])
+	}
 	return "(.arr [" + strings.Join(parts, ", ") + "])"
+}
+
+func allEqual(ss []string) bool {
+	for _, s := range ss[1:] {
+		if s != ss[0] {
+			return false
+		}
+	}
+	return true
 }
 
 // Opaque is a value the model does not look into (interfaces, maps, funcs).

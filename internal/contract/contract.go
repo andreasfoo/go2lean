@@ -243,6 +243,7 @@ const (
 	ABIStruct ABIParamKind = "struct" // one model value; Fields describe the components
 	ABIPtr    ABIParamKind = "ptr"    // one model value: nil or a pointer to Pointee
 	ABIString ABIParamKind = "string" // one model value; reported under Objects as a JSON string
+	ABIOpaque ABIParamKind = "opaque" // interface, map, func or chan: the model never looks inside; M3 passes the zero value
 )
 
 // ABIParam describes one Go parameter. GoType is spelled as Go source in

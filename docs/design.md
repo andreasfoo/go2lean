@@ -218,7 +218,8 @@ Slice elements are any modelled type (`examples/recs`: `[]Item`, `[]string`,
 built with `append`); `append` writes in place while the capacity allows and
 otherwise copies into a fresh backing array of twice the capacity (Go's
 exact growth is implementation-defined and visible only through `cap`).
-Not yet: interfaces, maps, closures.
+Interfaces, maps, funcs and channels are opaque values (§9b); not yet:
+closures, `range` over maps and strings, `defer`, goroutines.
 
 The original design notes, kept for the parts still to do:
 
@@ -628,7 +629,8 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | first full pipeline over the 111 packages with a model (855 properties): 53 confirmed, 146 spurious, 30 inconclusive | 43 of the confirmed were nil receivers/arguments; 112 of the spurious were stuck models reported as panics; the inconclusive were harness compile errors (name clashes, unused imports, internal/unexported types) |
 | after: stuck is moot, nil inputs opt-in, harness fixes, `strings.Split`/`Fields`/`Join`/`Repeat`/`Trim*`/`ToLower`/`ToUpper`/`ReplaceAll`/`IndexByte`/`LastIndex`/`Count`/`EqualFold` modelled, unmodelled pointer results point at fresh zero objects, one `go test` per package | **11 confirmed, 26 spurious, 0 inconclusive**. Confirmed: seven `truncate(s, n)` helpers that slice with a negative `n`, two `strings.Repeat` calls with a negative count, `blobPath` slicing a 3-byte hash to 4, and `budgetDuration` wrapping to a negative duration. The remaining spurious cases are unmodelled calls (see the attribution in the run log) |
 | `len`/`cap` on slices of anything but integers was havoc'd (random lengths, spurious index panics); shift counts ≥ 64 made Lean compute `2^k` | fixed; rerunning the 16 packages that had spurious verdicts: **9 confirmed, 5 spurious, 0 inconclusive**; the five that remain depend on `crypto/rand`, `sha256`, `base64`, an OAuth registry and `fmt` — genuine over-approximation that M3 filters. Three more real findings surfaced (`shortenPath`, `sliceLines`, `detectShellOperator`, all slicing with an unchecked length) |
-| the largest signature blocker after that was slices of non-integer elements (484 rejections), and `append` rejected every function building a result | slice elements are now any modelled type (`Gen.sliceOf`, `elem_param` in the ABI, `[]T{...}` literals in the harness) and `append`/`copy` are dialect ops; `examples/recs` confirms three planted bugs |
+| the largest signature blocker after that was slices of non-integer elements (484 rejections), and `append` rejected every function building a result | slice elements are now any modelled type (`Gen.sliceOf`, `elem_param` in the ABI, `[]T{...}` literals in the harness) and `append`/`copy` are dialect ops; `examples/recs` confirms three planted bugs. **1191 of 7498** |
+| 4950 of the remaining rejections were named types: receivers and parameters pointing at structs with a map, interface, func, mutex or channel field, plus `context.Context`, `any` and `*testing.T` | *opaque values*: interfaces, maps, funcs and channels are representable as a value the model never looks into (`Gen.opaque`, `.unit`); reads through them (map lookup, type assertion, interface comparison, calls) are havoc, map updates are ignored, and M3 passes the zero value (`context.Background()` for contexts). Functions taking a `testing` type are test helpers and skipped. A zero array of structs is printed as `List.replicate`, and generated modules set `maxRecDepth` for blocks with hundreds of instructions. **3423 of 7498 (45.7%): 1402 complete, 2021 partial** |
 
 ## 10. Milestones
 

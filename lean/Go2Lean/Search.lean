@@ -39,6 +39,9 @@ inductive Gen where
   /-- A struct of the named type `tyIdx` in the type table: the way a
   recursive type refers to itself. Generation stops at the depth budget. -/
   | ref (name : String) (tyIdx : Nat)
+  /-- A value the model does not look into (interface, map, func, chan):
+  always `.unit`. M3 passes the zero value. -/
+  | opaque (name : String)
 
 /-- The type table: field generators per named struct type. -/
 abbrev TypeTable := Array (List Gen)
@@ -165,6 +168,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
       (.structv vs, g, heap)
     | none => (.unit, g, heap)
   | .nilptr _ => (.ptr 0 [], g, heap)
+  | .opaque _ => (.unit, g, heap)
   | .str _ maxLen =>
     -- Half the time a pool literal or a neighbour of one (a byte dropped or
     -- added, a mined integer appended: "port:" ++ "65536"), else random bytes,
@@ -290,11 +294,12 @@ def flatten : Gen → Val → List (String × Json)
   | .str .., _ => [] -- reported under objects, where the heap is available
   | .nilptr .., _ => []
   | .ref .., _ => []
+  | .opaque .., _ => []
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
-    | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n
+    | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n => n
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -314,6 +319,7 @@ partial def renderObj (heap : Heap Val) (signed : Bool) : Val → Json
     | some v => renderObj heap signed v
     | none => Json.str "?"
   | .slice 0 _ _ _ => Json.null
+  | .unit => Json.null
   | s@(.str ..) =>
     match strBytes heap s with
     | some bs => bytesToJson bs
@@ -346,6 +352,7 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.nilptr name, v) => some (name, renderObj heap true v)
     | (.ref name _, v) => some (name, renderObj heap true v)
     | (.sliceOf name _ _, v) => some (name, renderObj heap true v)
+    | (.opaque name, _) => some (name, Json.null)
     | _ => none
 
 partial def renderVal : Val → Json
@@ -473,6 +480,7 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
   | .str _ _ =>
     (smallStrs extra pool).map fun bs heap => strAlloc heap bs
   | .nilptr _ => [fun heap => (.ptr 0 [], heap)]
+  | .opaque _ => [fun heap => (.unit, heap)]
 where
   enumList (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat)
       (allowNil : Bool) : List Gen → List (Heap Val → List Val × Heap Val)
@@ -503,6 +511,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     | some fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
     | none => 1
   | .str _ _ => (smallStrs extra pool).length
+  | .opaque _ => 1
   | .nilptr _ => 1
 
 def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)

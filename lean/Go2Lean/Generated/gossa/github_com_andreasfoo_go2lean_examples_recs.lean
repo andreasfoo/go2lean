@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_recs
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(items []github.com/andreasfoo/go2lean/examples/recs.Item) []github.com/andreasfoo/go2lean/examples/recs.Item (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "Dedup", params := [0], nvals := 31, entry := 0,

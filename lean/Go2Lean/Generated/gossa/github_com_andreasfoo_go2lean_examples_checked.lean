@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_checked
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(n int) (int, error) (status: partial) -/
 def f0 : GoSSA.Func := {
   name := "Double", params := [0], nvals := 10, entry := 0,
@@ -43,38 +45,36 @@ def f1 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
-/-- func(n int, ret0 int, ret1 error) bool (status: complete) -/
+/-- func(n int, ret0 int, ret1 error) bool (status: partial) -/
 def f2 : GoSSA.Func := {
-  name := "SpecDoubleHalves", params := [0, 1, 2], nvals := 9, entry := 0,
+  name := "SpecDoubleHalves", params := [0, 1, 2], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
-      instrs := #[.op 3 (.const (.err false)) [],
-                 .op 4 .ne [2, 3]],
-      term := .br 4 1 [] 2 [] },
+      instrs := #[.havoc 3 1],
+      term := .br 3 1 [] 2 [] },
     -- 1: if.then
     { params := [],
-      instrs := #[.op 5 (.const (.bool true)) []],
-      term := .ret 5 },
+      instrs := #[.op 4 (.const (.bool true)) []],
+      term := .ret 4 },
     -- 2: if.done
     { params := [],
-      instrs := #[.op 6 (.const (.int 64 2#64)) [],
-                 .op 7 .sdiv [1, 6],
-                 .op 8 .eq [7, 0]],
-      term := .ret 8 }
+      instrs := #[.op 5 (.const (.int 64 2#64)) [],
+                 .op 6 .sdiv [1, 5],
+                 .op 7 .eq [6, 0]],
+      term := .ret 7 }
   ] }
 
-/-- func(n int, ret0 int, ret1 error) bool (status: complete) -/
+/-- func(n int, ret0 int, ret1 error) bool (status: partial) -/
 def f3 : GoSSA.Func := {
-  name := "SpecHalfNoError", params := [0, 1, 2], nvals := 5, entry := 0,
+  name := "SpecHalfNoError", params := [0, 1, 2], nvals := 4, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
-      instrs := #[.op 3 (.const (.err false)) [],
-                 .op 4 .eq [2, 3]],
-      term := .ret 4 }
+      instrs := #[.havoc 3 2],
+      term := .ret 3 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[0] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[0, 1, 1] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_checked

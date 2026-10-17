@@ -162,6 +162,8 @@ func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (string, error) {
 		return fmt.Sprintf("(.structv %q [%s])", p.Go, strings.Join(fs, ", ")), nil
 	case contract.ABIString:
 		return fmt.Sprintf("(.str %q %d)", p.Go, maxLen), nil
+	case contract.ABIOpaque:
+		return fmt.Sprintf("(.opaque %q)", p.Go), nil
 	case contract.ABIPtr:
 		if p.Pointee == nil {
 			// The frontend's depth cut-off for recursive types: always nil.

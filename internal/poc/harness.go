@@ -200,6 +200,13 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 			return fmt.Sprintf("var %s error", p.Go), nil
 		}
 		return fmt.Sprintf("%s := errors.New(\"go2lean: opaque error\")", p.Go), nil
+	case contract.ABIOpaque:
+		// The model never looked inside: pass the zero value, except a
+		// context, where nil would panic in callees the model havoc'd.
+		if p.GoType == "context.Context" {
+			return fmt.Sprintf("%s := context.Background()", p.Go), nil
+		}
+		return fmt.Sprintf("var %s %s", p.Go, p.GoType), nil
 	case contract.ABIString:
 		raw, ok := cx.Objects[p.Go]
 		if !ok {
@@ -303,6 +310,8 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		return fmt.Sprintf("%s(%s)", p.GoType, s), nil
 	case contract.ABIBool:
 		return fmt.Sprint(v), nil
+	case contract.ABIOpaque:
+		return "nil", nil
 	case contract.ABIString:
 		sv, _ := v.(string)
 		return fmt.Sprintf("%s(%q)", p.GoType, sv), nil
@@ -321,6 +330,9 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		}
 		var parts []string
 		for i, f := range p.Fields {
+			if f.Kind == contract.ABIOpaque {
+				continue // zero value: nil map, nil interface, nil func
+			}
 			if p.TypePkg != "" && !token.IsExported(f.Go) {
 				return "", fmt.Errorf("%s: cannot set unexported field %s of %s from the test", p.Go, f.Go, p.GoType)
 			}

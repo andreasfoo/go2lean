@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_overflo
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(xs []int, ret int) bool (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "SpecSum", params := [0, 1], nvals := 15, entry := 0,

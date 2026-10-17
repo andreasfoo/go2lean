@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_list
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(n *github.com/andreasfoo/go2lean/examples/list.Node) int (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "Len", params := [0], nvals := 10, entry := 0,

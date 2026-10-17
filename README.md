@@ -124,6 +124,7 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/strs` | `Scheme` slices with an unchecked `strings.Index`; `ParsePort` has no upper bound | both confirmed (`"port:2147483648"`) |
 | `examples/list` | `Sum(*Node)` skips the head cell of a linked list | confirmed with a materialised `&Node{...}` |
 | `examples/recs` | `First`/`Longest`/`Dedup` index slices of structs and strings without a length check | all confirmed with `[]Item{...}` literals; `Total`, `Names` (built with `append`) and `Push` satisfy their specs |
+| `examples/opaque` | `(*Cache).Share` divides by a struct field next to a map; `Lookup(ctx, map, keys)` indexes `keys[0]` | both confirmed: the map and the context are opaque to the model and the test passes `context.Background()` and a nil map |
 
 ## On a real module
 
@@ -133,7 +134,7 @@ go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model Mi
     -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
 ```
 
-On tingly-box (7498 functions and methods) the model covers 857; a full
+On tingly-box (7498 functions and methods) the model covers 3423; a full
 pass over the 111 packages with a model takes about an hour and ends with
 11 confirmed findings and 26 spurious counterexamples (see the design doc,
 §9b): seven `truncate(s, n)` helpers that panic on a negative `n`, two
@@ -153,10 +154,14 @@ in the same package. Slice elements can be any modelled type: structs,
 strings, pointers, nested slices. Division by zero, out-of-range indexing,
 negative shift counts and nil dereferences panic as in Go; `MinInt / -1`
 wraps. Unmodelled calls become havoc values (or a recorded zero/opaque
-assumption for types the model cannot draw); interfaces and maps are
-opaque. Closures, map operations, type assertions, `defer` and goroutines
-still reject the function, with the reason in the model report. On tingly-box (7498
-functions and methods) this models 857.
+assumption for types the model cannot draw). Interfaces, maps, funcs and
+channels are *opaque* values: they can appear anywhere (parameters, struct
+fields, results), the model never looks inside them, map lookups, type
+assertions and interface comparisons are havoc, map updates are ignored,
+and M3 passes their zero value (`context.Background()` for a context).
+Closures, `range` over maps, `defer` and goroutines still reject the
+function, with the reason in the model report. On tingly-box (7498
+functions and methods) this models 3423 (1402 completely).
 
 ## Layout
 

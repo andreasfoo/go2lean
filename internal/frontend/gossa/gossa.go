@@ -367,6 +367,8 @@ func constVal(c *ssa.Const) (ir.Val, error) {
 			return ir.NilPtr{}, nil
 		case isSlice(c.Type()):
 			return ir.NilSlice{}, nil
+		case isOpaqueType(c.Type()):
+			return ir.Opaque{}, nil
 		}
 		return nil, fmt.Errorf("nil constant of type %s", c.Type())
 	}
@@ -455,6 +457,10 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		default:
 			return fmt.Errorf("string operator %s not supported", x.Op)
 		}
+	} else if eqOp && isOpaqueType(x.X.Type()) {
+		// Comparing interfaces, maps, funcs or channels: the model does
+		// not look inside them, so the outcome is a havoc bool.
+		return t.havoc(x, "comparison of "+x.X.Type().String(), "opaque-compare", "")
 	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
@@ -622,6 +628,20 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.issue("map %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
 		return nil
+	case *ssa.MapUpdate:
+		t.issue("map update %s[%s] ignored (maps are opaque)", x.Map.Name(), x.Key.Name())
+		return nil
+	case *ssa.ChangeInterface:
+		t.issue("interface value %s is opaque (not modelled)", x.Name())
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		return nil
+	case *ssa.TypeAssert:
+		if x.CommaOk {
+			return t.havoc(x, "type assertion", "opaque-assert", "")
+		}
+		// A failing single-result assertion panics in Go; the model assumes
+		// it succeeds and havocs the result, so that panic is not found.
+		return t.havoc(x, "type assertion (assumed to succeed)", "opaque-assert", "")
 	case *ssa.Index:
 		a, err := t.val(x.X)
 		if err != nil {
@@ -663,6 +683,9 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.MakeSlice{Zero: zero}, Args: []ir.Var{l, c}})
 		return nil
 	case *ssa.Lookup:
+		if _, isMap := x.X.Type().Underlying().(*types.Map); isMap {
+			return t.havoc(x, "map lookup", "opaque-map", "")
+		}
 		if !isString(x.X.Type()) || x.CommaOk {
 			return fmt.Errorf("lookup on %s not supported", x.X.Type())
 		}
@@ -1046,14 +1069,35 @@ func isSlice(t types.Type) bool {
 	return ok
 }
 
+// isOpaqueType says whether t is modelled as an opaque value.
+func isOpaqueType(t types.Type) bool {
+	switch t.Underlying().(type) {
+	case *types.Interface, *types.Map, *types.Signature, *types.Chan:
+		return true
+	}
+	return false
+}
+
+// isTestingType says whether t is (a pointer to) a type of package testing:
+// a function taking one is a test helper, not a target.
+func isTestingType(t types.Type) bool {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "testing"
+}
+
 // valueOK says whether values of type t are representable in the model:
 // integers, bools, errors, strings, and pointers to, structs of and slices
-// of such values. Recursive types are fine: a pointer
+// of such values. Interfaces, maps, funcs and channels are representable
+// as opaque values: the model never looks inside them, every read through
+// them is havoc, and M3 passes their zero value. Recursive types are fine: a pointer
 // cycle is cut by treating the type under construction as representable.
 func valueOK(t types.Type) bool { return valueOKVisiting(t, map[types.Type]bool{}) }
 
 func valueOKVisiting(t types.Type, visiting map[types.Type]bool) bool {
-	if _, _, ok := intWidth(t); ok || isBool(t) || isError(t) || isString(t) {
+	if _, _, ok := intWidth(t); ok || isBool(t) || isError(t) || isString(t) || isOpaqueType(t) {
 		return true
 	}
 	if visiting[t] {
@@ -1090,6 +1134,9 @@ func zeroVal(t types.Type) (ir.Val, bool) {
 	}
 	if isString(t) {
 		return ir.EmptyStr{}, true
+	}
+	if isOpaqueType(t) {
+		return ir.Opaque{}, true
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Pointer:
@@ -1167,6 +1214,9 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	pkg := f.Pkg.Pkg
 	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}}
 	for _, p := range f.Params {
+		if isTestingType(p.Type()) {
+			return nil, fmt.Errorf("test helper: parameter %s has type %s", p.Name(), p.Type())
+		}
 		ap, err := ab.param(p.Name(), p.Type(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("parameter %s has unsupported type %s", p.Name(), p.Type())
@@ -1223,6 +1273,8 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		}
 	}
 	switch {
+	case isOpaqueType(t):
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque}, nil
 	case isBool(t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
 	case isError(t):

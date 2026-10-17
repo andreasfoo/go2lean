@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_oob
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(v int, lo int, hi int) int (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "Clamp", params := [0, 1, 2], nvals := 5, entry := 0,

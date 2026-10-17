@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_strs
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(name string) bool (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "IsAdmin", params := [0], nvals := 4, entry := 0,
@@ -20,7 +22,7 @@ def f0 : GoSSA.Func := {
 
 /-- func(s string) (int, error) (status: partial) -/
 def f1 : GoSSA.Func := {
-  name := "ParsePort", params := [0], nvals := 20, entry := 0,
+  name := "ParsePort", params := [0], nvals := 19, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -40,25 +42,24 @@ def f1 : GoSSA.Func := {
                  .op 8 .strAtoi [7],
                  .op 9 (.extract 0) [8],
                  .op 10 (.extract 1) [8],
-                 .op 11 (.const (.err false)) [],
-                 .op 12 .ne [10, 11]],
-      term := .br 12 3 [] 5 [] },
+                 .havoc 11 1],
+      term := .br 11 3 [] 5 [] },
     -- 3: if.then
     { params := [],
-      instrs := #[.havoc 13 1,
-                 .op 14 (.const (.int 64 0#64)) [],
-                 .op 15 .mkTuple [14, 13]],
-      term := .ret 15 },
+      instrs := #[.havoc 12 2,
+                 .op 13 (.const (.int 64 0#64)) [],
+                 .op 14 .mkTuple [13, 12]],
+      term := .ret 14 },
     -- 4: if.done
     { params := [],
-      instrs := #[.op 16 (.const (.err false)) [],
-                 .op 17 .mkTuple [9, 16]],
-      term := .ret 17 },
+      instrs := #[.op 15 (.const (.err false)) [],
+                 .op 16 .mkTuple [9, 15]],
+      term := .ret 16 },
     -- 5: cond.false
     { params := [],
-      instrs := #[.op 18 (.const (.int 64 0#64)) [],
-                 .op 19 .slt [9, 18]],
-      term := .br 19 3 [] 4 [] }
+      instrs := #[.op 17 (.const (.int 64 0#64)) [],
+                 .op 18 .slt [9, 17]],
+      term := .br 18 3 [] 4 [] }
   ] }
 
 /-- func(u string) string (status: complete) -/
@@ -74,36 +75,35 @@ def f2 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
-/-- func(s string, ret0 int, ret1 error) bool (status: complete) -/
+/-- func(s string, ret0 int, ret1 error) bool (status: partial) -/
 def f3 : GoSSA.Func := {
-  name := "SpecParsePortRange", params := [0, 1, 2], nvals := 12, entry := 0,
+  name := "SpecParsePortRange", params := [0, 1, 2], nvals := 11, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
-      instrs := #[.op 4 (.const (.err false)) [],
-                 .op 5 .ne [2, 4]],
-      term := .br 5 1 [] 2 [] },
+      instrs := #[.havoc 4 3],
+      term := .br 4 1 [] 2 [] },
     -- 1: if.then
     { params := [],
-      instrs := #[.op 6 (.const (.bool true)) []],
-      term := .ret 6 },
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
     -- 2: if.done
     { params := [],
-      instrs := #[.op 7 (.const (.int 64 0#64)) [],
-                 .op 8 .sge [1, 7],
-                 .op 9 (.const (.bool false)) []],
-      term := .br 8 3 [] 4 [9] },
+      instrs := #[.op 6 (.const (.int 64 0#64)) [],
+                 .op 7 .sge [1, 6],
+                 .op 8 (.const (.bool false)) []],
+      term := .br 7 3 [] 4 [8] },
     -- 3: binop.rhs
     { params := [],
-      instrs := #[.op 10 (.const (.int 64 65535#64)) [],
-                 .op 11 .sle [1, 10]],
-      term := .jump 4 [11] },
+      instrs := #[.op 9 (.const (.int 64 65535#64)) [],
+                 .op 10 .sle [1, 9]],
+      term := .jump 4 [10] },
     -- 4: binop.done
     { params := [3],
       instrs := #[],
       term := .ret 3 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[0, 0] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[0, 1, 0, 1] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_strs

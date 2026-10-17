@@ -6,6 +6,8 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_magic
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
+set_option maxRecDepth 100000
+
 /-- func(tag int, payload []int) int (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "Decode", params := [0, 1], nvals := 8, entry := 0,
