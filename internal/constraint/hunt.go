@@ -120,6 +120,8 @@ func gen(p contract.ABIParam, maxLen int) (string, error) {
 			fs = append(fs, g)
 		}
 		return fmt.Sprintf("(.structv %q [%s])", p.Go, strings.Join(fs, ", ")), nil
+	case contract.ABIString:
+		return fmt.Sprintf("(.str %q %d)", p.Go, maxLen), nil
 	case contract.ABIPtr:
 		if p.Pointee == nil {
 			return "", fmt.Errorf("parameter %s: pointer without pointee", p.Go)
@@ -152,15 +154,17 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		return nil, "", err
 	}
 	fid, sid := -1, -1
-	var consts []string
+	var consts, strConsts []string
 	for _, f := range report.Funcs {
 		if f.Name == target.Func {
 			fid = f.ID
 			consts = append(consts, f.Consts...)
+			strConsts = append(strConsts, f.StrConsts...)
 		}
 		if prop.Spec != nil && f.Name == prop.Spec.GoFunc {
 			sid = f.ID
 			consts = append(consts, f.Consts...)
+			strConsts = append(strConsts, f.StrConsts...)
 		}
 	}
 	if fid < 0 {
@@ -184,6 +188,11 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	}
 
 	extra := "[" + strings.Join(consts, ", ") + "]"
+	quoted := make([]string, len(strConsts))
+	for i, sc := range strConsts {
+		quoted[i] = leanString(sc)
+	}
+	strs := "[" + strings.Join(quoted, ", ") + "]"
 	leanDir := repo.LeanDir(root)
 	if out, err := lake(leanDir, "build", "Go2Lean.Search", report.LeanModule); err != nil {
 		return nil, "", fmt.Errorf("lake build %s: %w\n%s", report.LeanModule, err, out)
@@ -192,7 +201,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 
 	var summary []string
 	if opts.Engine == EngineRandom || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel)
+		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d %s", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel, strs)
 		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_random", call)
 		if err != nil {
 			return nil, "", err
@@ -204,7 +213,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot)", res.Trials, res.OutOfFuel, res.Moot))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel)
+		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d %s", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel, strs)
 		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_exhaustive", call)
 		if err != nil {
 			return nil, "", err
@@ -278,6 +287,34 @@ func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, 
 		RevalidatedInLean: true,
 	}
 	return cx, ws.WriteCounterexample(cx)
+}
+
+// leanString renders a Go string as a Lean string literal.
+func leanString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func lastLine(s string) string {

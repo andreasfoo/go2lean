@@ -52,6 +52,11 @@ type NilSlice struct{}
 
 func (NilSlice) Lean() string { return "(.slice 0 0#64 0#64 0#64)" }
 
+// EmptyStr is the empty string value.
+type EmptyStr struct{}
+
+func (EmptyStr) Lean() string { return "(.str 0 0#64 0#64)" }
+
 // StructVal is a struct value from its field values.
 type StructVal struct{ Fields []Val }
 
@@ -124,6 +129,31 @@ type MakeSlice struct{ Zero Val }
 
 func (m MakeSlice) Lean() string { return "(.makeSlice " + m.Zero.Lean() + ")" }
 
+// StrConst is a string literal, given as its UTF-8 bytes.
+type StrConst struct{ Bytes []byte }
+
+func (c StrConst) Lean() string {
+	parts := make([]string, len(c.Bytes))
+	for i, b := range c.Bytes {
+		parts[i] = fmt.Sprint(int(b))
+	}
+	return "(.strConst [" + strings.Join(parts, ", ") + "])"
+}
+
+// StdlibOps maps fully qualified standard-library functions to the dialect
+// ops that model them.
+var StdlibOps = map[string]Op{
+	"strings.HasPrefix":  Simple("strHasPrefix"),
+	"strings.HasSuffix":  Simple("strHasSuffix"),
+	"strings.Contains":   Simple("strContains"),
+	"strings.Index":      Simple("strIndexOf"),
+	"strings.TrimSpace":  Simple("strTrimSpace"),
+	"strings.TrimPrefix": Simple("strTrimPrefix"),
+	"strings.TrimSuffix": Simple("strTrimSuffix"),
+	"strconv.Atoi":       Simple("strAtoi"),
+	"strconv.Itoa":       Simple("strItoa"),
+}
+
 // Havoc site kinds, encoded in Prog.HavocWidths: 0 is an opaque error, 1 a
 // bool, any other value the width of an integer.
 const (
@@ -186,11 +216,12 @@ type Func struct {
 	Entry  int
 	Blocks []Block
 
-	Status  contract.ModelStatus
-	Issues  []string
-	SpecFor string
-	Consts  []string // integer literals, see contract.ModelFunc.Consts
-	ABI     contract.ABI
+	Status    contract.ModelStatus
+	Issues    []string
+	SpecFor   string
+	Consts    []string // integer literals, see contract.ModelFunc.Consts
+	StrConsts []string // string literals
+	ABI       contract.ABI
 }
 
 // Prog is one package's worth of functions. Func indices are the Lean FuncIds.

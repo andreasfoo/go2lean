@@ -157,6 +157,16 @@ func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error)
 			return fmt.Sprintf("var %s error", p.Go), nil
 		}
 		return fmt.Sprintf("%s := errors.New(\"go2lean: opaque error\")", p.Go), nil
+	case contract.ABIString:
+		raw, ok := cx.Objects[p.Go]
+		if !ok {
+			return "", fmt.Errorf("counterexample has no value for %s", p.Go)
+		}
+		var sv string
+		if err := json.Unmarshal(raw, &sv); err != nil {
+			return "", fmt.Errorf("string %s: %w", p.Go, err)
+		}
+		return fmt.Sprintf("%s := %s(%q)", p.Go, p.GoType, sv), nil
 	case contract.ABIStruct, contract.ABIPtr:
 		raw, ok := cx.Objects[p.Go]
 		if !ok {
@@ -217,6 +227,9 @@ func literal(p contract.ABIParam, v any) (string, error) {
 		return fmt.Sprintf("%s(%s)", p.GoType, s), nil
 	case contract.ABIBool:
 		return fmt.Sprint(v), nil
+	case contract.ABIString:
+		sv, _ := v.(string)
+		return fmt.Sprintf("%s(%q)", p.GoType, sv), nil
 	case contract.ABIError:
 		if v == "nil" || v == nil {
 			return "error(nil)", nil

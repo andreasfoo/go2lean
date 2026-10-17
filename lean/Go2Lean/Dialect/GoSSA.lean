@@ -31,6 +31,9 @@ inductive Val where
   | structv (fields : List Val)
   /-- A heap array: the backing store of a slice or an allocated array. -/
   | arr (elems : List Val)
+  /-- A string: `len` bytes starting at `off` in the immutable byte array
+  `ref` (elements are `.int 8`). The empty string is `str 0 0 0`. -/
+  | str (ref : Nat) (off len : BitVec 64)
   | unit
   deriving Repr
 
@@ -91,6 +94,26 @@ inductive Op where
   | makeSlice (zero : Val)
   /-- `p == nil` style comparisons go through `eq`/`ne`; this reads `p == nil`. -/
   | isNil
+  -- strings
+  /-- A string literal (its UTF-8 bytes), allocated on the heap when evaluated. -/
+  | strConst (bytes : List Nat)
+  | strLen
+  /-- `s[i]`: a byte. -/
+  | strIndex
+  /-- `s[lo:hi]`; args `[s, lo, hi]`. -/
+  | strSlice
+  | strConcat
+  /-- `string(b)` for a byte slice; copies. -/
+  | bytesToStr
+  /-- `[]byte(s)`; copies. -/
+  | strToBytes
+  -- a hand-written core of the strings / strconv packages
+  | strHasPrefix | strHasSuffix | strContains | strIndexOf
+  | strTrimSpace | strTrimPrefix | strTrimSuffix
+  /-- `strconv.Atoi`: `(int, error)`. -/
+  | strAtoi
+  /-- `strconv.Itoa`. -/
+  | strItoa
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -125,6 +148,8 @@ def eqVal : Val → Val → Option Bool
   | .err a, .err b => some (a == b)
   | .ptr r p, .ptr r' p' => some (r == r' && p == p')
   | _, _ => none
+
+
 
 -- Heap navigation ------------------------------------------------------------
 
@@ -168,6 +193,49 @@ def heapAlloc (heap : Heap Val) (obj : Val) : Val × Heap Val :=
   let heap := if heap.size = 0 then #[.unit] else heap
   (.ptr heap.size [], heap.push obj)
 
+-- Strings --------------------------------------------------------------------
+
+/-- The bytes of a string value, read from the heap. -/
+def strBytes (heap : Heap Val) : Val → Option (List Nat)
+  | .str _ _ 0#64 => some []
+  | .str ref off len =>
+    match heap[ref]? with
+    | some (.arr es) =>
+      some (((es.drop off.toNat).take len.toNat).map fun | .int _ v => v.toNat | _ => 0)
+    | _ => none
+  | _ => none
+
+/-- Allocate a string with these bytes. -/
+def strAlloc (heap : Heap Val) (bs : List Nat) : Val × Heap Val :=
+  if bs.isEmpty then (.str 0 0#64 0#64, heap)
+  else
+    let (p, heap) := heapAlloc heap (.arr (bs.map fun b => Val.int 8 (BitVec.ofNat 8 b)))
+    match p with
+    | Val.ptr ref _ => (Val.str ref 0#64 (BitVec.ofNat 64 bs.length), heap)
+    | _ => (Val.unit, heap)
+
+def isSpaceByte (b : Nat) : Bool := b == 32 || (9 ≤ b && b ≤ 13)
+
+/-- Index of the first occurrence of `pat` in `s`, or none. -/
+def listIndexOf (s pat : List Nat) : Option Nat :=
+  (List.range (s.length + 1)).find? fun i => (s.drop i).take pat.length == pat && i + pat.length ≤ s.length
+
+/-- `strconv.Atoi` on bytes: optional sign, decimal digits, must fit int64. -/
+def atoiBytes (bs : List Nat) : Option Int :=
+  let (neg, digits) := match bs with
+    | 45 :: rest => (true, rest)
+    | 43 :: rest => (false, rest)
+    | rest => (false, rest)
+  if digits.isEmpty || !digits.all (fun d => 48 ≤ d && d ≤ 57) then none
+  else
+    let n : Nat := digits.foldl (fun acc d => acc * 10 + (d - 48)) 0
+    let v : Int := if neg then -n else n
+    if v < -(2 ^ 63) || v ≥ 2 ^ 63 then none else some v
+
+def itoaBytes (v : Int) : List Nat :=
+  let digits := (toString v.natAbs).toUTF8.toList.map (·.toNat)
+  if v < 0 then 45 :: digits else digits
+
 /-- Go index semantics: a negative index is out of range, so compare unsigned
 after sign-extending to 64 bits. -/
 def asIndex : Val → Option (BitVec 64)
@@ -198,6 +266,14 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | .ok k => .ok (.int w (if signed then a.sshiftRight k else a >>> k))
     | .panic p => .panic p
     | .outOfFuel => .outOfFuel
+  | .eq, [a@(.str ..), b@(.str ..)] =>
+    match strBytes heap a, strBytes heap b with
+    | some x, some y => .ok (.bool (x == y))
+    | _, _ => .panic .modelStuck
+  | .ne, [a@(.str ..), b@(.str ..)] =>
+    match strBytes heap a, strBytes heap b with
+    | some x, some y => .ok (.bool (x != y))
+    | _, _ => .panic .modelStuck
   | .eq, [a, b] => match eqVal a b with | some r => .ok (.bool r) | none => .panic .modelStuck
   | .ne, [a, b] => match eqVal a b with | some r => .ok (.bool !r) | none => .panic .modelStuck
   | .slt, args => cmpInt BitVec.slt args
@@ -247,6 +323,66 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | none => .panic .modelStuck
   | .isNil, [.ptr r _] => .ok (.bool (r == 0))
   | .isNil, [.err nonNil] => .ok (.bool !nonNil)
+  | .strLen, [.str _ _ len] => .ok (.int 64 len)
+  | .strIndex, [s@(.str _ _ len), i] =>
+    match asIndex i, strBytes heap s with
+    | some i, some bs =>
+      if i.ult len then
+        match bs[i.toNat]? with
+        | some b => .ok (.int 8 (BitVec.ofNat 8 b))
+        | none => .panic .modelStuck
+      else .panic .indexOutOfRange
+    | _, _ => .panic .modelStuck
+  | .strSlice, [.str ref off len, lo, hi] =>
+    match asIndex lo, asIndex hi with
+    | some lo, some hi =>
+      if lo.ule hi && hi.ule len then .ok (.str ref (off + lo) (hi - lo)) else .panic .sliceBounds
+    | _, _ => .panic .modelStuck
+  | .strHasPrefix, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y => .ok (.bool (x.take y.length == y))
+    | _, _ => .panic .modelStuck
+  | .strHasSuffix, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y => .ok (.bool (x.drop (x.length - y.length) == y && y.length ≤ x.length))
+    | _, _ => .panic .modelStuck
+  | .strContains, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y => .ok (.bool (listIndexOf x y).isSome)
+    | _, _ => .panic .modelStuck
+  | .strIndexOf, [s, p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y => .ok (.int 64 (match listIndexOf x y with | some i => BitVec.ofNat 64 i | none => -1#64))
+    | _, _ => .panic .modelStuck
+  | .strTrimPrefix, [s@(.str ref off len), p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y =>
+      if x.take y.length == y && y.length ≤ x.length then
+        .ok (.str ref (off + BitVec.ofNat 64 y.length) (len - BitVec.ofNat 64 y.length))
+      else .ok s
+    | _, _ => .panic .modelStuck
+  | .strTrimSuffix, [s@(.str ref off len), p] =>
+    match strBytes heap s, strBytes heap p with
+    | some x, some y =>
+      if y.length ≤ x.length && x.drop (x.length - y.length) == y then
+        .ok (.str ref off (len - BitVec.ofNat 64 y.length))
+      else .ok s
+    | _, _ => .panic .modelStuck
+  | .strTrimSpace, [s@(.str ref off len)] =>
+    match strBytes heap s with
+    | some x =>
+      let lead := (x.takeWhile isSpaceByte).length
+      let trail := (x.reverse.takeWhile isSpaceByte).length
+      if lead + trail ≥ x.length then .ok (.str 0 0#64 0#64)
+      else .ok (.str ref (off + BitVec.ofNat 64 lead) (len - BitVec.ofNat 64 (lead + trail)))
+    | none => .panic .modelStuck
+  | .strAtoi, [s] =>
+    match strBytes heap s with
+    | some x =>
+      match atoiBytes x with
+      | some v => .ok (.tuple [.int 64 (BitVec.ofInt 64 v), .err false])
+      | none => .ok (.tuple [.int 64 0#64, .err true])
+    | none => .panic .modelStuck
   | .mkTuple, vs => .ok (.tuple vs)
   | .extract i, [.tuple vs] =>
     match vs[i]? with
@@ -273,6 +409,24 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | .ok heap => .ok (.unit, heap)
     | .panic k => .panic k
     | .outOfFuel => .outOfFuel
+  | .strConst bs, [] => .ok (strAlloc heap bs)
+  | .strConcat, [a, b] =>
+    match strBytes heap a, strBytes heap b with
+    | some x, some y => .ok (strAlloc heap (x ++ y))
+    | _, _ => .panic .modelStuck
+  | .bytesToStr, [.slice ref off len _] =>
+    match strBytes heap (.str ref off len) with
+    | some x => .ok (strAlloc heap x)
+    | none => .panic .modelStuck
+  | .strToBytes, [s] =>
+    match strBytes heap s with
+    | some x =>
+      let (p, heap) := heapAlloc heap (.arr (x.map fun b => .int 8 (BitVec.ofNat 8 b)))
+      match p with
+      | .ptr ref _ => .ok (.slice ref 0#64 (BitVec.ofNat 64 x.length) (BitVec.ofNat 64 x.length), heap)
+      | _ => .panic .modelStuck
+    | none => .panic .modelStuck
+  | .strItoa, [.int _ v] => .ok (strAlloc heap (itoaBytes v.toInt))
   | .makeSlice zero, [len, cap] =>
     match asIndex len, asIndex cap with
     | some len, some cap =>

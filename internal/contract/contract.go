@@ -239,6 +239,7 @@ const (
 	ABISlice  ABIParamKind = "slice"  // model: ref, off, len, cap (gossa) or ptr, len, cap (llvm)
 	ABIStruct ABIParamKind = "struct" // one model value; Fields describe the components
 	ABIPtr    ABIParamKind = "ptr"    // one model value: nil or a pointer to Pointee
+	ABIString ABIParamKind = "string" // one model value; reported under Objects as a JSON string
 )
 
 // ABIParam describes one Go parameter. GoType is spelled as Go source in
@@ -316,7 +317,9 @@ type ModelFunc struct {
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`
-	ABI    string   `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+	// StrConsts are the string literals in the body, for the same purpose.
+	StrConsts []string `json:"str_consts,omitempty"`
+	ABI       string   `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
 }
 
 // ModelReport is M1's summary of one package, read by M2 to decide what to

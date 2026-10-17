@@ -346,6 +346,14 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 		t.out.Consts = append(t.out.Consts, iv.Bits)
 	}
 	v := t.fresh()
+	if sv, ok := cv.(ir.StrConst); ok {
+		if !slices.Contains(t.out.StrConsts, string(sv.Bytes)) {
+			t.out.StrConsts = append(t.out.StrConsts, string(sv.Bytes))
+		}
+		// A string literal is an allocating instruction, not a constant value.
+		t.emit(ir.Instr{Dst: v, Op: sv})
+		return v, nil
+	}
 	t.emit(ir.Instr{Dst: v, Op: ir.Const{V: cv}})
 	return v, nil
 }
@@ -364,6 +372,9 @@ func constVal(c *ssa.Const) (ir.Val, error) {
 	}
 	if isBool(c.Type()) {
 		return ir.BoolVal(constant.BoolVal(c.Value)), nil
+	}
+	if isString(c.Type()) {
+		return ir.StrConst{Bytes: []byte(constant.StringVal(c.Value))}, nil
 	}
 	w, signed, ok := intWidth(c.Type())
 	if !ok {
@@ -436,7 +447,15 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		return fmt.Errorf("unsupported binary operator %s", x.Op)
 	}
 	eqOp := x.Op == token.EQL || x.Op == token.NEQ
-	if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()))) {
+	if isString(x.X.Type()) {
+		switch x.Op {
+		case token.ADD:
+			op = ir.Simple("strConcat")
+		case token.EQL, token.NEQ:
+		default:
+			return fmt.Errorf("string operator %s not supported", x.Op)
+		}
+	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
 	a, err := t.val(x.X)
@@ -566,6 +585,20 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		}
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.MakeSlice{Zero: zero}, Args: []ir.Var{l, c}})
 		return nil
+	case *ssa.Lookup:
+		if !isString(x.X.Type()) || x.CommaOk {
+			return fmt.Errorf("lookup on %s not supported", x.X.Type())
+		}
+		s, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		i, err := t.val(x.Index)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strIndex"), Args: []ir.Var{s, i}})
+		return nil
 	case *ssa.Slice:
 		return t.slice(x)
 	case *ssa.Extract:
@@ -682,6 +715,27 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 }
 
 func (t *fnState) conv(dst ssa.Value, src ssa.Value) error {
+	if isString(dst.Type()) && isByteSlice(src.Type()) || isByteSlice(dst.Type()) && isString(src.Type()) {
+		a, err := t.val(src)
+		if err != nil {
+			return err
+		}
+		op := ir.Simple("bytesToStr")
+		if isString(src.Type()) {
+			op = ir.Simple("strToBytes")
+		}
+		t.emit(ir.Instr{Dst: t.def(dst), Op: op, Args: []ir.Var{a}})
+		return nil
+	}
+	if isString(dst.Type()) && isString(src.Type()) {
+		// A named string type: the value is unchanged.
+		a, err := t.val(src)
+		if err != nil {
+			return err
+		}
+		t.vars[dst] = a
+		return nil
+	}
 	w, _, ok := intWidth(dst.Type())
 	_, srcSigned, ok2 := intWidth(src.Type())
 	if !ok || !ok2 {
@@ -696,11 +750,16 @@ func (t *fnState) conv(dst ssa.Value, src ssa.Value) error {
 }
 
 func (t *fnState) slice(x *ssa.Slice) error {
-	if _, _, ok := sliceElem(x.X.Type()); !ok {
+	str := isString(x.X.Type())
+	if _, _, ok := sliceElem(x.X.Type()); !ok && !str {
 		return fmt.Errorf("reslice of non-slice type %s", x.X.Type())
 	}
 	if x.Max != nil {
 		return fmt.Errorf("three-index slice not supported")
+	}
+	lenOp, sliceOp := ir.Simple("len"), ir.Simple("reslice")
+	if str {
+		lenOp, sliceOp = ir.Simple("strLen"), ir.Simple("strSlice")
 	}
 	s, err := t.val(x.X)
 	if err != nil {
@@ -721,9 +780,9 @@ func (t *fnState) slice(x *ssa.Slice) error {
 		}
 	} else {
 		hi = t.fresh()
-		t.emit(ir.Instr{Dst: hi, Op: ir.Simple("len"), Args: []ir.Var{s}})
+		t.emit(ir.Instr{Dst: hi, Op: lenOp, Args: []ir.Var{s}})
 	}
-	t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("reslice"), Args: []ir.Var{s, lo, hi}})
+	t.emit(ir.Instr{Dst: t.def(x), Op: sliceOp, Args: []ir.Var{s, lo, hi}})
 	return nil
 }
 
@@ -740,6 +799,14 @@ func (t *fnState) call(x *ssa.Call) error {
 				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple(bi.Name()), Args: []ir.Var{a}})
 				return nil
 			}
+			if bi.Name() == "len" && isString(x.Call.Args[0].Type()) {
+				a, err := t.val(x.Call.Args[0])
+				if err != nil {
+					return err
+				}
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strLen"), Args: []ir.Var{a}})
+				return nil
+			}
 		}
 		if hasResult {
 			return t.havoc(x, "builtin "+bi.Name(), "unmodeled-call", "")
@@ -748,6 +815,20 @@ func (t *fnState) call(x *ssa.Call) error {
 		return nil
 	}
 	callee := x.Call.StaticCallee()
+	if callee != nil && hasResult {
+		if op, ok := ir.StdlibOps[callee.String()]; ok {
+			var args []ir.Var
+			for _, a := range x.Call.Args {
+				v, err := t.val(a)
+				if err != nil {
+					return err
+				}
+				args = append(args, v)
+			}
+			t.emit(ir.Instr{Dst: t.def(x), Op: op, Args: args})
+			return nil
+		}
+	}
 	if id, ok := t.prog.ids[callee]; ok && callee != nil && hasResult {
 		var args []ir.Var
 		for _, a := range x.Call.Args {
@@ -814,6 +895,20 @@ var errorType = types.Universe.Lookup("error").Type()
 
 func isError(t types.Type) bool { return types.Identical(t, errorType) }
 
+func isString(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsString != 0
+}
+
+func isByteSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+	b, ok := s.Elem().Underlying().(*types.Basic)
+	return ok && (b.Kind() == types.Uint8 || b.Kind() == types.Byte)
+}
+
 func isPointer(t types.Type) bool {
 	_, ok := t.Underlying().(*types.Pointer)
 	return ok
@@ -828,7 +923,7 @@ func isSlice(t types.Type) bool {
 // integers, bools, errors, pointers to and structs of such values, and
 // slices of integers.
 func valueOK(t types.Type) bool {
-	if _, _, ok := intWidth(t); ok || isBool(t) || isError(t) {
+	if _, _, ok := intWidth(t); ok || isBool(t) || isError(t) || isString(t) {
 		return true
 	}
 	switch u := t.Underlying().(type) {
@@ -858,6 +953,9 @@ func zeroVal(t types.Type) (ir.Val, bool) {
 	}
 	if isError(t) {
 		return ir.ErrVal{}, true
+	}
+	if isString(t) {
+		return ir.EmptyStr{}, true
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Pointer:
@@ -946,6 +1044,8 @@ func abiParam(pkg *types.Package, name string, t types.Type) (contract.ABIParam,
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
 	case isError(t):
 		return contract.ABIParam{Go: name, GoType: "error", Model: []string{name}, Kind: contract.ABIError}, nil
+	case isString(t):
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIString}, nil
 	}
 	if w, signed, ok := intWidth(t); ok {
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt}, nil
