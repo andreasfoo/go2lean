@@ -404,7 +404,7 @@ rendered per the Go type in the ABI (signed/unsigned). The workspace layout:
 <workspace>/counterexamples/<id>.json
 <workspace>/verdicts/<counterexample id>.json
 <workspace>/proofs/<property id>.json
-<workspace>/models/<frontend>/{report.json, <Func>.json}
+<workspace>/models/<frontend>/<pkg>/{report.json, <Func>.json}
 <workspace>/poc/<counterexample id>/
 ```
 

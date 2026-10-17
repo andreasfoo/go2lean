@@ -137,14 +137,14 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Consts: f.Consts}
 		if f.Status != contract.ModelRejected {
 			abi := f.ABI
-			abiRel, err := ws.WriteABI(&abi, f.Name)
+			abiRel, err := ws.WriteABI(&abi, p.Package, f.Name)
 			if err != nil {
 				return nil, err
 			}
 			mf.ABI = abiRel
 			if f.SpecFor == "" {
 				t := &contract.Target{
-					ID:      "t-" + strings.ToLower(f.Name),
+					ID:      contract.TargetID(p.Package, f.Name),
 					Module:  modulePath,
 					Package: p.Package,
 					Func:    f.Name,

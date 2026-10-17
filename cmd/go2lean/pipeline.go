@@ -37,12 +37,16 @@ func cmdProps(args []string) error {
 	fs := flag.NewFlagSet("props", flag.ExitOnError)
 	ws := workspaceFlag(fs)
 	frontend := fs.String("frontend", "gossa", "frontend whose model report to use")
+	pkg := fs.String("package", "", "import path of the compiled package")
 	fs.Parse(args)
+	if *pkg == "" {
+		return fmt.Errorf("props: -package is required")
+	}
 	w, _, err := openWorkspace(*ws)
 	if err != nil {
 		return err
 	}
-	report, err := w.ModelReport(*frontend)
+	report, err := w.ModelReport(*frontend, *pkg)
 	if err != nil {
 		return err
 	}

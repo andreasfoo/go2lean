@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 // Workspace is a directory tree holding one JSON file per record:
@@ -124,21 +126,34 @@ func (w Workspace) WriteTarget(t *Target) error {
 	return writeJSON(w.path("targets", t.ID), t)
 }
 
-// WriteABI stores an ABI record under models/<frontend>/<func>.json and
-// returns the workspace-relative path for Target.Models.
-func (w Workspace) WriteABI(a *ABI, funcName string) (string, error) {
-	rel := filepath.Join("models", a.Frontend, funcName+".json")
+// PackageKey is the workspace directory name for a package: its last path
+// element, with anything that is not an identifier character replaced.
+func PackageKey(pkgPath string) string {
+	return nonIdent.ReplaceAllString(filepath.Base(pkgPath), "_")
+}
+
+var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)
+
+// WriteABI stores an ABI record under models/<frontend>/<pkg>/<func>.json
+// and returns the workspace-relative path for Target.Models.
+func (w Workspace) WriteABI(a *ABI, pkgPath, funcName string) (string, error) {
+	rel := filepath.Join("models", a.Frontend, PackageKey(pkgPath), funcName+".json")
 	return rel, writeJSON(filepath.Join(w.Root, rel), a)
 }
 
 func (w Workspace) WriteModelReport(r *ModelReport) error {
-	return writeJSON(filepath.Join(w.Root, "models", r.Frontend, "report.json"), r)
+	return writeJSON(filepath.Join(w.Root, "models", r.Frontend, PackageKey(r.Package), "report.json"), r)
 }
 
-func (w Workspace) ModelReport(frontend string) (*ModelReport, error) {
+func (w Workspace) ModelReport(frontend, pkgPath string) (*ModelReport, error) {
 	var r ModelReport
-	err := readJSON(filepath.Join(w.Root, "models", frontend, "report.json"), &r)
+	err := readJSON(filepath.Join(w.Root, "models", frontend, PackageKey(pkgPath), "report.json"), &r)
 	return &r, err
+}
+
+// TargetID is the workspace id of a function: package key and function name.
+func TargetID(pkgPath, funcName string) string {
+	return "t_" + strings.ToLower(PackageKey(pkgPath)+"_"+funcName)
 }
 
 // Properties lists every property in the workspace.

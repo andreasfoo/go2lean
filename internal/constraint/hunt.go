@@ -116,7 +116,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	if err != nil {
 		return nil, "", err
 	}
-	report, err := ws.ModelReport(prop.Frontend)
+	report, err := ws.ModelReport(prop.Frontend, target.Package)
 	if err != nil {
 		return nil, "", err
 	}

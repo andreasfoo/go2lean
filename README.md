@@ -78,7 +78,7 @@ replays scripted responses for tests and offline runs.
 
 ```
 go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
-go2lean props   [-workspace out]                  template properties from the model report
+go2lean props   [-workspace out] -package <path>  template properties from the model report
 go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id
