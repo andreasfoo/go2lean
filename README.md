@@ -65,8 +65,11 @@ compiled into the model with the same pipeline as the target so the Lean
 property and the Go oracle agree by construction. Two engines run per
 property: seeded random search (per-trial value profiles, plus the target's
 own integer literals so magic-constant branches are reachable), then
-exhaustive enumeration of a small domain, which records an `exhausted`
-certificate when it passes. Both run in `go2lean-search`, a native
+exhaustive enumeration of a small domain (narrow signatures only), which
+records an `exhausted` certificate when it passes. A spec whose verdict
+depended on a havoc value (it looked inside an opaque value, or called
+something unmodelled) is reported as unknown, never as a counterexample
+or a certificate. Both run in `go2lean-search`, a native
 executable built by lake from the Lean engines and every generated model,
 driven by a JSON description of the search; properties are searched in
 parallel, and each engine stops at a wall-clock budget (10 s by default)
@@ -169,8 +172,9 @@ inside them, map lookups, type assertions, interface comparisons and
 float arithmetic are havoc, map updates are ignored, `range` over a map
 runs zero times, and M3 passes their zero value (`context.Background()`
 for a context). A deferred call the model does not look into (a mutex
-unlock, a close) is ignored. Closures, goroutines and `defer` of a modelled
-function still reject the function, with the reason in the model report.
+unlock, a close) is ignored; a closure is an opaque func value. Goroutines,
+`select` and `defer` of a modelled function still reject the function,
+with the reason in the model report.
 On tingly-box (7498 functions and methods) this models 6588 (1988
 completely); 319 of the 910 rejected are test helpers taking `*testing.T`.
 
