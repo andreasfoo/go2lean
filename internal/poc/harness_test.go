@@ -69,3 +69,14 @@ func TestHarnessMethodCallAndImports(t *testing.T) {
 		}
 	}
 }
+
+func TestParseResultsMapsByTestName(t *testing.T) {
+	out := "=== RUN   TestGo2LeanPoC_a\nGO2LEAN_RESULT {\"panicked\":false,\"ret\":\"1\"}\n--- PASS: TestGo2LeanPoC_a (0.00s)\n=== RUN   TestGo2LeanPoC_b\nGO2LEAN_RESULT {\"panicked\":true,\"panic\":\"runtime error: index out of range [2] with length 2\"}\n"
+	rs := parseResults(out)
+	if len(rs) != 2 || rs["a"].Ret != "1" || !rs["b"].Panicked {
+		t.Fatalf("unexpected %+v", rs)
+	}
+	if ClassifyPanic(rs["b"].Panic) != contract.PanicIndexOutOfRange {
+		t.Fatal("panic not classified")
+	}
+}

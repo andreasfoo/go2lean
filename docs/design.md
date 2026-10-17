@@ -382,9 +382,14 @@ flagged separately.
 1. **Random search** (built): `Go2Lean.Search.run`, a seeded generator with
    per-trial *value profiles* (boundary-only, small, mixed) so that correlated
    inputs are likely; memory and havoc are re-drawn every trial from the trial
-   seed. The value pool includes every integer literal of the target and its
-   spec, with off-by-one neighbours, so comparisons against magic constants
-   are reachable. Reports one JSON line. Seconds.
+   seed. The value pool includes every integer and string literal of the
+   target and its spec, with off-by-one and numeric-suffix neighbours, so
+   comparisons against magic constants are reachable. Inputs are materialised
+   on the heap (slices, strings, structs, pointees, bounded-depth recursive
+   structures from the ABI type table). Top-level pointers and receivers are
+   non-nil unless `-nil-inputs` is given. A run on which the model got stuck
+   (ill-typed, or a call into a rejected function's stub) is *moot*: it never
+   counts as a refutation. Reports one JSON line. Seconds.
 2. **Exhaustive small domain** (built): `Go2Lean.Search.exhaust` enumerates
    boundary values, mined literals and magnitudes ≤ 8 for every integer
    parameter and slice element, slices up to length 3, with a domain-size
@@ -469,8 +474,12 @@ is violated".
 
 ### 6.2 Running and judging
 
-`go test -count=1 -v -run '^TestGo2LeanPoC_<id>$' <pkg>` with a fixed timeout
-(`tinygo test` for `crosscheck` properties, later).
+All counterexamples of a package go into one test file and one
+`go test -count=1 -v -run '^TestGo2LeanPoC_' <pkg>` run (the package's
+tests compile once); results are mapped back by test name, and a batch
+that does not compile falls back to one run per test. Each PoC directory
+still holds a standalone file. (`tinygo test` for `crosscheck` properties,
+later.)
 
 | status | condition |
 |---|---|

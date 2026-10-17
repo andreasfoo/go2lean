@@ -105,8 +105,8 @@ go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
 go2lean props   [-workspace out] -package <path>  template properties from the model report
 go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
-go2lean poc     [-workspace out] -counterexample id
-go2lean run     [-workspace out] <package>        compile, props, hunt, poc
+go2lean poc     [-workspace out] -counterexample id [more ids...]   one go test per package
+go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, hunt, poc (./... allowed)
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
                 [-repairs n] [-report] <package>
 ```
