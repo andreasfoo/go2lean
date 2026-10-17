@@ -550,6 +550,20 @@ where
           let (vs, heap) := rest heap
           (v :: vs, heap)
 
+/-- The number of leaf generators in a description, table references
+expanded once: the exhaustive engine only enumerates small signatures,
+since the builders of a wide structure are expensive to construct even
+when the domain is small. -/
+partial def leaves (table : TypeTable) (seen : List Nat := []) : Gen → Nat
+  | .structv _ fields => (fields.map (leaves table seen)).sum
+  | .ptr _ pointee | .link _ pointee | .sliceOf _ pointee _ | .arrOf _ pointee _ => 1 + leaves table seen pointee
+  | .ref _ tyIdx =>
+    if seen.contains tyIdx then 1
+    else match table[tyIdx]? with
+      | some fields => (fields.map (leaves table (tyIdx :: seen))).sum
+      | none => 1
+  | _ => 1
+
 /-- Size of the domain `enumArgs` would produce, computed before building it. -/
 partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable := #[])
     (depth : Nat := 2) (allowNil : Bool := true) : Gen → Nat
@@ -592,6 +606,11 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     (maxLen limit fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
     (allowNil : Bool := true) (budgetMs : Nat := 0) : IO Unit := do
   let pool := strs.map fun s => s.toUTF8.toList.map (·.toNat)
+  let width := (gens.map (leaves table)).sum
+  if width > 24 then
+    IO.println (Json.mkObj [("found", false), ("exhaustive", false),
+      ("reason", "signature too wide"), ("domain", width), ("limit", 24)]).compress
+    return
   let n := domainSize extra maxLen pool gens table allowNil
   if n > limit then
     IO.println (Json.mkObj [("found", false), ("exhaustive", false),

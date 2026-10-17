@@ -328,6 +328,8 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			summary = append(summary, fmt.Sprintf("exhaustive: holds on %.0f inputs (recorded as %s)", res.Domain, pr.Status))
 		case res.Reason == "budget":
 			summary = append(summary, fmt.Sprintf("exhaustive: stopped by the %ds budget after %d of %.0f inputs", opts.BudgetSeconds, res.Checked, res.Domain))
+		case res.Reason == "signature too wide":
+			summary = append(summary, fmt.Sprintf("exhaustive: skipped (%s: %.0f leaf generators > 24)", res.Reason, res.Domain))
 		case res.Reason != "":
 			summary = append(summary, fmt.Sprintf("exhaustive: skipped (%s: %.3g > %d)", res.Reason, res.Domain, opts.ExhaustLimit))
 		case res.Moot > 0:
