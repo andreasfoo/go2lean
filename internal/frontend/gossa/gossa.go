@@ -1093,6 +1093,19 @@ func (t *fnState) call(x *ssa.Call) error {
 			return nil
 		}
 		if hasResult {
+			if bi.Name() == "len" || bi.Name() == "cap" {
+				// The length of a map or channel the model does not look
+				// into: havoc, but kept below 16 so that `make([]T, 0, len(m))`
+				// stays something the model materialises. Recorded as an
+				// assumption.
+				t.issue("%s of %s assumed below 16 (not modelled)", bi.Name(), x.Call.Args[0].Type())
+				raw := t.fresh()
+				t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, fmt.Sprintf("%s: %s", t.f.Name(), bi.Name()), "unmodeled-call", "")})
+				sixteen := t.fresh()
+				t.emit(ir.Instr{Dst: sixteen, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "16"}}})
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("urem"), Args: []ir.Var{raw, sixteen}})
+				return nil
+			}
 			return t.havoc(x, "builtin "+bi.Name(), "unmodeled-call", "")
 		}
 		t.issue("call to builtin %s ignored", bi.Name())
