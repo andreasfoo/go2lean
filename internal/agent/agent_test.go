@@ -14,8 +14,13 @@ func TestExtractGo(t *testing.T) {
 	if extractGo("no code here") != "" {
 		t.Fatal("expected empty result without a block")
 	}
-	if !strings.Contains(stripGo(resp), "(revised spec file") || strings.Contains(stripGo(resp), "package p") {
-		t.Fatalf("stripGo left code in %q", stripGo(resp))
+	// A block without a go2lean:spec marker is a fix snippet and stays in the report.
+	if strings.Contains(stripGo(resp), "(revised spec file") || !strings.Contains(stripGo(resp), "func F() {}") {
+		t.Fatalf("stripGo removed a non-spec block: %q", stripGo(resp))
+	}
+	spec := "```go\npackage p\n// go2lean:spec F\nfunc SpecF(ret int) bool { return true }\n```\n"
+	if got := stripGo(spec); !strings.Contains(got, "(revised spec file") || strings.Contains(got, "SpecF") {
+		t.Fatalf("stripGo kept the spec block: %q", got)
 	}
 }
 

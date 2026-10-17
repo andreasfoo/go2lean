@@ -95,7 +95,7 @@ parameter); `mock:<dir>` replays scripted responses (`round-1.md`,
 ```sh
 go run ./cmd/go2lean agent -model MiniMax-M3 -base-url https://api.minimaxi.com/anthropic ./examples/oob
 ``` Every prompt and response is
-written to `out/agent/`, and the report lands in `out/agent/report.md`. A
+written to `out/agent/<package>/`, and the report lands in `out/agent/<package>/report.md`. A
 revised spec file in the report round triggers one more pass.
 
 ## Commands
@@ -119,6 +119,20 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/oob` | `Last` has an off-by-one | confirmed `index out of range`; `Clamp` certified |
 | `examples/divzero` | `Avg` divides by a caller-controlled count | confirmed `integer divide by zero`; `Ratio` (incl. `MinInt/-1`) certified |
 | `examples/magic` | `Decode` indexes an empty payload only when `tag == 0x5EC4E7` | confirmed — reachable because literals are mined into the value pool |
+
+## On a real module
+
+```sh
+go run ./cmd/go2lean compile -workspace out-tingly -module ../tingly-box ./...   # 156 packages, 15 s
+go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model MiniMax-M3 \
+    -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
+```
+
+On tingly-box the stage-A subset models 15 of 3783 functions (pointers,
+strings, structs and multiple results are the blockers; see the design doc,
+§9b). On one of them the agent proposed that `budgetDuration(seconds int)
+time.Duration` never returns a negative duration; the engine found
+`seconds = MaxInt64`, and the real run returned `-1s`.
 
 ## Supported Go subset (stage A)
 

@@ -31,7 +31,17 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 	if opts.MaxRepairs == 0 {
 		opts.MaxRepairs = 2
 	}
-	logDir := filepath.Join(ws.Root, "agent")
+	moduleDir := env.Module
+	if moduleDir == "" {
+		moduleDir = env.Root
+	}
+	pkgDir, pkgName, pkgPath, err := goList(moduleDir, pattern)
+	if err != nil {
+		return err
+	}
+	// One log directory per package, so runs on different packages of the
+	// same workspace keep their prompts, responses and reports.
+	logDir := filepath.Join(ws.Root, "agent", contract.PackageKey(pkgPath))
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
 	}
@@ -48,14 +58,6 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 		return resp, nil
 	}
 
-	moduleDir := env.Module
-	if moduleDir == "" {
-		moduleDir = env.Root
-	}
-	pkgDir, pkgName, pkgPath, err := goList(moduleDir, pattern)
-	if err != nil {
-		return err
-	}
 	fmt.Fprintln(out, "== M1 compile (before specs)")
 	report, err := pipeline.Compile(ws, env, pattern, out)
 	if err != nil {
@@ -243,9 +245,16 @@ func readProof(ws contract.Workspace, propID string) (*contract.ProofResult, err
 	return &pr, unmarshal(b, &pr)
 }
 
-// stripGo removes fenced Go blocks so the report file holds prose only.
+// stripGo replaces the spec-file block (recognised by its go2lean:spec
+// comments) with a note, leaving fix snippets and other code in the report.
 func stripGo(resp string) string {
-	return strings.TrimSpace(goBlock.ReplaceAllString(resp, "(revised spec file written to go2lean_specs_test.go)")) + "\n"
+	out := goBlock.ReplaceAllStringFunc(resp, func(block string) string {
+		if strings.Contains(block, "go2lean:spec") {
+			return "(revised spec file written to go2lean_specs_test.go)"
+		}
+		return block
+	})
+	return strings.TrimSpace(out) + "\n"
 }
 
 func goList(root, pattern string) (dir, name, path string, err error) {

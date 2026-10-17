@@ -35,7 +35,10 @@ Rules for a spec function:
   multiple results, fmt, panics, or standard-library calls.
 - A loop is fine; the model runs it with bounded fuel.
 - The file contains spec functions only: never redefine or copy a function
-  of the package, and never add imports. Plain ASCII in code and comments.
+  of the package. Import only the packages that the parameter and result
+  types of the specs need (for example "time" for time.Duration); call
+  nothing from them. Package-level variables of the target package are not
+  modelled; use literals. Plain ASCII in code and comments.
 
 Good properties are ones a real bug could violate: results inside a range,
 sign and overflow behaviour on large inputs, off-by-one at boundaries
@@ -65,9 +68,10 @@ no "go2lean:spec" comment.
 If some spec should be restated, you may also output one fenced Go code block
 with a revised go2lean_specs_test.go; the pipeline will run it again. It is
 recognised by its "go2lean:spec" comments. The file must follow the same
-rules as before: the package clause of the target package (given below), no
-imports, spec functions only, never a copy of a package function, plain
-ASCII, inside the modelled subset. Omit the block if nothing should change.`
+rules as before: the package clause of the target package (given below),
+imports only for the types in spec signatures, spec functions only, never a
+copy of a package function, plain ASCII, inside the modelled subset. Omit
+the block if nothing should change.`
 
 // goBlock matches a fenced Go block whose fences each stand on their own
 // line (indentation allowed, as inside a list item). Anchoring both fences

@@ -509,6 +509,9 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | packages sharing a base name (`types`, `util`) overwrote each other's records and Lean modules | workspace records and Lean modules are keyed by the full import path |
 | `init#N` package initialisers were modelled as functions | skipped |
 | the modelled functions are byte/rune classifiers, `gcd`, `max`, small budget arithmetic — exactly the shape the engines handle | real bugs in such helpers are rare; the value of go2lean on real code depends on the type-coverage work above |
+| named integer types (`time.Duration`, `logrus.Level`) passed the frontend but broke the engines (which parsed type names) and the harness (no import) | the ABI carries width, signedness and the type's import path |
+| **first real finding**: the agent (MiniMax-M3 through the Anthropic-compatible endpoint) proposed `SpecBudgetDurationNonNegative` for `claudecode.budgetDuration(seconds int) time.Duration`; the random engine found `seconds = MaxInt64` at trial 12; the real run returned `-1s` — `time.Duration(seconds) * time.Second` wraps for `seconds ≥ 9 223 372 037` | the loop works on real code once a function is modelled; the agent's report named the line and the threshold |
+| the agent needs `import "time"` for `time.Duration` in spec signatures; the prompt forbade imports | the rule is now "imports only for the types in spec signatures"; package-level variables of the target are explicitly out of the subset |
 
 ## 10. Milestones
 
