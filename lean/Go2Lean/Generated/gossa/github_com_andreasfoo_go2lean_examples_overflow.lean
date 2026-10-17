@@ -8,7 +8,7 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 /-- func(xs []int, ret int) bool (status: complete) -/
 def f0 : GoSSA.Func := {
-  name := "SpecSum", params := [0, 1], nvals := 14, entry := 0,
+  name := "SpecSum", params := [0, 1], nvals := 15, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -21,29 +21,30 @@ def f0 : GoSSA.Func := {
       term := .br 5 2 [] 3 [] },
     -- 2: for.body
     { params := [],
-      instrs := #[.op 6 (.load 64) [0, 2],
-                 .op 7 (.const (.int 64 0#64)) [],
-                 .op 8 .slt [6, 7]],
-      term := .br 8 4 [] 5 [] },
+      instrs := #[.op 6 .indexAddr [0, 2],
+                 .op 7 .loadPath [6],
+                 .op 8 (.const (.int 64 0#64)) [],
+                 .op 9 .slt [7, 8]],
+      term := .br 9 4 [] 5 [] },
     -- 3: for.done
     { params := [],
-      instrs := #[.op 9 (.const (.int 64 0#64)) [],
-                 .op 10 .sge [1, 9]],
-      term := .ret 10 },
+      instrs := #[.op 10 (.const (.int 64 0#64)) [],
+                 .op 11 .sge [1, 10]],
+      term := .ret 11 },
     -- 4: if.then
     { params := [],
-      instrs := #[.op 11 (.const (.bool true)) []],
-      term := .ret 11 },
+      instrs := #[.op 12 (.const (.bool true)) []],
+      term := .ret 12 },
     -- 5: if.done
     { params := [],
-      instrs := #[.op 12 (.const (.int 64 1#64)) [],
-                 .op 13 .add [2, 12]],
-      term := .jump 1 [13] }
+      instrs := #[.op 13 (.const (.int 64 1#64)) [],
+                 .op 14 .add [2, 13]],
+      term := .jump 1 [14] }
   ] }
 
 /-- func(xs []int) int (status: complete) -/
 def f1 : GoSSA.Func := {
-  name := "Sum", params := [0], nvals := 11, entry := 0,
+  name := "Sum", params := [0], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -57,11 +58,12 @@ def f1 : GoSSA.Func := {
       term := .br 6 2 [] 3 [] },
     -- 2: for.body
     { params := [],
-      instrs := #[.op 7 (.load 64) [0, 2],
-                 .op 8 .add [1, 7],
-                 .op 9 (.const (.int 64 1#64)) [],
-                 .op 10 .add [2, 9]],
-      term := .jump 1 [8, 10] },
+      instrs := #[.op 7 .indexAddr [0, 2],
+                 .op 8 .loadPath [7],
+                 .op 9 .add [1, 8],
+                 .op 10 (.const (.int 64 1#64)) [],
+                 .op 11 .add [2, 10]],
+      term := .jump 1 [9, 11] },
     -- 3: for.done
     { params := [],
       instrs := #[],

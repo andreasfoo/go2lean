@@ -5,6 +5,7 @@
 package poc
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -103,12 +104,11 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 		}
 		d.Decls = append(d.Decls, decl)
 		names = append(names, prm.Go)
-		for _, ip := range []string{prm.TypePkg, prm.ElemPkg} {
-			if ip != "" {
-				imports[ip] = true
-			}
-		}
+		collectImports(prm, imports)
 		if prm.Kind == contract.ABIError && cx.Inputs[prm.Model[0]] != "nil" {
+			imports["errors"] = true
+		}
+		if needsErrors(prm, cx.Objects[prm.Go]) {
 			imports["errors"] = true
 		}
 	}
@@ -152,6 +152,23 @@ func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error)
 			return fmt.Sprintf("var %s error", p.Go), nil
 		}
 		return fmt.Sprintf("%s := errors.New(\"go2lean: opaque error\")", p.Go), nil
+	case contract.ABIStruct, contract.ABIPtr:
+		raw, ok := cx.Objects[p.Go]
+		if !ok {
+			return "", fmt.Errorf("counterexample has no object for %s", p.Go)
+		}
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return "", fmt.Errorf("object %s: %w", p.Go, err)
+		}
+		if p.Kind == contract.ABIPtr && v == nil {
+			return fmt.Sprintf("var %s %s", p.Go, p.GoType), nil
+		}
+		expr, err := literal(p, v)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s := %s", p.Go, expr), nil
 	case contract.ABISlice:
 		n, err := strconv.Atoi(cx.Inputs[p.Go+"_len"])
 		if err != nil {
@@ -181,4 +198,96 @@ func paramDecl(p contract.ABIParam, cx *contract.Counterexample) (string, error)
 		return fmt.Sprintf("%s := append(make(%s, 0, %d), %s)", p.Go, p.GoType, c, strings.Join(elems, ", ")), nil
 	}
 	return "", fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
+}
+
+// literal renders the Go expression for a value of the ABI type p: a struct
+// is a JSON array of its fields in order, a pointer is null or its pointee.
+func literal(p contract.ABIParam, v any) (string, error) {
+	switch p.Kind {
+	case contract.ABIInt:
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("%s: expected an integer string, got %v", p.Go, v)
+		}
+		return fmt.Sprintf("%s(%s)", p.GoType, s), nil
+	case contract.ABIBool:
+		return fmt.Sprint(v), nil
+	case contract.ABIError:
+		if v == "nil" || v == nil {
+			return "error(nil)", nil
+		}
+		return "errors.New(\"go2lean: opaque error\")", nil
+	case contract.ABIStruct:
+		fields, ok := v.([]any)
+		if !ok || len(fields) != len(p.Fields) {
+			return "", fmt.Errorf("%s: expected %d fields, got %v", p.Go, len(p.Fields), v)
+		}
+		var parts []string
+		for i, f := range p.Fields {
+			e, err := literal(f, fields[i])
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, f.Go+": "+e)
+		}
+		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
+	case contract.ABIPtr:
+		if v == nil {
+			return "(" + p.GoType + ")(nil)", nil
+		}
+		inner, err := literal(*p.Pointee, v)
+		if err != nil {
+			return "", err
+		}
+		if p.Pointee.Kind == contract.ABIStruct {
+			return "&" + inner, nil
+		}
+		// A pointer to a scalar: allocate it in a closure.
+		return fmt.Sprintf("func() %s { v := %s; return &v }()", p.GoType, inner), nil
+	}
+	return "", fmt.Errorf("%s: cannot render kind %s", p.Go, p.Kind)
+}
+
+func collectImports(p contract.ABIParam, into map[string]bool) {
+	for _, ip := range []string{p.TypePkg, p.ElemPkg} {
+		if ip != "" {
+			into[ip] = true
+		}
+	}
+	for _, f := range p.Fields {
+		collectImports(f, into)
+	}
+	if p.Pointee != nil {
+		collectImports(*p.Pointee, into)
+	}
+}
+
+// needsErrors reports whether rendering the object needs the errors package
+// (a non-nil error somewhere inside a struct or pointee).
+func needsErrors(p contract.ABIParam, raw json.RawMessage) bool {
+	if raw == nil {
+		return false
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return false
+	}
+	var walk func(p contract.ABIParam, v any) bool
+	walk = func(p contract.ABIParam, v any) bool {
+		switch p.Kind {
+		case contract.ABIError:
+			return v != nil && v != "nil"
+		case contract.ABIStruct:
+			fields, _ := v.([]any)
+			for i, f := range p.Fields {
+				if i < len(fields) && walk(f, fields[i]) {
+					return true
+				}
+			}
+		case contract.ABIPtr:
+			return v != nil && p.Pointee != nil && walk(*p.Pointee, v)
+		}
+		return false
+	}
+	return walk(p, v)
 }

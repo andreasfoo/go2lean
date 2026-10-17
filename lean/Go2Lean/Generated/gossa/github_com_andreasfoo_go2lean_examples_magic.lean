@@ -8,7 +8,7 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 /-- func(tag int, payload []int) int (status: complete) -/
 def f0 : GoSSA.Func := {
-  name := "Decode", params := [0, 1], nvals := 7, entry := 0,
+  name := "Decode", params := [0, 1], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -22,8 +22,9 @@ def f0 : GoSSA.Func := {
     -- 2: if.done
     { params := [],
       instrs := #[.op 5 (.const (.int 64 0#64)) [],
-                 .op 6 (.load 64) [1, 5]],
-      term := .ret 6 }
+                 .op 6 .indexAddr [1, 5],
+                 .op 7 .loadPath [6]],
+      term := .ret 7 }
   ] }
 
 def prog : GoSSA.Prog := { funcs := #[f0], havocWidths := #[] }

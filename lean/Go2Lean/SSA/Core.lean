@@ -57,13 +57,17 @@ abbrev Var := Nat
 abbrev BlockId := Nat
 abbrev FuncId := Nat
 
+/-- The heap: objects by reference. Index 0 is reserved for `nil`. -/
+abbrev Heap (Val : Type) := Array Val
+
 /-- What a dialect must provide. `Val` is the universe of runtime values,
 `Op` the instruction set, `denote` the meaning of one instruction applied to
 its operands. `Oracle` is read-only ambient state the dialect may consult
 (for GoSSA: the contents of memory), fixed for a whole run so that two reads
 of the same location agree. `toBool` reads a branch condition. -/
 class Dialect (Op : Type) (Val Oracle : outParam Type) where
-  denote : Oracle → Op → List Val → Res Val
+  /-- One instruction: reads the oracle, may read and write the heap. -/
+  denote : Oracle → Heap Val → Op → List Val → Res (Val × Heap Val)
   toBool : Val → Option Bool
 
 inductive Instr (Op : Type) where
@@ -114,6 +118,8 @@ values were handed out, so a counterexample can report them. -/
 structure HState (Val : Type) where
   counts : Array Nat := #[]
   log : Array (Nat × Nat × Val) := #[]
+  /-- Objects allocated before or during the run; `heap[0]` is the nil slot. -/
+  heap : Heap Val := #[]
 
 namespace HState
 
@@ -141,8 +147,8 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
     List (Instr Op) → Env Val → HState Val → Res (Env Val) × HState Val
   | [], env, s => (.ok env, s)
   | .op dst o args :: rest, env, s =>
-    match Dialect.denote or o (args.map (env[·]!)) with
-    | .ok v => execInstrs or h rest (env.set! dst v) s
+    match Dialect.denote or s.heap o (args.map (env[·]!)) with
+    | .ok (v, heap) => execInstrs or h rest (env.set! dst v) { s with heap := heap }
     | .panic k => (.panic k, s)
     | .outOfFuel => (.outOfFuel, s)
   | .havoc dst site :: rest, env, s =>
@@ -201,9 +207,10 @@ def runFunc (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : L
 
 end
 
-/-- Entry point: run a function with fresh havoc state. -/
-def run (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val) (fuel : Nat) :
-    Res Val × HState Val :=
-  runFunc p or h fid args {} fuel
+/-- Entry point: run a function with fresh havoc state and an initial heap
+(the objects the arguments point to; `#[]` when there are none). -/
+def run (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val) (fuel : Nat)
+    (heap : Heap Val := #[]) : Res Val × HState Val :=
+  runFunc p or h fid args { heap := heap } fuel
 
 end Go2Lean.SSA

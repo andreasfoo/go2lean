@@ -34,7 +34,7 @@ def f0 : GoSSA.Func := {
 
 /-- func(xs []int) int (status: complete) -/
 def f1 : GoSSA.Func := {
-  name := "Last", params := [0], nvals := 15, entry := 0,
+  name := "Last", params := [0], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -60,13 +60,14 @@ def f1 : GoSSA.Func := {
     { params := [],
       instrs := #[.op 10 (.const (.int 64 1#64)) [],
                  .op 11 .add [1, 10],
-                 .op 12 (.load 64) [0, 11]],
-      term := .ret 12 },
+                 .op 12 .indexAddr [0, 11],
+                 .op 13 .loadPath [12]],
+      term := .ret 13 },
     -- 5: if.done
     { params := [],
-      instrs := #[.op 13 (.const (.int 64 1#64)) [],
-                 .op 14 .add [1, 13]],
-      term := .jump 3 [14] }
+      instrs := #[.op 14 (.const (.int 64 1#64)) [],
+                 .op 15 .add [1, 14]],
+      term := .jump 3 [15] }
   ] }
 
 /-- func(v int, lo int, hi int, ret int) bool (status: complete) -/
@@ -167,7 +168,7 @@ def f5 : GoSSA.Func := {
 
 /-- func(xs []int, ret int) bool (status: complete) -/
 def f6 : GoSSA.Func := {
-  name := "SpecLastIsLast", params := [0, 1], nvals := 11, entry := 0,
+  name := "SpecLastIsLast", params := [0, 1], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -184,9 +185,10 @@ def f6 : GoSSA.Func := {
       instrs := #[.op 6 .len [0],
                  .op 7 (.const (.int 64 1#64)) [],
                  .op 8 .sub [6, 7],
-                 .op 9 (.load 64) [0, 8],
-                 .op 10 .eq [1, 9]],
-      term := .ret 10 }
+                 .op 9 .indexAddr [0, 8],
+                 .op 10 .loadPath [9],
+                 .op 11 .eq [1, 10]],
+      term := .ret 11 }
   ] }
 
 def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[] }

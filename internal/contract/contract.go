@@ -131,10 +131,13 @@ type Counterexample struct {
 	Inputs   map[string]string `json:"inputs"`
 	// Memory holds the slice contents the model read, keyed by Go parameter
 	// name, so M3 can materialise the exact slices.
-	Memory            map[string][]string `json:"memory,omitempty"`
-	Havoc             []HavocValue        `json:"havoc,omitempty"`
-	ModelOutput       *ModelOutput        `json:"model_output,omitempty"`
-	RevalidatedInLean bool                `json:"revalidated_in_lean"`
+	Memory map[string][]string `json:"memory,omitempty"`
+	// Objects holds struct and pointer arguments as nested JSON (a struct is
+	// an array of its fields in order, a pointer is null or its pointee).
+	Objects           map[string]json.RawMessage `json:"objects,omitempty"`
+	Havoc             []HavocValue               `json:"havoc,omitempty"`
+	ModelOutput       *ModelOutput               `json:"model_output,omitempty"`
+	RevalidatedInLean bool                       `json:"revalidated_in_lean"`
 }
 
 // VerdictStatus is M3's judgement on a Counterexample.
@@ -227,10 +230,12 @@ type ABI struct {
 type ABIParamKind string
 
 const (
-	ABIInt   ABIParamKind = "int"   // one model value
-	ABIBool  ABIParamKind = "bool"  // one model value
-	ABIError ABIParamKind = "error" // one model value: nil or an opaque non-nil error
-	ABISlice ABIParamKind = "slice" // model: ref, off, len, cap (gossa) or ptr, len, cap (llvm)
+	ABIInt    ABIParamKind = "int"    // one model value
+	ABIBool   ABIParamKind = "bool"   // one model value
+	ABIError  ABIParamKind = "error"  // one model value: nil or an opaque non-nil error
+	ABISlice  ABIParamKind = "slice"  // model: ref, off, len, cap (gossa) or ptr, len, cap (llvm)
+	ABIStruct ABIParamKind = "struct" // one model value; Fields describe the components
+	ABIPtr    ABIParamKind = "ptr"    // one model value: nil or a pointer to Pointee
 )
 
 // ABIParam describes one Go parameter. GoType is spelled as Go source in
@@ -251,6 +256,9 @@ type ABIParam struct {
 	ElemPkg    string `json:"elem_pkg,omitempty"`
 	ElemWidth  int    `json:"elem_width,omitempty"`
 	ElemSigned bool   `json:"elem_signed,omitempty"`
+	// Struct fields (Go holds the field name) and the pointee of a pointer.
+	Fields  []ABIParam `json:"fields,omitempty"`
+	Pointee *ABIParam  `json:"pointee,omitempty"`
 }
 
 // ABIResult describes the Go result.

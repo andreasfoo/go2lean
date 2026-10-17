@@ -197,12 +197,24 @@ sign-extension).
   `IndexAddr`, `MakeSlice` become heap operations and aliasing is exact.
 - **C:** interfaces, closures, map iteration (as havoc).
 
-### 4.3b Stage B: the heap model (next milestone)
+### 4.3b Stage B: the heap model (built, first version)
 
 The smoke test (§9b) fixed the order: pointers and structs first, strings
-second. The design keeps the interpreter core unchanged and adds state to
-the dialect's oracle plus a small mutable heap threaded through `Val`-level
-operations:
+second. As built: `Dialect.denote` takes and returns the heap (`Array Val`,
+slot 0 reserved for nil), so the interpreter core only threads it; the
+dialect gains `ptr (ref, path)`, `structv`, `arr` values and the ops
+`alloc`, `loadPath`, `storePath`, `fieldAddr`, `indexAddr`, `field`,
+`mkStruct`, `makeSlice`. The generators materialise every slice argument and
+every pointee on the heap before the run, so stores are exact and aliasing
+is real; the oracle remains only for slices that come out of unmodelled
+calls. A spec runs on the post-run heap, so it observes mutations through
+its arguments (`examples/alias`: a deposit that overshoots its limit, a fill
+that misses the last element, nil dereferences — all confirmed by `go test`).
+Counterexamples carry struct and pointer arguments under `objects`; the
+harness materialises `&T{F: v, ...}` and `func() *int { v := ...; return &v }()`.
+Not yet: arrays, `append`/`copy`, methods (receivers), interfaces, strings.
+
+The original design notes, kept for the parts still to do:
 
 - **Heap.** `Heap := Ref → Obj` with `Obj := .array (elems : Array Val) |
   .struct (fields : Array Val) | .string (bytes : Array (BitVec 8))`. The
@@ -561,6 +573,7 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | the model put one `go2lean:spec` marker at the top of the file, separated by a blank line; go/ssa saw no doc comment and the specs became targets with `no_panic` properties | a function `Spec<X>...` whose parameters are X's parameters plus `ret` of X's result is taken as a spec for X regardless of the marker; the prompt shows the marker placement |
 | agent logs of a second package overwrote the first's | one log directory per package under `<workspace>/agent/` |
 | after adding multiple results and opaque `error` values, the sweep models 19 real functions (was 15); `(T, error)` alone does not unlock much because the same functions also take strings, pointers or structs | type coverage has to come as a package: the heap model (§4.3b) with structs and pointers, then strings with a modelled core of `strings`/`bytes`/`strconv` |
+| heap model (structs, pointers, slice writes) built; `examples/alias` confirmed end to end | re-sweep numbers below |
 
 ## 10. Milestones
 

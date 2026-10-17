@@ -119,6 +119,8 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/oob` | `Last` has an off-by-one | confirmed `index out of range`; `Clamp` certified |
 | `examples/divzero` | `Avg` divides by a caller-controlled count | confirmed `integer divide by zero`; `Ratio` (incl. `MinInt/-1`) certified |
 | `examples/magic` | `Decode` indexes an empty payload only when `tag == 0x5EC4E7` | confirmed — reachable because literals are mined into the value pool |
+| `examples/checked` | `Double` returns `(int, error)` and misses overflow for negative inputs | `SpecDoubleHalves` violated; confirmed |
+| `examples/alias` | `Deposit(*Account, int)` overshoots its limit and dereferences nil; `Fill([]int, int)` misses the last element | all confirmed; specs observe the mutated struct and slice |
 
 ## On a real module
 
@@ -134,16 +136,16 @@ strings, structs and multiple results are the blockers; see the design doc,
 time.Duration` never returns a negative duration; the engine found
 `seconds = MaxInt64`, and the real run returned `-1s`.
 
-## Supported Go subset (stage A)
+## Supported Go subset
 
-Integers of every width, bools, read-only slices of integers, `len`/`cap`,
-reslicing, loops and branches, calls between functions in the same package.
-Division by zero, out-of-range indexing and negative shift counts panic as in
-Go; `MinInt / -1` wraps. Stores to slice elements mark the function
-`partial`; unmodelled calls become havoc values; anything else (maps,
-strings, structs, pointers, closures, multiple results, goroutines) rejects the
-function with a reason in the model report. The heap model that lifts the
-read-only restriction is the next milestone.
+Integers of every width, bools, `error` values (nil-ness), structs and
+pointers to them, slices of integers with reads and writes, `make`, `new`,
+multiple results, `len`/`cap`, reslicing, loops and branches, calls between
+functions in the same package. Division by zero, out-of-range indexing,
+negative shift counts and nil dereferences panic as in Go; `MinInt / -1`
+wraps. Unmodelled calls become havoc values; anything else (maps, strings,
+interfaces, closures, methods, arrays, `append`, goroutines) rejects the
+function with a reason in the model report.
 
 ## Layout
 

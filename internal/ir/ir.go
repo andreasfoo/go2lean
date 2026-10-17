@@ -9,6 +9,7 @@ package ir
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 )
@@ -40,6 +41,27 @@ func (UnitVal) Lean() string { return ".unit" }
 type ErrVal struct{ NonNil bool }
 
 func (v ErrVal) Lean() string { return fmt.Sprintf("(.err %v)", v.NonNil) }
+
+// NilPtr is the nil pointer.
+type NilPtr struct{}
+
+func (NilPtr) Lean() string { return "(.ptr 0 [])" }
+
+// NilSlice is the nil slice.
+type NilSlice struct{}
+
+func (NilSlice) Lean() string { return "(.slice 0 0#64 0#64 0#64)" }
+
+// StructVal is a struct value from its field values.
+type StructVal struct{ Fields []Val }
+
+func (v StructVal) Lean() string {
+	parts := make([]string, len(v.Fields))
+	for i, f := range v.Fields {
+		parts[i] = f.Lean()
+	}
+	return "(.structv [" + strings.Join(parts, ", ") + "])"
+}
 
 // Op is a dialect instruction.
 type Op interface{ Lean() string }
@@ -81,6 +103,26 @@ func (l Load) Lean() string { return fmt.Sprintf("(.load %d)", l.Width) }
 type Extract struct{ I int }
 
 func (e Extract) Lean() string { return fmt.Sprintf("(.extract %d)", e.I) }
+
+// Alloc allocates a heap object initialised to Zero and yields a pointer.
+type Alloc struct{ Zero Val }
+
+func (a Alloc) Lean() string { return "(.alloc " + a.Zero.Lean() + ")" }
+
+// FieldAddr is &p.f_I for a pointer p.
+type FieldAddr struct{ I int }
+
+func (f FieldAddr) Lean() string { return fmt.Sprintf("(.fieldAddr %d)", f.I) }
+
+// Field is s.f_I for a struct value s.
+type Field struct{ I int }
+
+func (f Field) Lean() string { return fmt.Sprintf("(.field %d)", f.I) }
+
+// MakeSlice is make([]T, len, cap) with elements Zero.
+type MakeSlice struct{ Zero Val }
+
+func (m MakeSlice) Lean() string { return "(.makeSlice " + m.Zero.Lean() + ")" }
 
 // Havoc site kinds, encoded in Prog.HavocWidths: 0 is an opaque error, 1 a
 // bool, any other value the width of an integer.

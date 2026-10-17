@@ -61,47 +61,76 @@ func (o SearchOptions) withDefaults() SearchOptions {
 
 // searchResult is the JSON line Go2Lean.Search.run prints.
 type searchResult struct {
-	Found       bool                  `json:"found"`
-	Trial       int                   `json:"trial"`
-	Seed        int                   `json:"seed"`
-	Trials      int                   `json:"trials"`
-	OutOfFuel   int                   `json:"out_of_fuel"`
-	Moot        int                   `json:"moot"` // postcondition runs where the target panicked first
-	Exhaustive  bool                  `json:"exhaustive"`
-	Domain      int                   `json:"domain"`
-	Reason      string                `json:"reason"`
-	MaxLen      int                   `json:"max_len"`
-	HavocSites  int                   `json:"havoc_sites"`
-	Inputs      map[string]string     `json:"inputs"`
-	Memory      map[string][]string   `json:"memory"`
-	Havoc       []contract.HavocValue `json:"havoc"`
-	ModelOutput *contract.ModelOutput `json:"model_output"`
+	Found       bool                       `json:"found"`
+	Trial       int                        `json:"trial"`
+	Seed        int                        `json:"seed"`
+	Trials      int                        `json:"trials"`
+	OutOfFuel   int                        `json:"out_of_fuel"`
+	Moot        int                        `json:"moot"` // postcondition runs where the target panicked first
+	Exhaustive  bool                       `json:"exhaustive"`
+	Domain      int                        `json:"domain"`
+	Reason      string                     `json:"reason"`
+	MaxLen      int                        `json:"max_len"`
+	HavocSites  int                        `json:"havoc_sites"`
+	Inputs      map[string]string          `json:"inputs"`
+	Memory      map[string][]string        `json:"memory"`
+	Objects     map[string]json.RawMessage `json:"objects"`
+	Havoc       []contract.HavocValue      `json:"havoc"`
+	ModelOutput *contract.ModelOutput      `json:"model_output"`
 }
 
 // gens renders the Search.Gen list for a function's parameters.
 func gens(abi *contract.ABI, maxLen int) (string, error) {
 	var parts []string
 	for _, p := range abi.Params {
-		switch p.Kind {
-		case contract.ABIInt:
-			w, signed, ok := p.IntInfo()
-			if !ok {
-				return "", fmt.Errorf("parameter %s: unsupported int type %s", p.Go, p.GoType)
-			}
-			parts = append(parts, fmt.Sprintf("(.int %q %d %v)", p.Go, w, signed))
-		case contract.ABIBool:
-			parts = append(parts, fmt.Sprintf("(.bool %q)", p.Go))
-		case contract.ABIError:
-			parts = append(parts, fmt.Sprintf("(.err %q)", p.Go))
-		case contract.ABISlice:
-			w, signed, ok := p.ElemInfo()
-			if !ok {
-				return "", fmt.Errorf("parameter %s: unsupported element type %s", p.Go, p.Elem)
-			}
-			parts = append(parts, fmt.Sprintf("(.slice %q %d %v %d)", p.Go, w, signed, maxLen))
+		g, err := gen(p, maxLen)
+		if err != nil {
+			return "", err
 		}
+		parts = append(parts, g)
 	}
 	return "[" + strings.Join(parts, ", ") + "]", nil
+}
+
+func gen(p contract.ABIParam, maxLen int) (string, error) {
+	switch p.Kind {
+	case contract.ABIInt:
+		w, signed, ok := p.IntInfo()
+		if !ok {
+			return "", fmt.Errorf("parameter %s: unsupported int type %s", p.Go, p.GoType)
+		}
+		return fmt.Sprintf("(.int %q %d %v)", p.Go, w, signed), nil
+	case contract.ABIBool:
+		return fmt.Sprintf("(.bool %q)", p.Go), nil
+	case contract.ABIError:
+		return fmt.Sprintf("(.err %q)", p.Go), nil
+	case contract.ABISlice:
+		w, signed, ok := p.ElemInfo()
+		if !ok {
+			return "", fmt.Errorf("parameter %s: unsupported element type %s", p.Go, p.Elem)
+		}
+		return fmt.Sprintf("(.slice %q %d %v %d)", p.Go, w, signed, maxLen), nil
+	case contract.ABIStruct:
+		var fs []string
+		for _, f := range p.Fields {
+			g, err := gen(f, maxLen)
+			if err != nil {
+				return "", err
+			}
+			fs = append(fs, g)
+		}
+		return fmt.Sprintf("(.structv %q [%s])", p.Go, strings.Join(fs, ", ")), nil
+	case contract.ABIPtr:
+		if p.Pointee == nil {
+			return "", fmt.Errorf("parameter %s: pointer without pointee", p.Go)
+		}
+		g, err := gen(*p.Pointee, maxLen)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("(.ptr %q %s)", p.Go, g), nil
+	}
+	return "", fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
 }
 
 // Hunt runs the selected engines on one property. It returns the
@@ -242,6 +271,7 @@ func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, 
 		Fuel:        opts.Fuel,
 		Inputs:      res.Inputs,
 		Memory:      res.Memory,
+		Objects:     res.Objects,
 		Havoc:       res.Havoc,
 		ModelOutput: res.ModelOutput,
 		// The reported values are the ones the model actually executed on.

@@ -110,7 +110,7 @@ func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
 	// Pass 2: bodies.
 	for _, f := range fns {
 		out := p.Funcs[st.ids[f]]
-		t := &fnState{prog: st, f: f, out: out, vars: map[ssa.Value]ir.Var{}, blockID: map[*ssa.BasicBlock]int{}, addrs: map[ssa.Value]addr{}}
+		t := &fnState{prog: st, f: f, out: out, vars: map[ssa.Value]ir.Var{}, blockID: map[*ssa.BasicBlock]int{}}
 		if err := t.translate(); err != nil {
 			rejectStub(out, err)
 		}
@@ -197,11 +197,6 @@ func rejectStub(out *ir.Func, err error) {
 	out.Blocks = []ir.Block{{Name: "rejected", Term: ir.Term{Kind: ir.TermPanic, Panic: contract.PanicOther}}}
 }
 
-type addr struct {
-	slice, idx ir.Var
-	width      int
-}
-
 type fnState struct {
 	prog    *progState
 	f       *ssa.Function
@@ -209,7 +204,6 @@ type fnState struct {
 	vars    map[ssa.Value]ir.Var
 	nvals   int
 	blockID map[*ssa.BasicBlock]int
-	addrs   map[ssa.Value]addr
 	cur     *ir.Block
 	partial bool
 }
@@ -319,8 +313,13 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 
 func constVal(c *ssa.Const) (ir.Val, error) {
 	if c.Value == nil {
-		if isError(c.Type()) {
+		switch {
+		case isError(c.Type()):
 			return ir.ErrVal{NonNil: false}, nil
+		case isPointer(c.Type()):
+			return ir.NilPtr{}, nil
+		case isSlice(c.Type()):
+			return ir.NilSlice{}, nil
 		}
 		return nil, fmt.Errorf("nil constant of type %s", c.Type())
 	}
@@ -398,7 +397,7 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		return fmt.Errorf("unsupported binary operator %s", x.Op)
 	}
 	eqOp := x.Op == token.EQL || x.Op == token.NEQ
-	if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()))) {
+	if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
 	a, err := t.val(x.X)
@@ -479,8 +478,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.ChangeType:
 		return t.conv(x, x.X)
 	case *ssa.IndexAddr:
-		w, _, ok := sliceElem(x.X.Type())
-		if !ok {
+		if !isSlice(x.X.Type()) {
 			return fmt.Errorf("index into non-slice type %s", x.X.Type())
 		}
 		s, err := t.val(x.X)
@@ -491,7 +489,43 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if err != nil {
 			return err
 		}
-		t.addrs[x] = addr{slice: s, idx: i, width: w}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("indexAddr"), Args: []ir.Var{s, i}})
+		return nil
+	case *ssa.Alloc:
+		zero, ok := zeroVal(x.Type().(*types.Pointer).Elem())
+		if !ok {
+			return fmt.Errorf("alloc of unsupported type %s", x.Type().(*types.Pointer).Elem())
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Alloc{Zero: zero}})
+		return nil
+	case *ssa.FieldAddr:
+		p, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.FieldAddr{I: x.Field}, Args: []ir.Var{p}})
+		return nil
+	case *ssa.Field:
+		s, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Field{I: x.Field}, Args: []ir.Var{s}})
+		return nil
+	case *ssa.MakeSlice:
+		zero, ok := zeroVal(x.Type().Underlying().(*types.Slice).Elem())
+		if !ok {
+			return fmt.Errorf("make of unsupported slice type %s", x.Type())
+		}
+		l, err := t.val(x.Len)
+		if err != nil {
+			return err
+		}
+		c, err := t.val(x.Cap)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.MakeSlice{Zero: zero}, Args: []ir.Var{l, c}})
 		return nil
 	case *ssa.Slice:
 		return t.slice(x)
@@ -503,11 +537,20 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Extract{I: x.Index}, Args: []ir.Var{tup}})
 		return nil
 	case *ssa.Store:
-		if _, ok := t.addrs[x.Addr]; ok {
-			t.issue("store to slice element %s ignored (read-only slice model)", x.Addr.Name())
+		if _, isGlobal := x.Addr.(*ssa.Global); isGlobal {
+			t.issue("store to global %s ignored", x.Addr.Name())
 			return nil
 		}
-		return fmt.Errorf("store through %s not supported", x.Addr.Name())
+		p, err := t.val(x.Addr)
+		if err != nil {
+			return err
+		}
+		v, err := t.val(x.Val)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{p, v}})
+		return nil
 	case *ssa.Call:
 		return t.call(x)
 	case *ssa.Return:
@@ -568,12 +611,16 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
-	case token.MUL: // load
-		if a, ok := t.addrs[x.X]; ok {
-			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Load{Width: a.width}, Args: []ir.Var{a.slice, a.idx}})
-			return nil
+	case token.MUL: // load through a pointer
+		if _, isGlobal := x.X.(*ssa.Global); isGlobal {
+			return t.havoc(x, "load "+x.X.Name(), "unmodeled-load", "")
 		}
-		return t.havoc(x, "load "+x.X.Name(), "unmodeled-load", "")
+		p, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{p}})
+		return nil
 	case token.SUB, token.XOR:
 		if _, _, ok := intWidth(x.X.Type()); !ok {
 			return fmt.Errorf("unary %s on %s", x.Op, x.X.Type())
@@ -728,11 +775,72 @@ var errorType = types.Universe.Lookup("error").Type()
 
 func isError(t types.Type) bool { return types.Identical(t, errorType) }
 
-// resultOK says whether a result type can be returned by a modelled function.
-func resultOK(t types.Type) bool {
-	_, _, isInt := intWidth(t)
-	return isInt || isBool(t) || isError(t)
+func isPointer(t types.Type) bool {
+	_, ok := t.Underlying().(*types.Pointer)
+	return ok
 }
+
+func isSlice(t types.Type) bool {
+	_, ok := t.Underlying().(*types.Slice)
+	return ok
+}
+
+// valueOK says whether values of type t are representable in the model:
+// integers, bools, errors, pointers to and structs of such values, and
+// slices of integers.
+func valueOK(t types.Type) bool {
+	if _, _, ok := intWidth(t); ok || isBool(t) || isError(t) {
+		return true
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Pointer:
+		return valueOK(u.Elem())
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if !valueOK(u.Field(i).Type()) {
+				return false
+			}
+		}
+		return true
+	case *types.Slice:
+		_, _, ok := intWidth(u.Elem())
+		return ok
+	}
+	return false
+}
+
+// zeroVal is the model's zero value of t.
+func zeroVal(t types.Type) (ir.Val, bool) {
+	if w, _, ok := intWidth(t); ok {
+		return ir.IntVal{Width: w, Bits: "0"}, true
+	}
+	if isBool(t) {
+		return ir.BoolVal(false), true
+	}
+	if isError(t) {
+		return ir.ErrVal{}, true
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Pointer:
+		return ir.NilPtr{}, true
+	case *types.Slice:
+		return ir.NilSlice{}, true
+	case *types.Struct:
+		var fields []ir.Val
+		for i := 0; i < u.NumFields(); i++ {
+			z, ok := zeroVal(u.Field(i).Type())
+			if !ok {
+				return nil, false
+			}
+			fields = append(fields, z)
+		}
+		return ir.StructVal{Fields: fields}, true
+	}
+	return nil, false
+}
+
+// resultOK says whether a result type can be returned by a modelled function.
+func resultOK(t types.Type) bool { return valueOK(t) }
 
 func sliceElem(t types.Type) (w int, signed bool, ok bool) {
 	s, isSlice := t.Underlying().(*types.Slice)
@@ -768,28 +876,11 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend}
 	pkg := f.Pkg.Pkg
 	for _, p := range f.Params {
-		name := p.Name()
-		src, ipath := spell(pkg, p.Type())
-		switch {
-		case isBool(p.Type()):
-			abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool})
-		case isError(p.Type()):
-			abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: "error", Model: []string{name}, Kind: contract.ABIError})
-		default:
-			if w, signed, ok := intWidth(p.Type()); ok {
-				abi.Params = append(abi.Params, contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt})
-			} else if ew, esigned, ok := sliceElem(p.Type()); ok {
-				elem := p.Type().Underlying().(*types.Slice).Elem()
-				esrc, epath := spell(pkg, elem)
-				abi.Params = append(abi.Params, contract.ABIParam{
-					Go: name, GoType: src, TypePkg: ipath, Kind: contract.ABISlice,
-					Model: []string{name + "_ref", name + "_off", name + "_len", name + "_cap"},
-					Elem:  esrc, ElemPkg: epath, ElemWidth: ew, ElemSigned: esigned,
-				})
-			} else {
-				return nil, fmt.Errorf("parameter %s has unsupported type %s", name, p.Type())
-			}
+		ap, err := abiParam(pkg, p.Name(), p.Type())
+		if err != nil {
+			return nil, fmt.Errorf("parameter %s has unsupported type %s", p.Name(), p.Type())
 		}
+		abi.Params = append(abi.Params, ap)
 	}
 	res := f.Signature.Results()
 	for i := 0; i < res.Len(); i++ {
@@ -802,6 +893,51 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		abi.Results = append(abi.Results, r)
 	}
 	return abi, nil
+}
+
+// abiParam describes one value of type t named name, recursing into
+// pointers and structs.
+func abiParam(pkg *types.Package, name string, t types.Type) (contract.ABIParam, error) {
+	src, ipath := spell(pkg, t)
+	switch {
+	case isBool(t):
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
+	case isError(t):
+		return contract.ABIParam{Go: name, GoType: "error", Model: []string{name}, Kind: contract.ABIError}, nil
+	}
+	if w, signed, ok := intWidth(t); ok {
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt}, nil
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Slice:
+		ew, esigned, ok := intWidth(u.Elem())
+		if !ok {
+			return contract.ABIParam{}, fmt.Errorf("slice of %s", u.Elem())
+		}
+		esrc, epath := spell(pkg, u.Elem())
+		return contract.ABIParam{
+			Go: name, GoType: src, TypePkg: ipath, Kind: contract.ABISlice,
+			Model: []string{name + "_ref", name + "_off", name + "_len", name + "_cap"},
+			Elem:  esrc, ElemPkg: epath, ElemWidth: ew, ElemSigned: esigned,
+		}, nil
+	case *types.Struct:
+		ap := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct}
+		for i := 0; i < u.NumFields(); i++ {
+			f, err := abiParam(pkg, u.Field(i).Name(), u.Field(i).Type())
+			if err != nil {
+				return contract.ABIParam{}, err
+			}
+			ap.Fields = append(ap.Fields, f)
+		}
+		return ap, nil
+	case *types.Pointer:
+		pointee, err := abiParam(pkg, name, u.Elem())
+		if err != nil {
+			return contract.ABIParam{}, err
+		}
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIPtr, Pointee: &pointee}, nil
+	}
+	return contract.ABIParam{}, fmt.Errorf("unsupported type %s", t)
 }
 
 // specTarget names the function f is a spec for. A `go2lean:spec X` doc
