@@ -205,7 +205,12 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
           | (.ok v, s) =>
             let env := env.set! dst v
             runBlock p or h fn next (enter fn next env nargs) s fuel
-          | (.panic k, s) => (.panic k, s)
+          | (.panic k, s) =>
+            -- A call into a rejected function's stub is the most common
+            -- way to get stuck; name it when nothing deeper was recorded.
+            let s := if k.isStuck && s.stuck.isNone then
+              { s with stuck := some s!"call {(p.funcs[f]?.map (·.name)).getD (toString f)}" } else s
+            (.panic k, s)
           | (.outOfFuel, s) => (.outOfFuel, s)
 
 /-- Run function `fid` on `args`. -/

@@ -1235,6 +1235,14 @@ func isOpaqueType(t types.Type) bool {
 	return false
 }
 
+// isForeignUnexported says whether t is an unexported named type of
+// another package (gin's `errorMsgs`): a test in the target package cannot
+// name it, so values of it are opaque parameters with the zero value.
+func isForeignUnexported(pkg *types.Package, t types.Type) bool {
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg() != pkg && !n.Obj().Exported()
+}
+
 // isForeignOpaqueStruct says whether t is a struct of another package with
 // no exported field (sync.Mutex, strings.Builder): a test cannot build one
 // with contents, so it is an opaque parameter with the zero value.
@@ -1468,7 +1476,7 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		}
 	}
 	switch {
-	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t):
+	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t) || isForeignUnexported(pkg, t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
 	case isBool(t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
