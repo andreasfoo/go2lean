@@ -2,19 +2,23 @@
 
 Find bugs in Go functions by translating them into an executable semantic
 model in Lean 4, searching that model for counterexamples, and verifying every
-counterexample with the real Go toolchain.
+counterexample with the real Go toolchain. An LLM agent proposes the
+properties; Lean finds the inputs; `go test` is the judge.
 
 ```
-Go source ─► go/ssa ─► Lean SSA model ─► counterexample ─► go test ─► verdict
-  (M1 programmatic)         (M2 constraint / agent)          (M3 poc)
+Go source ─► go/ssa ─► Lean SSA model ─► counterexample ─► go test ─► verdict + PoC
+            M1 programmatic        M2 constraint engines / agent        M3 poc
 ```
 
-The design is in [docs/design.md](docs/design.md).
+Status: working proof of concept. Four ground-truth packages run end to end
+in 2–5 s each; every planted bug is confirmed by a real Go run and every
+correct function gets a bounded certificate or "no counterexample". The design
+and roadmap are in [docs/design.md](docs/design.md).
 
 ## Quick start
 
-Requirements: Go 1.26, [elan](https://github.com/leanprover/elan) (the
-toolchain in `lean/lean-toolchain` is installed on first `lake build`).
+Requirements: Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
+toolchain pinned in `lean/lean-toolchain` is fetched on the first build.
 
 ```sh
 go run ./cmd/go2lean run ./examples/overflow
@@ -26,38 +30,53 @@ compiled github.com/andreasfoo/go2lean/examples/overflow -> lean/Go2Lean/Generat
   SpecSum      complete  func(xs []int, ret int) bool  [spec for Sum]
   Sum          complete  func(xs []int) int
 == M2 properties
-  p_sum_nopanic                no_panic       Sum does not panic on any input
-  p_sum_specsum                postcondition  Sum satisfies the spec-in-Go oracle SpecSum
+  p_overflow_sum_nopanic       no_panic       Sum does not panic on any input
+  p_overflow_sum_specsum       postcondition  Sum satisfies the spec-in-Go oracle SpecSum
 == M2 hunt
-  p_sum_nopanic                no counterexample in 2000 trials (0 out of fuel)
-  p_sum_specsum                found at trial 47 -> cx_sum_specsum_s42
-      inputs map[xs_cap:5 xs_len:4 ...] memory map[xs:[1 9223372036854775806 9223372036854775807 0]] model ok -2
+  p_overflow_sum_nopanic       random: none in 2000 trials; exhaustive: holds on 9724 inputs (recorded as exhausted)
+  p_overflow_sum_specsum       random: found at trial 12 -> cx_overflow_sum_specsum_random_s42
+      inputs map[xs_len:5 ...] memory map[xs:[1 0 0 0 9223372036854775807]] model ok -9223372036854775808
 == M3 poc
-  cx_sum_specsum_s42           confirmed    real: map[ret:-2]
-      PoC: out/poc/cx_sum_specsum_s42
+  cx_overflow_sum_specsum_random_s42  confirmed    real: map[ret:-9223372036854775808]
+      PoC: out/poc/cx_overflow_sum_specsum_random_s42
 ```
 
 The PoC directory holds a ready-to-run Go test and a README with the
-reproduction command. Records exchanged between the modules are JSON files
-under `out/` (see `internal/contract`).
+reproduction command. Everything the modules exchange is a JSON record under
+`out/` (types in `internal/contract`).
 
-## Writing properties
+## How it works
 
-Two property shapes are templated automatically:
+**M1 — programmatic.** `golang.org/x/tools/go/ssa` lowers the package; the
+frontend turns it into a frontend-independent IR (blocks with parameters,
+one dialect op per instruction) and prints it as a Lean term over the `GoSSA`
+dialect. The Lean side is a small SSA core in the spirit of
+[lean-mlir](https://github.com/opencompl/lean-mlir): a dialect-parametric
+program representation with a fuel-bounded, total interpreter. Slice contents
+come from a read-only memory oracle fixed per run; values the frontend cannot
+model are explicit havoc inputs. The model may over-approximate; it never
+silently guesses. Lean core only — no Mathlib.
 
-- `no_panic` for every modelled function;
-- `postcondition` for every **spec-in-Go** function: a Go function with a
-  `// go2lean:spec Target` doc comment and signature
-  `func Spec(<Target params>..., ret <Target result>) bool`. It is compiled
-  into the model with the same pipeline as the target, so the Lean property
-  and the Go oracle agree by construction.
+**M2 — constraint engines and agent.** Two property shapes are templated:
+`no_panic` for every modelled function, and `postcondition` for every
+**spec-in-Go** function — a Go function with a `// go2lean:spec Target` doc
+comment and signature `func Spec(<Target params>..., ret <result>) bool`,
+compiled into the model with the same pipeline as the target so the Lean
+property and the Go oracle agree by construction. Two engines run per
+property: seeded random search (per-trial value profiles, plus the target's
+own integer literals so magic-constant branches are reachable), then
+exhaustive enumeration of a small domain, which records an `exhausted`
+certificate when it passes. The agent sits on top: it reads the source and
+the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
+the ones the frontend rejects, runs the pipeline, and writes a report from
+the verdicts.
 
-Two engines run on each property: seeded random search (value profiles plus
-the target's own integer literals), then, if nothing is found, exhaustive
-enumeration of a small domain, which records an `exhausted` proof result for
-the property.
-
-See `examples/` for the ground-truth packages (`overflow`, `oob`, `divzero`, `magic`).
+**M3 — poc.** A counterexample becomes a Go test in the target package. The
+test never fails by itself; it prints what happened and the `poc` package
+judges: `confirmed` (the real run violates the oracle the way the property
+says), `spurious` (it does not — with a diagnosis of what the model got
+wrong), or `inconclusive`. This is the only source of trust: a bug is
+reported only with a verdict from here.
 
 ## The agent
 
@@ -67,12 +86,11 @@ go run ./cmd/go2lean agent ./examples/oob
 go run ./cmd/go2lean agent -llm mock:internal/agent/testdata/oob ./examples/oob   # offline replay
 ```
 
-The agent reads the package source and the model report, writes spec-in-Go
-functions into `<pkg>/go2lean_specs_test.go`, repairs any the frontend rejects,
-runs the pipeline, and turns the verdicts into `out/agent/report.md`
-(optionally with revised specs, which trigger one more pass). Every prompt and
-response is logged under `out/agent/`. The LLM is behind an interface; `mock:`
-replays scripted responses for tests and offline runs.
+The LLM (Claude Opus 5.5 through the Anthropic SDK) is behind a one-method
+interface; `mock:<dir>` replays scripted responses (`round-1.md`,
+`round-2.md`, …) for tests and offline runs. Every prompt and response is
+written to `out/agent/`, and the report lands in `out/agent/report.md`. A
+revised spec file in the report round triggers one more pass.
 
 ## Commands
 
@@ -82,30 +100,55 @@ go2lean props   [-workspace out] -package <path>  template properties from the m
 go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id
-go2lean run     [-workspace out] <package>        all of the above
+go2lean run     [-workspace out] <package>        compile, props, hunt, poc
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-repairs n] [-report] <package>
 ```
 
+## Ground truth
+
+| package | planted bug | result |
+|---|---|---|
+| `examples/overflow` | `Sum` wraps on large inputs | `SpecSum` violated; confirmed with `ret = MinInt64` |
+| `examples/oob` | `Last` has an off-by-one | confirmed `index out of range`; `Clamp` certified |
+| `examples/divzero` | `Avg` divides by a caller-controlled count | confirmed `integer divide by zero`; `Ratio` (incl. `MinInt/-1`) certified |
+| `examples/magic` | `Decode` indexes an empty payload only when `tag == 0x5EC4E7` | confirmed — reachable because literals are mined into the value pool |
+
 ## Supported Go subset (stage A)
 
-Integers of every width, bools, read-only slices of integers, calls between
-functions in the same package, `len`/`cap`, reslicing. Loads of slice elements
-read a per-run memory oracle; stores mark the function `partial`; unmodelled
-calls become havoc values. Anything else rejects the function with a reason in
-`out/models/gossa/report.json`.
+Integers of every width, bools, read-only slices of integers, `len`/`cap`,
+reslicing, loops and branches, calls between functions in the same package.
+Division by zero, out-of-range indexing and negative shift counts panic as in
+Go; `MinInt / -1` wraps. Stores to slice elements mark the function
+`partial`; unmodelled calls become havoc values; anything else (maps,
+strings, structs, pointers, closures, multiple results, goroutines) rejects the
+function with a reason in the model report. The heap model that lifts the
+read-only restriction is the next milestone.
 
 ## Layout
 
 ```
 cmd/go2lean/           CLI
-internal/contract/     shared JSON records and workspace
+internal/contract/     shared JSON records and the workspace layout
 internal/frontend/     M1 frontends (go/ssa now; LLVM via TinyGo planned)
-internal/ir, ssaout/   program representation and Lean printer
-internal/constraint/   M2 core: property templates and engines
+internal/ir, ssaout/   program representation, validation, Lean printer
+internal/constraint/   M2 core: property templates and engine runners
+internal/agent/        M2 agent: LLM interface, Claude, mock, prompts, loop
 internal/poc/          M3: harness generation, execution, verdicts
-lean/                  Lean 4 project: SSA core, GoSSA dialect, search engine
+internal/pipeline/     the steps the CLI and the agent share
+lean/                  Lean 4 project: SSA core, GoSSA dialect, search engines
 examples/              ground-truth packages
+docs/design.md         design and roadmap
 ```
+
+## Roadmap
+
+1. GoSSA heap model (stage B): writes through slices, `make`, arrays, structs.
+2. LLVM frontend via TinyGo, built on lean-mlir's LLVM dialect semantics, as a
+   cross-check and the entry point for other languages.
+3. Proof engines for properties the random and exhaustive engines cannot
+   settle: `bv_omega` for linear functions, `bv_decide` conditionally.
+4. Agent: ranking by expected yield, `ModelGap` feedback into the frontend,
+   generalising confirmed bugs across a package.
 
 ## License
 
