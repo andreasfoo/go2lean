@@ -619,6 +619,8 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | strings as heap byte arrays with a hand-written `strings`/`strconv` core and literal-driven generation | 464 complete + 35 partial |
 | recursive named structs through an ABI type table with depth-budgeted generation (the earlier nil cut-off was wrong: Lean models linked structures fine; only the generator needed a budget) | `examples/list` confirmed |
 | unmodelled results of string type havoc'd, other unsupported results take their zero/opaque value as a recorded assumption; arrays; opaque interfaces and maps (covers the `...any` varargs behind every `fmt.Sprintf`) | **468 complete + 389 partial = 857 of 7498 (11.4%)**; remaining signature blockers are interfaces, maps, funcs and `context.Context` |
+| first full pipeline over the 111 packages with a model (855 properties): 53 confirmed, 146 spurious, 30 inconclusive | 43 of the confirmed were nil receivers/arguments; 112 of the spurious were stuck models reported as panics; the inconclusive were harness compile errors (name clashes, unused imports, internal/unexported types) |
+| after: stuck is moot, nil inputs opt-in, harness fixes, `strings.Split`/`Fields`/`Join`/`Repeat`/`Trim*`/`ToLower`/`ToUpper`/`ReplaceAll`/`IndexByte`/`LastIndex`/`Count`/`EqualFold` modelled, unmodelled pointer results point at fresh zero objects, one `go test` per package | **11 confirmed, 26 spurious, 0 inconclusive**. Confirmed: seven `truncate(s, n)` helpers that slice with a negative `n`, two `strings.Repeat` calls with a negative count, `blobPath` slicing a 3-byte hash to 4, and `budgetDuration` wrapping to a negative duration. The remaining spurious cases are unmodelled calls (see the attribution in the run log) |
 
 ## 10. Milestones
 

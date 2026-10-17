@@ -132,11 +132,13 @@ go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model Mi
     -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
 ```
 
-On tingly-box the stage-A subset models 15 of 3783 functions (pointers,
-strings, structs and multiple results are the blockers; see the design doc,
-§9b). On one of them the agent proposed that `budgetDuration(seconds int)
-time.Duration` never returns a negative duration; the engine found
-`seconds = MaxInt64`, and the real run returned `-1s`.
+On tingly-box (7498 functions and methods) the model covers 857; a full
+pass over the 111 packages with a model takes about an hour and ends with
+11 confirmed findings and 26 spurious counterexamples (see the design doc,
+§9b): seven `truncate(s, n)` helpers that panic on a negative `n`, two
+`strings.Repeat` calls with a negative count, a `blobPath` that slices a
+short hash, and `budgetDuration(seconds int) time.Duration` wrapping to
+`-1s` for `seconds = MaxInt64` — the last one from a spec the agent wrote.
 
 ## Supported Go subset
 
