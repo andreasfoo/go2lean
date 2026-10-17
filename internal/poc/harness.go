@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"math/big"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -165,7 +166,7 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 	// qualifier the generated declarations mention.
 	decls := strings.Join(d.Decls, "\n") + "\n" + strings.Join(d.RetTypes, " ")
 	for ip := range imports {
-		if strings.Contains(decls, path.Base(ip)+".") {
+		if usesPackage(decls, path.Base(ip)) {
 			d.Imports = append(d.Imports, ip)
 		}
 	}
@@ -414,6 +415,37 @@ func canImport(from, pkg string) bool {
 		return false
 	}
 	return from == root || strings.HasPrefix(from, root+"/")
+}
+
+// usesPackage says whether the generated code refers to the package by
+// its qualifier: `io.Reader`, not the "io." inside a string literal or
+// inside another identifier (`ratio.`).
+func usesPackage(code, qualifier string) bool {
+	return packageRef(qualifier).MatchString(stripStrings(code))
+}
+
+func packageRef(qualifier string) *regexp.Regexp {
+	return regexp.MustCompile(`(^|[^\w.])` + regexp.QuoteMeta(qualifier) + `\.`)
+}
+
+// stripStrings blanks the contents of Go string literals (with escapes).
+func stripStrings(code string) string {
+	var b strings.Builder
+	inStr := false
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		switch {
+		case inStr && c == '\\':
+			i++ // skip the escaped byte
+		case c == '"':
+			inStr = !inStr
+			b.WriteByte(c)
+		case inStr:
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // isZeroJSON says whether the model's value is the Go zero value of p.

@@ -99,3 +99,21 @@ func TestCanImport(t *testing.T) {
 		}
 	}
 }
+
+func TestUsesPackage(t *testing.T) {
+	cases := []struct {
+		code, pkg string
+		ok        bool
+	}{
+		{`var r io.Reader`, "io", true},
+		{`s := string("ratio.x io.")`, "io", false},
+		{`x := ratio.New()`, "io", false},
+		{`x := []http.Header{}`, "http", true},
+		{`s := string("a\"io.b")`, "io", false},
+	}
+	for _, c := range cases {
+		if got := usesPackage(c.code, c.pkg); got != c.ok {
+			t.Errorf("usesPackage(%q, %q) = %v, want %v", c.code, c.pkg, got, c.ok)
+		}
+	}
+}
