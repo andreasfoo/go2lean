@@ -605,7 +605,11 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | the model put one `go2lean:spec` marker at the top of the file, separated by a blank line; go/ssa saw no doc comment and the specs became targets with `no_panic` properties | a function `Spec<X>...` whose parameters are X's parameters plus `ret` of X's result is taken as a spec for X regardless of the marker; the prompt shows the marker placement |
 | agent logs of a second package overwrote the first's | one log directory per package under `<workspace>/agent/` |
 | after adding multiple results and opaque `error` values, the sweep models 19 real functions (was 15); `(T, error)` alone does not unlock much because the same functions also take strings, pointers or structs | type coverage has to come as a package: the heap model (§4.3b) with structs and pointers, then strings with a modelled core of `strings`/`bytes`/`strconv` |
-| heap model (structs, pointers, slice writes) built; `examples/alias` confirmed end to end | re-sweep numbers below |
+| heap model (structs, pointers, slice writes) built; `examples/alias` confirmed end to end | 65 complete + 9 partial |
+| methods of named types enumerated (the denominator becomes 7498 functions) | 89 complete + 11 partial |
+| strings as heap byte arrays with a hand-written `strings`/`strconv` core and literal-driven generation | 464 complete + 35 partial |
+| recursive named structs through an ABI type table with depth-budgeted generation (the earlier nil cut-off was wrong: Lean models linked structures fine; only the generator needed a budget) | `examples/list` confirmed |
+| unmodelled results of string type havoc'd, other unsupported results take their zero/opaque value as a recorded assumption; arrays; opaque interfaces and maps (covers the `...any` varargs behind every `fmt.Sprintf`) | **468 complete + 389 partial = 857 of 7498 (11.4%)**; remaining signature blockers are interfaces, maps, funcs and `context.Context` |
 
 ## 10. Milestones
 

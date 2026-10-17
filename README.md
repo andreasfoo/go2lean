@@ -138,14 +138,18 @@ time.Duration` never returns a negative duration; the engine found
 
 ## Supported Go subset
 
-Integers of every width, bools, `error` values (nil-ness), structs and
-pointers to them, slices of integers with reads and writes, `make`, `new`,
-multiple results, `len`/`cap`, reslicing, loops and branches, calls between
-functions in the same package. Division by zero, out-of-range indexing,
-negative shift counts and nil dereferences panic as in Go; `MinInt / -1`
-wraps. Unmodelled calls become havoc values; anything else (maps, strings,
-interfaces, closures, methods, arrays, `append`, goroutines) rejects the
-function with a reason in the model report.
+Integers of every width, bools, `error` values (nil-ness), strings (with
+`strings.HasPrefix/HasSuffix/Contains/Index/TrimSpace/TrimPrefix/TrimSuffix`
+and `strconv.Atoi/Itoa` modelled), structs, pointers, recursive types,
+arrays, slices with reads and writes, `make`, `new`, multiple results,
+methods, `len`/`cap`, reslicing, loops and branches, calls between functions
+in the same package. Division by zero, out-of-range indexing, negative shift
+counts and nil dereferences panic as in Go; `MinInt / -1` wraps. Unmodelled
+calls become havoc values (or a recorded zero/opaque assumption for types
+the model cannot draw); interfaces and maps are opaque. Closures, map
+operations, type assertions, `append`, `defer` and goroutines still reject
+the function, with the reason in the model report. On tingly-box (7498
+functions and methods) this models 857.
 
 ## Layout
 
