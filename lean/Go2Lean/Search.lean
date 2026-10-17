@@ -42,6 +42,8 @@ inductive Gen where
   /-- A value the model does not look into (interface, map, func, chan):
   always `.unit`. M3 passes the zero value. -/
   | opaque (name : String)
+  /-- A fixed-size array of `n` elements from `elem`. -/
+  | arrOf (name : String) (elem : Gen) (n : Nat)
 
 /-- The type table: field generators per named struct type. -/
 abbrev TypeTable := Array (List Gen)
@@ -169,6 +171,9 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | none => (.unit, g, heap)
   | .nilptr _ => (.ptr 0 [], g, heap)
   | .opaque _ => (.unit, g, heap)
+  | .arrOf _ elem n =>
+    let (elems, g, heap) := genList pf extra g heap pool table (depth - 1) allowNil (List.replicate n elem)
+    (.arr elems, g, heap)
   | .str _ maxLen =>
     -- Half the time a pool literal or a neighbour of one (a byte dropped or
     -- added, a mined integer appended: "port:" ++ "65536"), else random bytes,
@@ -295,11 +300,12 @@ def flatten : Gen → Val → List (String × Json)
   | .nilptr .., _ => []
   | .ref .., _ => []
   | .opaque .., _ => []
+  | .arrOf .., _ => []
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
-    | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n => n
+    | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n => n | .arrOf n .. => n
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -353,6 +359,7 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.ref name _, v) => some (name, renderObj heap true v)
     | (.sliceOf name _ _, v) => some (name, renderObj heap true v)
     | (.opaque name, _) => some (name, Json.null)
+    | (.arrOf name _ _, v) => some (name, renderObj heap true v)
     | _ => none
 
 partial def renderVal : Val → Json
@@ -481,6 +488,10 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     (smallStrs extra pool).map fun bs heap => strAlloc heap bs
   | .nilptr _ => [fun heap => (.ptr 0 [], heap)]
   | .opaque _ => [fun heap => (.unit, heap)]
+  | .arrOf _ elem n =>
+    (enumList extra maxLen pool table (depth - 1) allowNil (List.replicate n elem)).map fun build heap =>
+      let (vs, heap) := build heap
+      (.arr vs, heap)
 where
   enumList (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat)
       (allowNil : Bool) : List Gen → List (Heap Val → List Val × Heap Val)
@@ -512,6 +523,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     | none => 1
   | .str _ _ => (smallStrs extra pool).length
   | .opaque _ => 1
+  | .arrOf _ elem n => (genSize extra maxLen pool table (depth - 1) allowNil elem) ^ n
   | .nilptr _ => 1
 
 def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)

@@ -378,6 +378,9 @@ func constVal(c *ssa.Const) (ir.Val, error) {
 	if isString(c.Type()) {
 		return ir.StrConst{Bytes: []byte(constant.StringVal(c.Value))}, nil
 	}
+	if isOpaqueType(c.Type()) {
+		return ir.Opaque{}, nil // a float literal: the model does not compute with it
+	}
 	w, signed, ok := intWidth(c.Type())
 	if !ok {
 		return nil, fmt.Errorf("constant of unsupported type %s", c.Type())
@@ -457,10 +460,11 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		default:
 			return fmt.Errorf("string operator %s not supported", x.Op)
 		}
-	} else if eqOp && isOpaqueType(x.X.Type()) {
-		// Comparing interfaces, maps, funcs or channels: the model does
-		// not look inside them, so the outcome is a havoc bool.
-		return t.havoc(x, "comparison of "+x.X.Type().String(), "opaque-compare", "")
+	} else if isOpaqueType(x.X.Type()) {
+		// Comparing interfaces, maps, funcs or channels, or arithmetic on
+		// floats: the model does not look inside them, so the outcome is
+		// havoc (a bool, or an opaque number).
+		return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
 	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
@@ -631,6 +635,67 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.MapUpdate:
 		t.issue("map update %s[%s] ignored (maps are opaque)", x.Map.Name(), x.Key.Name())
 		return nil
+	case *ssa.Defer:
+		// A deferred call to a function in the model would need the defer
+		// stack; one the model does not look into (mutex unlocks, closes,
+		// closures) is an effect it does not model anyway.
+		if callee := x.Call.StaticCallee(); callee != nil {
+			if _, modelled := t.prog.ids[callee]; modelled {
+				return fmt.Errorf("deferred call to %s (defer of a modelled function)", callee.Name())
+			}
+		}
+		t.issue("deferred call %s ignored (effects not modelled)", x.Call.String())
+		return nil
+	case *ssa.RunDefers:
+		return nil
+	case *ssa.Range:
+		if isString(x.X.Type()) {
+			// The iterator is a heap cell (s, pos) that strNext advances.
+			s, err := t.val(x.X)
+			if err != nil {
+				return err
+			}
+			zero := t.fresh()
+			t.emit(ir.Instr{Dst: zero, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
+			state := t.fresh()
+			t.emit(ir.Instr{Dst: state, Op: ir.Simple("mkTuple"), Args: []ir.Var{s, zero}})
+			cell := t.def(x)
+			t.emit(ir.Instr{Dst: cell, Op: ir.Alloc{Zero: ir.Opaque{}}})
+			t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{cell, state}})
+			return nil
+		}
+		if _, isMap := x.X.Type().Underlying().(*types.Map); isMap {
+			t.issue("range over map %s assumed empty (maps are opaque)", x.X.Name())
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+			return nil
+		}
+		return fmt.Errorf("range over %s not supported", x.X.Type())
+	case *ssa.Next:
+		it, err := t.val(x.Iter)
+		if err != nil {
+			return err
+		}
+		if x.IsString {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strNext"), Args: []ir.Var{it}})
+			return nil
+		}
+		// An opaque map: no iterations (recorded at the Range).
+		tu := x.Type().(*types.Tuple)
+		var parts []ir.Var
+		for i := 0; i < tu.Len(); i++ {
+			v := t.fresh()
+			var zero ir.Val = ir.BoolVal(false)
+			if i > 0 {
+				var ok bool
+				if zero, ok = assumedValue(tu.At(i).Type()); !ok {
+					return fmt.Errorf("range over map with %s elements", tu.At(i).Type())
+				}
+			}
+			t.emit(ir.Instr{Dst: v, Op: ir.Const{V: zero}})
+			parts = append(parts, v)
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: parts})
+		return nil
 	case *ssa.ChangeInterface:
 		t.issue("interface value %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
@@ -643,6 +708,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		// it succeeds and havocs the result, so that panic is not found.
 		return t.havoc(x, "type assertion (assumed to succeed)", "opaque-assert", "")
 	case *ssa.Index:
+		// Index covers arrays and, in recent go/ssa, strings.
 		a, err := t.val(x.X)
 		if err != nil {
 			return err
@@ -651,7 +717,11 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if err != nil {
 			return err
 		}
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("arrIndex"), Args: []ir.Var{a, i}})
+		op := ir.Simple("arrIndex")
+		if isString(x.X.Type()) {
+			op = ir.Simple("strIndex")
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: op, Args: []ir.Var{a, i}})
 		return nil
 	case *ssa.FieldAddr:
 		p, err := t.val(x.X)
@@ -794,6 +864,9 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{p}})
 		return nil
 	case token.SUB, token.XOR:
+		if isOpaqueType(x.X.Type()) {
+			return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
+		}
 		if _, _, ok := intWidth(x.X.Type()); !ok {
 			return fmt.Errorf("unary %s on %s", x.Op, x.X.Type())
 		}
@@ -827,14 +900,39 @@ func (t *fnState) conv(dst ssa.Value, src ssa.Value) error {
 		t.emit(ir.Instr{Dst: t.def(dst), Op: op, Args: []ir.Var{a}})
 		return nil
 	}
-	if isString(dst.Type()) && isString(src.Type()) {
-		// A named string type: the value is unchanged.
+	if isString(dst.Type()) && isString(src.Type()) || types.Identical(dst.Type().Underlying(), src.Type().Underlying()) {
+		// A named string type, or a change of name only (json.RawMessage
+		// <-> []byte): the value is unchanged.
 		a, err := t.val(src)
 		if err != nil {
 			return err
 		}
 		t.vars[dst] = a
 		return nil
+	}
+	if isRuneSlice(dst.Type()) && isString(src.Type()) || isString(dst.Type()) && isRuneSlice(src.Type()) {
+		a, err := t.val(src)
+		if err != nil {
+			return err
+		}
+		op := ir.Simple("runesToStr")
+		if isString(src.Type()) {
+			op = ir.Simple("strToRunes")
+		}
+		t.emit(ir.Instr{Dst: t.def(dst), Op: op, Args: []ir.Var{a}})
+		return nil
+	}
+	if _, _, isInt := intWidth(src.Type()); isInt && isString(dst.Type()) {
+		a, err := t.val(src)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(dst), Op: ir.Simple("runeToStr"), Args: []ir.Var{a}})
+		return nil
+	}
+	if isOpaqueType(dst.Type()) || isOpaqueType(src.Type()) {
+		// int <-> float and the like: the model does not compute with floats.
+		return t.havoc(dst, fmt.Sprintf("conversion %s -> %s", src.Type(), dst.Type()), "opaque-op", "")
 	}
 	w, _, ok := intWidth(dst.Type())
 	_, srcSigned, ok2 := intWidth(src.Type())
@@ -855,7 +953,30 @@ func (t *fnState) slice(x *ssa.Slice) error {
 		return fmt.Errorf("reslice of non-slice type %s", x.X.Type())
 	}
 	if x.Max != nil {
-		return fmt.Errorf("three-index slice not supported")
+		if str {
+			return fmt.Errorf("three-index slice of a string")
+		}
+		s, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		lo := t.fresh()
+		t.emit(ir.Instr{Dst: lo, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
+		if x.Low != nil {
+			if lo, err = t.val(x.Low); err != nil {
+				return err
+			}
+		}
+		hi, err := t.val(x.High)
+		if err != nil {
+			return err
+		}
+		mx, err := t.val(x.Max)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("reslice3"), Args: []ir.Var{s, lo, hi, mx}})
+		return nil
 	}
 	lenOp, sliceOp := ir.Simple("len"), ir.Simple("reslice")
 	if str {
@@ -1041,6 +1162,15 @@ func isString(t types.Type) bool {
 	return ok && b.Info()&types.IsString != 0
 }
 
+func isRuneSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+	b, ok := s.Elem().Underlying().(*types.Basic)
+	return ok && (b.Kind() == types.Int32 || b.Kind() == types.Rune)
+}
+
 func isByteSlice(t types.Type) bool {
 	s, ok := t.Underlying().(*types.Slice)
 	if !ok {
@@ -1069,14 +1199,46 @@ func isSlice(t types.Type) bool {
 	return ok
 }
 
-// isOpaqueType says whether t is modelled as an opaque value.
+// isOpaqueType says whether t is modelled as an opaque value: interfaces,
+// maps, funcs, channels, and the basic types the dialect has no arithmetic
+// for (floats, complex numbers, unsafe pointers).
 func isOpaqueType(t types.Type) bool {
-	switch t.Underlying().(type) {
+	switch u := t.Underlying().(type) {
 	case *types.Interface, *types.Map, *types.Signature, *types.Chan:
 		return true
+	case *types.Basic:
+		switch u.Kind() {
+		case types.Float32, types.Float64, types.Complex64, types.Complex128, types.UnsafePointer,
+			types.UntypedFloat, types.UntypedComplex:
+			return true
+		}
 	}
 	return false
 }
+
+// isForeignOpaqueStruct says whether t is a struct of another package with
+// no exported field (sync.Mutex, strings.Builder): a test cannot build one
+// with contents, so it is an opaque parameter with the zero value.
+func isForeignOpaqueStruct(pkg *types.Package, t types.Type) bool {
+	n, ok := t.(*types.Named)
+	if !ok || n.Obj().Pkg() == nil || n.Obj().Pkg() == pkg {
+		return false
+	}
+	st, ok := n.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Field(i).Exported() {
+			return false
+		}
+	}
+	return true
+}
+
+// abiArrayLimit bounds the arrays described element by element in the
+// ABI; longer ones are opaque parameters (zero in M3, `.unit` in the model).
+const abiArrayLimit = 64
 
 // isTestingType says whether t is (a pointer to) a type of package testing:
 // a function taking one is a test helper, not a target.
@@ -1117,6 +1279,8 @@ func valueOKVisiting(t types.Type, visiting map[types.Type]bool) bool {
 		return true
 	case *types.Slice:
 		return valueOKVisiting(u.Elem(), visiting)
+	case *types.Array:
+		return u.Len() == 0 || valueOKVisiting(u.Elem(), visiting)
 	}
 	return false
 }
@@ -1219,7 +1383,7 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		}
 		ap, err := ab.param(p.Name(), p.Type(), nil)
 		if err != nil {
-			return nil, fmt.Errorf("parameter %s has unsupported type %s", p.Name(), p.Type())
+			return nil, fmt.Errorf("parameter %s has unsupported type %s: %w", p.Name(), p.Type(), err)
 		}
 		abi.Params = append(abi.Params, ap)
 	}
@@ -1273,7 +1437,7 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		}
 	}
 	switch {
-	case isOpaqueType(t):
+	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque}, nil
 	case isBool(t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
@@ -1286,6 +1450,22 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt}, nil
 	}
 	switch u := t.Underlying().(type) {
+	case *types.Array:
+		esrc, epath := spell(pkg, u.Elem())
+		if u.Len() > abiArrayLimit {
+			return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque}, nil
+		}
+		ap := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Kind: contract.ABIArray, Model: []string{name}, Elem: esrc, ElemPkg: epath, Len: int(u.Len())}
+		if ew, esigned, ok := intWidth(u.Elem()); ok {
+			ap.ElemWidth, ap.ElemSigned = ew, esigned
+			return ap, nil
+		}
+		elem, err := ab.param("elem", u.Elem(), stack)
+		if err != nil {
+			return contract.ABIParam{}, fmt.Errorf("array of %s: %w", u.Elem(), err)
+		}
+		ap.ElemParam = &elem
+		return ap, nil
 	case *types.Slice:
 		esrc, epath := spell(pkg, u.Elem())
 		ap := contract.ABIParam{
@@ -1308,7 +1488,7 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		for i := 0; i < u.NumFields(); i++ {
 			f, err := ab.param(u.Field(i).Name(), u.Field(i).Type(), stack)
 			if err != nil {
-				return contract.ABIParam{}, err
+				return contract.ABIParam{}, fmt.Errorf("field %s: %w", u.Field(i).Name(), err)
 			}
 			ap.Fields = append(ap.Fields, f)
 		}

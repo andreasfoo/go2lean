@@ -2,6 +2,7 @@
 /out-*/
 /lean/.lake/
 /lean/Search/
+/lean/Go2Lean/Generated/Registry.lean
 *.test
 # Generated models: only the go2lean examples are tracked.
 /lean/Go2Lean/Generated/gossa/*

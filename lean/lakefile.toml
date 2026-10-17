@@ -6,3 +6,9 @@ defaultTargets = ["Go2Lean"]
 name = "Go2Lean"
 # Build the root module and every submodule, including M1's generated models.
 globs = ["Go2Lean.+"]
+
+# The native search driver; links every generated model through the
+# registry M1 regenerates on each compile.
+[[lean_exe]]
+name = "go2lean-search"
+root = "Main"

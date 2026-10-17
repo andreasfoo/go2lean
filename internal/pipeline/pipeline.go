@@ -3,8 +3,11 @@
 package pipeline
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"runtime"
+	"sync"
 
 	"github.com/andreasfoo/go2lean/internal/constraint"
 	"github.com/andreasfoo/go2lean/internal/contract"
@@ -49,6 +52,7 @@ func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string
 	}
 	var reports []*contract.ModelReport
 	for _, prog := range progs {
+		constraint.InvalidateDriver()
 		report, err := ssaout.Emit(prog, repo.LeanDir(env.Root), w, modPath)
 		if err != nil {
 			return nil, err
@@ -101,6 +105,44 @@ func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.S
 	}
 	fmt.Fprintln(out)
 	return cx, nil
+}
+
+// HuntAll runs Hunt on every property, opts.Jobs at a time, printing each
+// property's lines together in the order given.
+func HuntAll(w contract.Workspace, env Env, props []*contract.Property, opts constraint.SearchOptions, out io.Writer) ([]*contract.Counterexample, error) {
+	jobs := opts.Jobs
+	if jobs <= 0 {
+		jobs = runtime.NumCPU()
+	}
+	type result struct {
+		cx  *contract.Counterexample
+		err error
+		log bytes.Buffer
+	}
+	results := make([]result, len(props))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, jobs)
+	for i, p := range props {
+		wg.Add(1)
+		go func(i int, p *contract.Property) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i].cx, results[i].err = Hunt(w, env, p, opts, &results[i].log)
+		}(i, p)
+	}
+	wg.Wait()
+	var cxs []*contract.Counterexample
+	for i := range results {
+		io.Copy(out, &results[i].log)
+		if results[i].err != nil {
+			return cxs, results[i].err
+		}
+		if results[i].cx != nil {
+			cxs = append(cxs, results[i].cx)
+		}
+	}
+	return cxs, nil
 }
 
 // Verify runs M3 on one counterexample and prints the verdict.
@@ -197,15 +239,9 @@ func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts
 		return nil, err
 	}
 	fmt.Fprintln(out, "== M2 hunt")
-	var cxs []*contract.Counterexample
-	for _, p := range props {
-		cx, err := Hunt(w, env, p, opts, out)
-		if err != nil {
-			return nil, err
-		}
-		if cx != nil {
-			cxs = append(cxs, cx)
-		}
+	cxs, err := HuntAll(w, env, props, opts, out)
+	if err != nil {
+		return nil, err
 	}
 	fmt.Fprintln(out, "== M3 poc")
 	res := &Result{Report: report, Properties: props}

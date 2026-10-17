@@ -217,7 +217,7 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 			return "", fmt.Errorf("string %s: %w", p.Go, err)
 		}
 		return fmt.Sprintf("%s := %s(%q)", p.Go, p.GoType, sv), nil
-	case contract.ABIStruct, contract.ABIPtr:
+	case contract.ABIStruct, contract.ABIPtr, contract.ABIArray:
 		raw, ok := cx.Objects[p.Go]
 		if !ok {
 			return "", fmt.Errorf("counterexample has no object for %s", p.Go)
@@ -334,6 +334,9 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 				continue // zero value: nil map, nil interface, nil func
 			}
 			if p.TypePkg != "" && !token.IsExported(f.Go) {
+				if isZeroJSON(abi, f, fields[i]) {
+					continue // the zero value needs no setting
+				}
 				return "", fmt.Errorf("%s: cannot set unexported field %s of %s from the test", p.Go, f.Go, p.GoType)
 			}
 			e, err := literal(abi, f, fields[i])
@@ -343,7 +346,7 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			parts = append(parts, f.Go+": "+e)
 		}
 		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
-	case contract.ABISlice:
+	case contract.ABISlice, contract.ABIArray:
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
 		}
@@ -353,13 +356,7 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		}
 		var parts []string
 		for _, e := range elems {
-			var ep contract.ABIParam
-			if p.ElemParam != nil {
-				ep = *p.ElemParam
-			} else {
-				ep = contract.ABIParam{Go: p.Go, GoType: p.Elem, TypePkg: p.ElemPkg, Width: p.ElemWidth, Signed: p.ElemSigned, Kind: contract.ABIInt}
-			}
-			s, err := literal(abi, ep, e)
+			s, err := literal(abi, p.ElemAsParam(), e)
 			if err != nil {
 				return "", err
 			}
@@ -381,6 +378,45 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		return fmt.Sprintf("func() %s { v := %s; return &v }()", p.GoType, inner), nil
 	}
 	return "", fmt.Errorf("%s: cannot render kind %s", p.Go, p.Kind)
+}
+
+// isZeroJSON says whether the model's value is the Go zero value of p.
+func isZeroJSON(abi *contract.ABI, p contract.ABIParam, v any) bool {
+	if p.TypeRef != "" {
+		for _, t := range abi.Types {
+			if t.GoType == p.TypeRef {
+				p.Fields = t.Fields
+			}
+		}
+	}
+	switch p.Kind {
+	case contract.ABIInt:
+		return v == "0"
+	case contract.ABIBool:
+		return v == "false" || v == false
+	case contract.ABIString:
+		return v == ""
+	case contract.ABIError:
+		return v == "nil" || v == nil
+	case contract.ABIOpaque, contract.ABIPtr, contract.ABISlice:
+		return v == nil
+	case contract.ABIStruct, contract.ABIArray:
+		elems, _ := v.([]any)
+		for i, e := range elems {
+			f := p.ElemAsParam()
+			if p.Kind == contract.ABIStruct {
+				if i >= len(p.Fields) {
+					return false
+				}
+				f = p.Fields[i]
+			}
+			if !isZeroJSON(abi, f, e) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func collectImports(p contract.ABIParam, into map[string]bool) {
@@ -424,7 +460,7 @@ func needsErrors(p contract.ABIParam, raw json.RawMessage) bool {
 			}
 		case contract.ABIPtr:
 			return v != nil && p.Pointee != nil && walk(*p.Pointee, v)
-		case contract.ABISlice:
+		case contract.ABISlice, contract.ABIArray:
 			elems, _ := v.([]any)
 			for _, e := range elems {
 				if p.ElemParam != nil && walk(*p.ElemParam, e) {

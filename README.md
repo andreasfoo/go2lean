@@ -66,7 +66,10 @@ property and the Go oracle agree by construction. Two engines run per
 property: seeded random search (per-trial value profiles, plus the target's
 own integer literals so magic-constant branches are reachable), then
 exhaustive enumeration of a small domain, which records an `exhausted`
-certificate when it passes. The agent sits on top: it reads the source and
+certificate when it passes. Both run in `go2lean-search`, a native
+executable built by lake from the Lean engines and every generated model,
+driven by a JSON description of the search; properties are searched in
+parallel. The agent sits on top: it reads the source and
 the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
 the ones the frontend rejects, runs the pipeline, and writes a report from
 the verdicts.
@@ -103,7 +106,7 @@ revised spec file in the report round triggers one more pass.
 ```
 go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
 go2lean props   [-workspace out] -package <path>  template properties from the model report
-go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all]
+go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all] [-jobs n]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id [more ids...]   one go test per package
 go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, hunt, poc (./... allowed)
@@ -125,6 +128,7 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/list` | `Sum(*Node)` skips the head cell of a linked list | confirmed with a materialised `&Node{...}` |
 | `examples/recs` | `First`/`Longest`/`Dedup` index slices of structs and strings without a length check | all confirmed with `[]Item{...}` literals; `Total`, `Names` (built with `append`) and `Push` satisfy their specs |
 | `examples/opaque` | `(*Cache).Share` divides by a struct field next to a map; `Lookup(ctx, map, keys)` indexes `keys[0]` | both confirmed: the map and the context are opaque to the model and the test passes `context.Background()` and a nil map |
+| `examples/runes` | `(*Counter).Bump` indexes a fixed array with `n%4` under a mutex and a deferred unlock; `Head` returns a 3-index slice with `max < len` | both confirmed (`index out of range [-2]`); `Reverse` (`[]rune` round trip) and `Initials` (`range` over a string) are certified |
 
 ## On a real module
 
@@ -134,7 +138,7 @@ go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model Mi
     -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
 ```
 
-On tingly-box (7498 functions and methods) the model covers 3423; a full
+On tingly-box (7498 functions and methods) the model covers 6198; a full
 pass over the 111 packages with a model takes about an hour and ends with
 11 confirmed findings and 26 spurious counterexamples (see the design doc,
 §9b): seven `truncate(s, n)` helpers that panic on a negative `n`, two
@@ -145,23 +149,27 @@ short hash, and `budgetDuration(seconds int) time.Duration` wrapping to
 ## Supported Go subset
 
 Integers of every width, bools, `error` values (nil-ness), strings (with
-the common `strings.*` functions and `strconv.Atoi/Itoa` modelled),
+the common `strings.*` functions, `strconv.Atoi/Itoa`, `[]rune` and
+`[]byte` conversions and `range` over a string modelled rune by rune),
 structs, pointers, recursive types, arrays, slices with reads and writes,
-`make`, `new`, multiple results,
+`make`, `new`, 3-index slices, multiple results,
 methods, `len`/`cap`, reslicing, `append` and `copy` (including
 `append([]byte, string...)`), loops and branches, calls between functions
 in the same package. Slice elements can be any modelled type: structs,
 strings, pointers, nested slices. Division by zero, out-of-range indexing,
 negative shift counts and nil dereferences panic as in Go; `MinInt / -1`
 wraps. Unmodelled calls become havoc values (or a recorded zero/opaque
-assumption for types the model cannot draw). Interfaces, maps, funcs and
-channels are *opaque* values: they can appear anywhere (parameters, struct
-fields, results), the model never looks inside them, map lookups, type
-assertions and interface comparisons are havoc, map updates are ignored,
-and M3 passes their zero value (`context.Background()` for a context).
-Closures, `range` over maps, `defer` and goroutines still reject the
-function, with the reason in the model report. On tingly-box (7498
-functions and methods) this models 3423 (1402 completely).
+assumption for types the model cannot draw). Interfaces, maps, funcs,
+channels, floats and `unsafe.Pointer` are *opaque* values: they can appear
+anywhere (parameters, struct fields, results), the model never looks
+inside them, map lookups, type assertions, interface comparisons and
+float arithmetic are havoc, map updates are ignored, `range` over a map
+runs zero times, and M3 passes their zero value (`context.Background()`
+for a context). A deferred call the model does not look into (a mutex
+unlock, a close) is ignored. Closures, goroutines and `defer` of a modelled
+function still reject the function, with the reason in the model report.
+On tingly-box (7498 functions and methods) this models 6198 (1873
+completely); 304 of the 1300 rejected are test helpers taking `*testing.T`.
 
 ## Layout
 

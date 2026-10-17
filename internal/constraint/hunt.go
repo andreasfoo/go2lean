@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/repo"
@@ -39,6 +41,9 @@ type SearchOptions struct {
 	// default: "it panics on a nil receiver" is true of most Go code and
 	// drowns the findings people act on. Nested pointers may still be nil.
 	NilInputs bool
+	// Jobs is how many properties HuntAll searches at once (default: the
+	// number of CPUs); each search is its own process.
+	Jobs int
 }
 
 func (o SearchOptions) withDefaults() SearchOptions {
@@ -47,6 +52,9 @@ func (o SearchOptions) withDefaults() SearchOptions {
 	}
 	if o.Fuel == 0 {
 		o.Fuel = 1000
+	}
+	if o.Jobs <= 0 {
+		o.Jobs = runtime.NumCPU()
 	}
 	if o.MaxLen == 0 {
 		o.MaxLen = 8
@@ -84,16 +92,16 @@ type searchResult struct {
 }
 
 // gens renders the Search.Gen list for a function's parameters.
-func gens(abi *contract.ABI, maxLen int) (string, error) {
-	var parts []string
+func gens(abi *contract.ABI, maxLen int) ([]map[string]any, error) {
+	out := []map[string]any{}
 	for _, p := range abi.Params {
 		g, err := gen(abi, p, maxLen)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		parts = append(parts, g)
+		out = append(out, g)
 	}
-	return "[" + strings.Join(parts, ", ") + "]", nil
+	return out, nil
 }
 
 func typeIndex(abi *contract.ABI, ref string) int {
@@ -106,76 +114,84 @@ func typeIndex(abi *contract.ABI, ref string) int {
 }
 
 // typeTable renders the Search.TypeTable for the ABI's recursive types.
-func typeTable(abi *contract.ABI, maxLen int) (string, error) {
-	var entries []string
+func typeTable(abi *contract.ABI, maxLen int) ([][]map[string]any, error) {
+	entries := [][]map[string]any{}
 	for _, t := range abi.Types {
-		var fs []string
+		fs := []map[string]any{}
 		for _, f := range t.Fields {
 			g, err := gen(abi, f, maxLen)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			fs = append(fs, g)
 		}
-		entries = append(entries, "["+strings.Join(fs, ", ")+"]")
+		entries = append(entries, fs)
 	}
-	return "#[" + strings.Join(entries, ", ") + "]", nil
+	return entries, nil
 }
 
-func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (string, error) {
+// gen describes the Search.Gen for one parameter as JSON; the shape is
+// decoded by `genOfJson` in lean/Go2Lean/Driver.lean.
+func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, error) {
 	switch p.Kind {
 	case contract.ABIInt:
 		w, signed, ok := p.IntInfo()
 		if !ok {
-			return "", fmt.Errorf("parameter %s: unsupported int type %s", p.Go, p.GoType)
+			return nil, fmt.Errorf("parameter %s: unsupported int type %s", p.Go, p.GoType)
 		}
-		return fmt.Sprintf("(.int %q %d %v)", p.Go, w, signed), nil
+		return map[string]any{"k": "int", "name": p.Go, "w": w, "signed": signed}, nil
 	case contract.ABIBool:
-		return fmt.Sprintf("(.bool %q)", p.Go), nil
+		return map[string]any{"k": "bool", "name": p.Go}, nil
 	case contract.ABIError:
-		return fmt.Sprintf("(.err %q)", p.Go), nil
+		return map[string]any{"k": "err", "name": p.Go}, nil
 	case contract.ABISlice:
 		if p.ElemParam != nil {
 			e, err := gen(abi, *p.ElemParam, maxLen)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			return fmt.Sprintf("(.sliceOf %q %s %d)", p.Go, e, maxLen), nil
+			return map[string]any{"k": "sliceOf", "name": p.Go, "elem": e, "maxLen": maxLen}, nil
 		}
 		w, signed, ok := p.ElemInfo()
 		if !ok {
-			return "", fmt.Errorf("parameter %s: unsupported element type %s", p.Go, p.Elem)
+			return nil, fmt.Errorf("parameter %s: unsupported element type %s", p.Go, p.Elem)
 		}
-		return fmt.Sprintf("(.slice %q %d %v %d)", p.Go, w, signed, maxLen), nil
+		return map[string]any{"k": "slice", "name": p.Go, "w": w, "signed": signed, "maxLen": maxLen}, nil
 	case contract.ABIStruct:
 		if p.TypeRef != "" {
-			return fmt.Sprintf("(.ref %q %d)", p.Go, typeIndex(abi, p.TypeRef)), nil
+			return map[string]any{"k": "ref", "name": p.Go, "ty": typeIndex(abi, p.TypeRef)}, nil
 		}
-		var fs []string
+		fs := []map[string]any{}
 		for _, f := range p.Fields {
 			g, err := gen(abi, f, maxLen)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			fs = append(fs, g)
 		}
-		return fmt.Sprintf("(.structv %q [%s])", p.Go, strings.Join(fs, ", ")), nil
+		return map[string]any{"k": "structv", "name": p.Go, "fields": fs}, nil
 	case contract.ABIString:
-		return fmt.Sprintf("(.str %q %d)", p.Go, maxLen), nil
+		return map[string]any{"k": "str", "name": p.Go, "maxLen": maxLen}, nil
 	case contract.ABIOpaque:
-		return fmt.Sprintf("(.opaque %q)", p.Go), nil
+		return map[string]any{"k": "opaque", "name": p.Go}, nil
+	case contract.ABIArray:
+		e, err := gen(abi, p.ElemAsParam(), maxLen)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"k": "arrOf", "name": p.Go, "elem": e, "n": p.Len}, nil
 	case contract.ABIPtr:
 		if p.Pointee == nil {
 			// The frontend's depth cut-off for recursive types: always nil.
-			return fmt.Sprintf("(.nilptr %q)", p.Go), nil
+			return map[string]any{"k": "nilptr", "name": p.Go}, nil
 		}
 		g, err := gen(abi, *p.Pointee, maxLen)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return fmt.Sprintf("(.ptr %q %s)", p.Go, g), nil
+		return map[string]any{"k": "ptr", "name": p.Go, "pointee": g}, nil
 	}
-	return "", fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
+	return nil, fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
 }
 
 // Hunt runs the selected engines on one property. It returns the
@@ -213,15 +229,15 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	if fid < 0 {
 		return nil, "", fmt.Errorf("function %s not in model report", target.Func)
 	}
-	var leanProp string
+	var leanProp map[string]any
 	switch prop.Kind {
 	case contract.KindNoPanic:
-		leanProp = fmt.Sprintf("(.noPanic %d)", fid)
+		leanProp = map[string]any{"kind": "noPanic", "f": fid}
 	case contract.KindPostcondition:
 		if sid < 0 {
 			return nil, "", fmt.Errorf("spec %s not in model report", prop.Spec.GoFunc)
 		}
-		leanProp = fmt.Sprintf("(.postcondition %d %d)", fid, sid)
+		leanProp = map[string]any{"kind": "postcondition", "f": fid, "spec": sid}
 	default:
 		return nil, "", fmt.Errorf("property kind %s has no search engine yet", prop.Kind)
 	}
@@ -234,22 +250,27 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		return nil, "", err
 	}
 
-	extra := "[" + strings.Join(consts, ", ") + "]"
-	quoted := make([]string, len(strConsts))
-	for i, sc := range strConsts {
-		quoted[i] = leanString(sc)
+	extra := []json.Number{}
+	for _, c := range consts {
+		extra = append(extra, json.Number(c))
 	}
-	strs := "[" + strings.Join(quoted, ", ") + "]"
+	if strConsts == nil {
+		strConsts = []string{}
+	}
 	leanDir := repo.LeanDir(root)
-	if out, err := lake(leanDir, "build", "Go2Lean.Search", report.LeanModule); err != nil {
-		return nil, "", fmt.Errorf("lake build %s: %w\n%s", report.LeanModule, err, out)
+	if err := buildDriver(leanDir); err != nil {
+		return nil, "", err
 	}
-	prog := report.LeanModule + ".prog"
+	spec := map[string]any{
+		"prog": strings.TrimPrefix(report.LeanModule, "Go2Lean.Generated."), "prop": leanProp,
+		"gens": g, "extra": extra, "strs": strConsts, "table": table, "allowNil": opts.NilInputs,
+		"seed": opts.Seed, "trials": opts.Trials, "fuel": opts.Fuel,
+		"maxLen": opts.ExhaustLen, "limit": opts.ExhaustLimit,
+	}
 
 	var summary []string
 	if opts.Engine == EngineRandom || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d %s %s %v", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel, strs, table, opts.NilInputs)
-		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_random", call)
+		res, err := runSearch(leanDir, prop.ID+"_random", spec, "random")
 		if err != nil {
 			return nil, "", err
 		}
@@ -260,8 +281,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)", res.Trials, res.OutOfFuel, res.Moot))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d %s %s %v", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel, strs, table, opts.NilInputs)
-		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_exhaustive", call)
+		res, err := runSearch(leanDir, prop.ID+"_exhaustive", spec, "exhaustive")
 		if err != nil {
 			return nil, "", err
 		}
@@ -290,27 +310,58 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	return nil, strings.Join(summary, "; "), nil
 }
 
-// runSearch writes a one-line Lean file that evaluates call and parses the
-// JSON line it prints.
-func runSearch(leanDir, module, name, call string) (*searchResult, error) {
-	searchFile := filepath.Join(leanDir, "Search", name+".lean")
-	src := fmt.Sprintf(`import Go2Lean.Search
-import %s
-open Go2Lean Go2Lean.Search
--- Generated by go2lean. Do not edit.
-#eval %s
-`, module, call)
-	if err := os.MkdirAll(filepath.Dir(searchFile), 0o755); err != nil {
-		return nil, err
+// driverBuilt remembers that the search executable is up to date with the
+// generated models; InvalidateDriver resets it after a compile.
+var (
+	driverMu    sync.Mutex
+	driverBuilt string
+)
+
+// InvalidateDriver makes the next Hunt rebuild the search executable.
+func InvalidateDriver() {
+	driverMu.Lock()
+	defer driverMu.Unlock()
+	driverBuilt = ""
+}
+
+// buildDriver links the native search driver (lean/Main.lean) against
+// every generated model once per compile.
+func buildDriver(leanDir string) error {
+	driverMu.Lock()
+	defer driverMu.Unlock()
+	if driverBuilt == leanDir {
+		return nil
 	}
-	if err := os.WriteFile(searchFile, []byte(src), 0o644); err != nil {
-		return nil, err
+	if out, err := lake(leanDir, "build", "go2lean-search"); err != nil {
+		return fmt.Errorf("lake build go2lean-search: %w\n%s", err, out)
 	}
-	out, err := lake(leanDir, "env", "lean", searchFile)
+	driverBuilt = leanDir
+	return nil
+}
+
+// runSearch writes the search description under lean/Search and runs the
+// native driver on it, parsing the JSON line it prints.
+func runSearch(leanDir, name string, spec map[string]any, engine string) (*searchResult, error) {
+	specFile := filepath.Join(leanDir, "Search", name+".json")
+	spec["engine"] = engine
+	src, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {
-		return nil, fmt.Errorf("lean %s: %w\n%s", searchFile, err, out)
+		return nil, err
 	}
-	line := lastLine(out)
+	if err := os.MkdirAll(filepath.Dir(specFile), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(specFile, src, 0o644); err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(filepath.Join(leanDir, ".lake", "build", "bin", "go2lean-search"), specFile)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("go2lean-search %s: %w\n%s", specFile, err, buf.String())
+	}
+	line := lastLine(buf.String())
 	var res searchResult
 	if err := json.Unmarshal([]byte(line), &res); err != nil {
 		return nil, fmt.Errorf("parsing search output %q: %w", line, err)
@@ -334,34 +385,6 @@ func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, 
 		RevalidatedInLean: true,
 	}
 	return cx, ws.WriteCounterexample(cx)
-}
-
-// leanString renders a Go string as a Lean string literal.
-func leanString(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b.WriteString(`\"`)
-		case '\\':
-			b.WriteString(`\\`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\t':
-			b.WriteString(`\t`)
-		case '\r':
-			b.WriteString(`\r`)
-		default:
-			if r < 0x20 {
-				fmt.Fprintf(&b, `\x%02x`, r)
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
 }
 
 func lastLine(s string) string {

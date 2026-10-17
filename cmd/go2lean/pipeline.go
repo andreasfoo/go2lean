@@ -31,6 +31,7 @@ func searchFlags(fs *flag.FlagSet) *engineOptions {
 	fs.IntVar(&o.ExhaustLen, "exhaust-len", 3, "maximum slice length in the exhaustive engine")
 	fs.IntVar(&o.ExhaustLimit, "exhaust-limit", 300000, "maximum domain size the exhaustive engine attempts")
 	fs.BoolVar(&o.NilInputs, "nil-inputs", false, "let top-level pointer arguments and receivers be nil")
+	fs.IntVar(&o.Jobs, "jobs", 0, "properties searched in parallel (default: number of CPUs)")
 	return &engineOptions{o, engine}
 }
 
@@ -69,12 +70,8 @@ func cmdHunt(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, p := range props {
-		if _, err := pipeline.Hunt(w, env, p, opts.get(), os.Stdout); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = pipeline.HuntAll(w, env, props, opts.get(), os.Stdout)
+	return err
 }
 
 func selectProps(w contract.Workspace, id string) ([]*contract.Property, error) {

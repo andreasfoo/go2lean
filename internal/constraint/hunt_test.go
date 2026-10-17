@@ -1,6 +1,7 @@
 package constraint
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
@@ -25,21 +26,17 @@ func TestGensAndTypeTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `[(.int "n" 8 true), (.slice "xs" 64 false 5), (.str "s" 5), (.ptr "l" (.ref "l" 0))]`
-	if g != want {
-		t.Fatalf("gens: got %s\nwant %s", g, want)
+	gj, _ := json.Marshal(g)
+	want := `[{"k":"int","name":"n","signed":true,"w":8},{"k":"slice","maxLen":5,"name":"xs","signed":false,"w":64},{"k":"str","maxLen":5,"name":"s"},{"k":"ptr","name":"l","pointee":{"k":"ref","name":"l","ty":0}}]`
+	if string(gj) != want {
+		t.Fatalf("gens: got %s\nwant %s", gj, want)
 	}
 	tbl, err := typeTable(abi, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tbl != `#[[(.int "Val" 64 true), (.ptr "Next" (.ref "Next" 0))]]` {
-		t.Fatalf("type table: %s", tbl)
-	}
-}
-
-func TestLeanString(t *testing.T) {
-	if got := leanString("a\"b\\c\n"); got != `"a\"b\\c\n"` {
-		t.Fatalf("got %s", got)
+	tj, _ := json.Marshal(tbl)
+	if string(tj) != `[[{"k":"int","name":"Val","signed":true,"w":64},{"k":"ptr","name":"Next","pointee":{"k":"ref","name":"Next","ty":0}}]]` {
+		t.Fatalf("type table: %s", tj)
 	}
 }

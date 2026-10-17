@@ -114,6 +114,17 @@ inductive Op where
   | bytesToStr
   /-- `[]byte(s)`; copies. -/
   | strToBytes
+  /-- `[]rune(s)`: UTF-8 decoded, invalid bytes become U+FFFD. -/
+  | strToRunes
+  /-- `string(rs)` for a slice of runes. -/
+  | runesToStr
+  /-- `string(r)` for one rune. -/
+  | runeToStr
+  /-- One step of `for i, r := range s`: the argument points at a heap cell
+  holding `(s, pos)`; yields `(ok, i, r)` and advances the cell. -/
+  | strNext
+  /-- `s[lo:hi:max]`. -/
+  | reslice3
   -- a hand-written core of the strings / strconv packages
   | strHasPrefix | strHasSuffix | strContains | strIndexOf
   | strTrimSpace | strTrimPrefix | strTrimSuffix
@@ -307,6 +318,46 @@ def sliceElems (heap : Heap Val) : Val → Option (List Val)
 /-- Overwrite `es` from index `i` with `vs`. -/
 def writeAt (es : List Val) (i : Nat) (vs : List Val) : List Val :=
   es.take i ++ vs ++ es.drop (i + vs.length)
+
+/-- Decode one UTF-8 sequence at `i`: the code point and its width. Invalid
+or truncated input gives U+FFFD of width 1, as Go's range loop does. -/
+def decodeRune (bs : List Nat) (i : Nat) : Nat × Nat :=
+  let cont (b : Option Nat) : Bool := match b with | some b => 0x80 ≤ b && b < 0xC0 | none => false
+  let low (b : Option Nat) : Nat := (b.getD 0) % 0x40
+  match bs[i]? with
+  | none => (0xFFFD, 1)
+  | some b0 =>
+    if b0 < 0x80 then (b0, 1)
+    else if b0 < 0xC2 then (0xFFFD, 1)
+    else if b0 < 0xE0 then
+      if cont bs[i+1]? then (((b0 % 0x20) <<< 6) ||| low bs[i+1]?, 2) else (0xFFFD, 1)
+    else if b0 < 0xF0 then
+      if cont bs[i+1]? && cont bs[i+2]? then
+        let r := ((b0 % 0x10) <<< 12) ||| (low bs[i+1]? <<< 6) ||| low bs[i+2]?
+        if r < 0x800 || (0xD800 ≤ r && r ≤ 0xDFFF) then (0xFFFD, 1) else (r, 3)
+      else (0xFFFD, 1)
+    else if b0 < 0xF5 then
+      if cont bs[i+1]? && cont bs[i+2]? && cont bs[i+3]? then
+        let r := ((b0 % 0x08) <<< 18) ||| (low bs[i+1]? <<< 12) ||| (low bs[i+2]? <<< 6) ||| low bs[i+3]?
+        if r < 0x10000 || r > 0x10FFFF then (0xFFFD, 1) else (r, 4)
+      else (0xFFFD, 1)
+    else (0xFFFD, 1)
+
+/-- UTF-8 encode one code point; surrogates and values above U+10FFFF
+encode as U+FFFD, as Go's `string(r)` does. -/
+def encodeRune (r : Nat) : List Nat :=
+  let r := if r > 0x10FFFF || (0xD800 ≤ r && r ≤ 0xDFFF) then 0xFFFD else r
+  if r < 0x80 then [r]
+  else if r < 0x800 then [0xC0 ||| (r >>> 6), 0x80 ||| (r % 0x40)]
+  else if r < 0x10000 then [0xE0 ||| (r >>> 12), 0x80 ||| ((r >>> 6) % 0x40), 0x80 ||| (r % 0x40)]
+  else [0xF0 ||| (r >>> 18), 0x80 ||| ((r >>> 12) % 0x40), 0x80 ||| ((r >>> 6) % 0x40), 0x80 ||| (r % 0x40)]
+
+/-- All code points of a byte string. -/
+partial def decodeAll (bs : List Nat) (i : Nat := 0) : List Nat :=
+  if i < bs.length then
+    let (r, n) := decodeRune bs i
+    r :: decodeAll bs (i + n)
+  else []
 
 /-- Go index semantics: a negative index is out of range, so compare unsigned
 after sign-extending to 64 bits. -/
@@ -532,6 +583,20 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     match vs[i]? with
     | some v => .ok v
     | none => .panic .modelStuck
+  | .reslice3, [.slice ref off _ cap, lo, hi, mx] =>
+    match asIndex lo, asIndex hi, asIndex mx with
+    | some lo, some hi, some mx =>
+      if lo.ule hi && hi.ule mx && mx.ule cap then .ok (.slice ref (off + lo) (hi - lo) (mx - lo))
+      else .panic .sliceBounds
+    | _, _, _ => .panic .modelStuck
+  | .reslice3, [.ptr 0 _, _, _, _] => .panic .nilDereference
+  | .reslice3, [.ptr ref path, lo, hi, mx] =>
+    match asIndex lo, asIndex hi, asIndex mx, heap[ref]? >>= (getPath · path) with
+    | some lo, some hi, some mx, some (.arr es) =>
+      if path.isEmpty && lo.ule hi && hi.ule mx && mx.toNat ≤ es.length then
+        .ok (.slice ref lo (hi - lo) (mx - lo))
+      else .panic (if path.isEmpty then .sliceBounds else .modelStuck)
+    | _, _, _, _ => .panic .modelStuck
   | .reslice, [.slice ref off _ cap, lo, hi] =>
     match asIndex lo, asIndex hi with
     | some lo, some hi =>
@@ -580,6 +645,37 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | .ptr ref _ => .ok (.slice ref 0#64 (BitVec.ofNat 64 x.length) (BitVec.ofNat 64 x.length), heap)
       | _ => .panic .modelStuck
     | none => .panic .modelStuck
+  | .strToRunes, [s] =>
+    match strBytes heap s with
+    | some x =>
+      let rs := decodeAll x
+      let (p, heap) := heapAlloc heap (.arr (rs.map fun r => .int 32 (BitVec.ofNat 32 r)))
+      match p with
+      | .ptr ref _ => .ok (.slice ref 0#64 (BitVec.ofNat 64 rs.length) (BitVec.ofNat 64 rs.length), heap)
+      | _ => .panic .modelStuck
+    | none => .panic .modelStuck
+  | .runesToStr, [rs] =>
+    match sliceElems heap rs with
+    | some es =>
+      match es.mapM (fun | .int _ v => some v.toNat | _ => none) with
+      | some rs => .ok (strAlloc heap (rs.flatMap encodeRune))
+      | none => .panic .modelStuck
+    | none => .panic .modelStuck
+  | .runeToStr, [.int _ v] => .ok (strAlloc heap (encodeRune v.toNat))
+  | .strNext, [p] =>
+    match heapLoad heap p with
+    | .ok (.tuple [s, .int _ pos]) =>
+      match strBytes heap s with
+      | some bs =>
+        let i := pos.toNat
+        if i < bs.length then
+          let (r, n) := decodeRune bs i
+          match heapStore heap p (.tuple [s, .int 64 (BitVec.ofNat 64 (i + n))]) with
+          | .ok heap => .ok (.tuple [.bool true, .int 64 (BitVec.ofNat 64 i), .int 32 (BitVec.ofNat 32 r)], heap)
+          | _ => .panic .modelStuck
+        else .ok (.tuple [.bool false, .int 64 0#64, .int 32 0#32], heap)
+      | none => .panic .modelStuck
+    | _ => .panic .modelStuck
   | .strItoa, [.int _ v] => .ok (strAlloc heap (itoaBytes v.toInt))
   | .strToLower, [s] =>
     match strBytes heap s with

@@ -243,7 +243,8 @@ const (
 	ABIStruct ABIParamKind = "struct" // one model value; Fields describe the components
 	ABIPtr    ABIParamKind = "ptr"    // one model value: nil or a pointer to Pointee
 	ABIString ABIParamKind = "string" // one model value; reported under Objects as a JSON string
-	ABIOpaque ABIParamKind = "opaque" // interface, map, func or chan: the model never looks inside; M3 passes the zero value
+	ABIOpaque ABIParamKind = "opaque" // interface, map, func, chan, float or unsafe.Pointer: the model never looks inside; M3 passes the zero value
+	ABIArray  ABIParamKind = "array"  // one model value; Len elements of Elem/ElemParam, reported under Objects as a JSON array
 )
 
 // ABIParam describes one Go parameter. GoType is spelled as Go source in
@@ -268,6 +269,8 @@ type ABIParam struct {
 	// pointer, nested slice); the contents are then reported under Objects
 	// as a JSON array instead of under Memory.
 	ElemParam *ABIParam `json:"elem_param,omitempty"`
+	// Len is the length of an array.
+	Len int `json:"len,omitempty"`
 	// Struct fields (Go holds the field name) and the pointee of a pointer.
 	Fields  []ABIParam `json:"fields,omitempty"`
 	Pointee *ABIParam  `json:"pointee,omitempty"`
@@ -296,6 +299,15 @@ func (p ABIParam) IntInfo() (width int, signed bool, ok bool) {
 		return p.Width, p.Signed, true
 	}
 	return GoIntType(p.GoType)
+}
+
+// ElemAsParam describes the element of a slice or array as a parameter of
+// its own: ElemParam when set, else the integer element.
+func (p ABIParam) ElemAsParam() ABIParam {
+	if p.ElemParam != nil {
+		return *p.ElemParam
+	}
+	return ABIParam{Go: p.Go, GoType: p.Elem, TypePkg: p.ElemPkg, Width: p.ElemWidth, Signed: p.ElemSigned, Model: []string{p.Go}, Kind: ABIInt}
 }
 
 // ElemInfo is IntInfo for a slice's element type.
