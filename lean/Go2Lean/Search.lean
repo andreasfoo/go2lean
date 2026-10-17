@@ -276,11 +276,11 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
       let results := match v with | .tuple vs => vs | v => [v]
       let before := s.log.size
       match runFunc p or h spec (args ++ results) s fuel with
-      | (.ok (.bool true), s) => (.holds, s, some v)
-      | (.ok (.bool false), s) =>
-        -- A verdict that read a havoc value (the spec compared opaque
-        -- values, or called something unmodelled) is not a refutation.
-        if s.log.size > before then (.specUnknown, s, some v) else (.violated, s, some v)
+      -- A verdict that read a havoc value (the spec compared opaque values,
+      -- or called something unmodelled) is neither a refutation nor support.
+      | (.ok (.bool b), s) =>
+        if s.log.size > before then (.specUnknown, s, some v)
+        else if b then (.holds, s, some v) else (.violated, s, some v)
       | (.ok _, s) => (.specPanicked .modelStuck, s, some v)
       | (.panic k, s) => (.specPanicked k, s, some v)
       | (.outOfFuel, s) => (.outOfFuel, s, some v)

@@ -644,6 +644,12 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.issue("map %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
 		return nil
+	case *ssa.MakeClosure:
+		// A closure is a func value: opaque, and a call through it is an
+		// unmodelled call (havoc results, effects ignored).
+		t.issue("closure %s is opaque (not modelled)", x.Fn.Name())
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		return nil
 	case *ssa.MakeChan:
 		t.issue("channel %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
