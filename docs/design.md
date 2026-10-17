@@ -197,6 +197,52 @@ sign-extension).
   `IndexAddr`, `MakeSlice` become heap operations and aliasing is exact.
 - **C:** interfaces, closures, map iteration (as havoc).
 
+### 4.3b Stage B: the heap model (next milestone)
+
+The smoke test (§9b) fixed the order: pointers and structs first, strings
+second. The design keeps the interpreter core unchanged and adds state to
+the dialect's oracle plus a small mutable heap threaded through `Val`-level
+operations:
+
+- **Heap.** `Heap := Ref → Obj` with `Obj := .array (elems : Array Val) |
+  .struct (fields : Array Val) | .string (bytes : Array (BitVec 8))`. The
+  heap is part of the run state next to `HState`, not of the oracle: the
+  oracle keeps supplying contents of *inputs* (slices, strings and pointed-to
+  values the caller owns), the heap holds what the function allocates or
+  writes. A read goes to the heap when the `Ref` was allocated or written
+  during the run, else to the oracle. This keeps stage-A models valid and
+  makes writes exact for aliasing: two slices with the same `Ref` see each
+  other's stores.
+- **Values.** `Val` gains `.ptr (ref : Nat) (path : List Nat)` (a pointer to
+  a field/element path inside an object; `nil` is `ref = 0`) and
+  `.structv (fields : List Val)` for struct values. Pointer comparison is
+  `ref`+`path` equality; `nil` dereference panics `nilDereference`.
+- **Ops.** `alloc (kind)`, `load/store` generalised to a path, `field i`,
+  `fieldAddr i`, `indexAddr`, `makeSlice`, `append` (grow-and-copy with a
+  fresh `Ref` when `cap` is exceeded, as Go does), `copy`. Because `denote`
+  stays branch-free and call-free, these are single steps; the loop in
+  `copy`/`append` is a bounded fold over `len`, which is acceptable for
+  the random and exhaustive engines and is where `bv_decide` would need a
+  summary lemma instead.
+- **Frontend.** `Alloc` → `alloc`; `FieldAddr`/`IndexAddr` → address values
+  (paths), `Store` → `store`; struct parameters are flattened by the ABI
+  into their fields (as TinyGo does for LLVM, so the two frontends agree on
+  the ABI); pointer parameters are generated as either `nil` or a fresh
+  `Ref` whose pointee comes from the oracle.
+- **M3.** The harness materialises structs from the flattened fields and
+  pointers as `&T{...}` or `nil`; a counterexample's `memory` section grows
+  per-`Ref` object dumps.
+- **Strings (after the heap).** `string` is `(ref, len)` over immutable
+  bytes; `len`, indexing, slicing and `==` are ops (equality is a bounded
+  byte fold); `strings.Contains/HasPrefix/Index/TrimSpace`, `bytes.*` and
+  `strconv.Atoi/Itoa` get hand-written models in a `Go2Lean/Dialect/GoSSA/
+  Stdlib.lean` table keyed by import path, because a havoc result for
+  every `strings` call makes a string function's model meaningless.
+
+Acceptance for stage B: `examples/alias` (writes through aliased slices),
+a struct-returning constructor with an invariant spec, and a re-sweep of
+tingly-box with the pointer/struct rejection counts as the metric.
+
 ### 4.4 `LLVM` dialect (not built yet)
 
 **Build it on lean-mlir.** lean-mlir already defines per-operation semantics
@@ -514,6 +560,7 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | the agent needs `import "time"` for `time.Duration` in spec signatures; the prompt forbade imports | the rule is now "imports only for the types in spec signatures"; package-level variables of the target are explicitly out of the subset |
 | the model put one `go2lean:spec` marker at the top of the file, separated by a blank line; go/ssa saw no doc comment and the specs became targets with `no_panic` properties | a function `Spec<X>...` whose parameters are X's parameters plus `ret` of X's result is taken as a spec for X regardless of the marker; the prompt shows the marker placement |
 | agent logs of a second package overwrote the first's | one log directory per package under `<workspace>/agent/` |
+| after adding multiple results and opaque `error` values, the sweep models 19 real functions (was 15); `(T, error)` alone does not unlock much because the same functions also take strings, pointers or structs | type coverage has to come as a package: the heap model (§4.3b) with structs and pointers, then strings with a modelled core of `strings`/`bytes`/`strconv` |
 
 ## 10. Milestones
 
