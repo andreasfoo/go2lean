@@ -871,12 +871,20 @@ func (t *fnState) call(x *ssa.Call) error {
 	if bi, ok := x.Call.Value.(*ssa.Builtin); ok {
 		switch bi.Name() {
 		case "len", "cap":
-			if _, _, ok := sliceElem(x.Call.Args[0].Type()); ok {
+			if isSlice(x.Call.Args[0].Type()) {
 				a, err := t.val(x.Call.Args[0])
 				if err != nil {
 					return err
 				}
 				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple(bi.Name()), Args: []ir.Var{a}})
+				return nil
+			}
+			if bi.Name() == "len" && isPointerToArray(x.Call.Args[0].Type()) {
+				a, err := t.val(x.Call.Args[0])
+				if err != nil {
+					return err
+				}
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strLen"), Args: []ir.Var{a}})
 				return nil
 			}
 			if bi.Name() == "len" && isString(x.Call.Args[0].Type()) {

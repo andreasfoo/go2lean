@@ -310,14 +310,19 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .or, args => binInt (· ||| ·) args
   | .xor, args => binInt (· ^^^ ·) args
   | .andNot, args => binInt (fun a b => a &&& ~~~b) args
+  -- Shift counts at or beyond the width give 0 (or the sign fill) without
+  -- computing a huge shift: Go's semantics, and Lean would otherwise try to
+  -- build 2^k.
   | .shl cs, [.int w a, n] =>
     match shiftCount cs n with
-    | .ok k => .ok (.int w (a <<< k))
+    | .ok k => .ok (.int w (if k ≥ w then 0#w else a <<< k))
     | .panic p => .panic p
     | .outOfFuel => .outOfFuel
   | .shr signed cs, [.int w a, n] =>
     match shiftCount cs n with
-    | .ok k => .ok (.int w (if signed then a.sshiftRight k else a >>> k))
+    | .ok k =>
+      if k ≥ w then .ok (.int w (if signed && a.msb then -1#w else 0#w))
+      else .ok (.int w (if signed then a.sshiftRight k else a >>> k))
     | .panic p => .panic p
     | .outOfFuel => .outOfFuel
   | .eq, [a@(.str ..), b@(.str ..)] =>
