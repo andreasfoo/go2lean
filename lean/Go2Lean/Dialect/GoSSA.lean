@@ -94,6 +94,11 @@ inductive Op where
   | mkStruct
   /-- `make([]T, len, cap)` filled with `zero`; args `[len, cap]`. -/
   | makeSlice (zero : Val)
+  /-- `append(s, t...)`: writes in place while the capacity allows, else
+  copies into a fresh backing array; `zero` pads the new capacity. -/
+  | appendSlice (zero : Val)
+  /-- `copy(dst, src)`: copies `min len` elements, yields the count. -/
+  | copySlice
   /-- `p == nil` style comparisons go through `eq`/`ne`; this reads `p == nil`. -/
   | isNil
   -- strings
@@ -289,6 +294,19 @@ def strSliceBytes (heap : Heap Val) : Val → Option (List (List Nat))
     | some (.arr es) => ((es.drop off.toNat).take len.toNat).mapM (strBytes heap)
     | _ => none
   | _ => none
+
+/-- The elements of a heap-backed slice (nil is empty). -/
+def sliceElems (heap : Heap Val) : Val → Option (List Val)
+  | .slice 0 _ _ _ => some []
+  | .slice ref off len _ =>
+    match heap[ref]? with
+    | some (.arr es) => some ((es.drop off.toNat).take len.toNat)
+    | _ => none
+  | _ => none
+
+/-- Overwrite `es` from index `i` with `vs`. -/
+def writeAt (es : List Val) (i : Nat) (vs : List Val) : List Val :=
+  es.take i ++ vs ++ es.drop (i + vs.length)
 
 /-- Go index semantics: a negative index is out of range, so compare unsigned
 after sign-extending to 64 bits. -/
@@ -594,6 +612,48 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
   | .strJoin, [elems, sep] =>
     match strSliceBytes heap elems, strBytes heap sep with
     | some xs, some y => .ok (strAlloc heap (xs.intersperse y).flatten)
+    | _, _ => .panic .modelStuck
+  | .appendSlice zero, [s, t] =>
+    match sliceElems heap t with
+    | none => .panic .modelStuck
+    | some [] => .ok (s, heap) -- append(s) is s, nil included
+    | some ts =>
+      match s with
+      | .slice 0 _ _ _ =>
+        let (p, heap) := heapAlloc heap (.arr ts)
+        match p with
+        | .ptr ref _ => .ok (.slice ref 0#64 (BitVec.ofNat 64 ts.length) (BitVec.ofNat 64 ts.length), heap)
+        | _ => .panic .modelStuck
+      | .slice ref off len cap =>
+        match heap[ref]? with
+        | some (.arr es) =>
+          let newLen := len.toNat + ts.length
+          if newLen ≤ cap.toNat then
+            -- Room in the backing array: write in place (aliases stay live).
+            .ok (.slice ref off (BitVec.ofNat 64 newLen) cap,
+                 heap.set! ref (.arr (writeAt es (off.toNat + len.toNat) ts)))
+          else
+            -- Grow: Go doubles small slices; the exact capacity is
+            -- implementation-defined and only visible through `cap`.
+            let newCap := max (2 * cap.toNat) newLen
+            if newCap > 1024 then .panic .modelStuck
+            else
+              let contents := (es.drop off.toNat).take len.toNat ++ ts ++ List.replicate (newCap - newLen) zero
+              let (p, heap) := heapAlloc heap (.arr contents)
+              match p with
+              | .ptr ref' _ => .ok (.slice ref' 0#64 (BitVec.ofNat 64 newLen) (BitVec.ofNat 64 newCap), heap)
+              | _ => .panic .modelStuck
+        | _ => .panic .modelStuck
+      | _ => .panic .modelStuck
+  | .copySlice, [d, t] =>
+    match sliceElems heap t, d with
+    | some ts, .slice 0 _ _ _ => .ok (.int 64 (BitVec.ofNat 64 (min 0 ts.length)), heap)
+    | some ts, .slice ref off len _ =>
+      let n := min len.toNat ts.length
+      match heap[ref]? with
+      | some (.arr es) =>
+        .ok (.int 64 (BitVec.ofNat 64 n), heap.set! ref (.arr (writeAt es off.toNat (ts.take n))))
+      | _ => .panic .modelStuck
     | _, _ => .panic .modelStuck
   | .makeSlice zero, [len, cap] =>
     match asIndex len, asIndex cap with

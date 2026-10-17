@@ -145,6 +145,12 @@ type MakeSlice struct{ Zero Val }
 
 func (m MakeSlice) Lean() string { return "(.makeSlice " + m.Zero.Lean() + ")" }
 
+// Append is append(s, t...) for slices s and t of the same element type;
+// Zero pads the capacity when the backing array grows.
+type Append struct{ Zero Val }
+
+func (a Append) Lean() string { return "(.appendSlice " + a.Zero.Lean() + ")" }
+
 // StrConst is a string literal, given as its UTF-8 bytes.
 type StrConst struct{ Bytes []byte }
 

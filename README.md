@@ -123,6 +123,7 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/alias` | `Deposit(*Account, int)` overshoots its limit; `Withdraw` accepts negative amounts; `Fill([]int, int)` misses the last element | all confirmed; specs observe the mutated struct and slice. Nil receivers and pointer arguments are tried only with `-nil-inputs` |
 | `examples/strs` | `Scheme` slices with an unchecked `strings.Index`; `ParsePort` has no upper bound | both confirmed (`"port:2147483648"`) |
 | `examples/list` | `Sum(*Node)` skips the head cell of a linked list | confirmed with a materialised `&Node{...}` |
+| `examples/recs` | `First`/`Longest`/`Dedup` index slices of structs and strings without a length check | all confirmed with `[]Item{...}` literals; `Total`, `Names` (built with `append`) and `Push` satisfy their specs |
 
 ## On a real module
 
@@ -143,16 +144,18 @@ short hash, and `budgetDuration(seconds int) time.Duration` wrapping to
 ## Supported Go subset
 
 Integers of every width, bools, `error` values (nil-ness), strings (with
-`strings.HasPrefix/HasSuffix/Contains/Index/TrimSpace/TrimPrefix/TrimSuffix`
-and `strconv.Atoi/Itoa` modelled), structs, pointers, recursive types,
-arrays, slices with reads and writes, `make`, `new`, multiple results,
-methods, `len`/`cap`, reslicing, loops and branches, calls between functions
-in the same package. Division by zero, out-of-range indexing, negative shift
-counts and nil dereferences panic as in Go; `MinInt / -1` wraps. Unmodelled
-calls become havoc values (or a recorded zero/opaque assumption for types
-the model cannot draw); interfaces and maps are opaque. Closures, map
-operations, type assertions, `append`, `defer` and goroutines still reject
-the function, with the reason in the model report. On tingly-box (7498
+the common `strings.*` functions and `strconv.Atoi/Itoa` modelled),
+structs, pointers, recursive types, arrays, slices with reads and writes,
+`make`, `new`, multiple results,
+methods, `len`/`cap`, reslicing, `append` and `copy` (including
+`append([]byte, string...)`), loops and branches, calls between functions
+in the same package. Slice elements can be any modelled type: structs,
+strings, pointers, nested slices. Division by zero, out-of-range indexing,
+negative shift counts and nil dereferences panic as in Go; `MinInt / -1`
+wraps. Unmodelled calls become havoc values (or a recorded zero/opaque
+assumption for types the model cannot draw); interfaces and maps are
+opaque. Closures, map operations, type assertions, `defer` and goroutines
+still reject the function, with the reason in the model report. On tingly-box (7498
 functions and methods) this models 857.
 
 ## Layout

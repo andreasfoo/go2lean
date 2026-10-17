@@ -263,6 +263,10 @@ type ABIParam struct {
 	ElemPkg    string `json:"elem_pkg,omitempty"`
 	ElemWidth  int    `json:"elem_width,omitempty"`
 	ElemSigned bool   `json:"elem_signed,omitempty"`
+	// ElemParam describes a non-integer element type (struct, string,
+	// pointer, nested slice); the contents are then reported under Objects
+	// as a JSON array instead of under Memory.
+	ElemParam *ABIParam `json:"elem_param,omitempty"`
 	// Struct fields (Go holds the field name) and the pointee of a pointer.
 	Fields  []ABIParam `json:"fields,omitempty"`
 	Pointee *ABIParam  `json:"pointee,omitempty"`

@@ -135,6 +135,13 @@ func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (string, error) {
 	case contract.ABIError:
 		return fmt.Sprintf("(.err %q)", p.Go), nil
 	case contract.ABISlice:
+		if p.ElemParam != nil {
+			e, err := gen(abi, *p.ElemParam, maxLen)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("(.sliceOf %q %s %d)", p.Go, e, maxLen), nil
+		}
 		w, signed, ok := p.ElemInfo()
 		if !ok {
 			return "", fmt.Errorf("parameter %s: unsupported element type %s", p.Go, p.Elem)

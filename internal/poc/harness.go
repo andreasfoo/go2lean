@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/token"
+	"math/big"
 	"path"
 	"sort"
 	"strconv"
@@ -227,6 +228,25 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 		}
 		return fmt.Sprintf("%s := %s", p.Go, expr), nil
 	case contract.ABISlice:
+		if p.ElemParam != nil {
+			raw, ok := cx.Objects[p.Go]
+			if !ok {
+				return "", fmt.Errorf("counterexample has no object for %s", p.Go)
+			}
+			var v any
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return "", fmt.Errorf("object %s: %w", p.Go, err)
+			}
+			expr, err := literal(abi, p, v)
+			if err != nil {
+				return "", err
+			}
+			c, _ := strconv.Atoi(cx.Inputs[p.Go+"_cap"])
+			if elems, ok := v.([]any); ok && c > len(elems) {
+				return fmt.Sprintf("%s := append(make(%s, 0, %d), %s...)", p.Go, p.GoType, c, expr), nil
+			}
+			return fmt.Sprintf("%s := %s", p.Go, expr), nil
+		}
 		n, err := strconv.Atoi(cx.Inputs[p.Go+"_len"])
 		if err != nil {
 			return "", fmt.Errorf("counterexample has no length for %s", p.Go)
@@ -273,6 +293,13 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("%s: expected an integer string, got %v", p.Go, v)
 		}
+		// Nested values are rendered signed by the model; an unsigned field
+		// gets its two's-complement reading back.
+		if w, signed, ok := p.IntInfo(); ok && !signed && strings.HasPrefix(s, "-") {
+			if n, ok := new(big.Int).SetString(s, 10); ok {
+				s = n.Add(n, new(big.Int).Lsh(big.NewInt(1), uint(w))).String()
+			}
+		}
 		return fmt.Sprintf("%s(%s)", p.GoType, s), nil
 	case contract.ABIBool:
 		return fmt.Sprint(v), nil
@@ -304,6 +331,29 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			parts = append(parts, f.Go+": "+e)
 		}
 		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
+	case contract.ABISlice:
+		if v == nil {
+			return "(" + p.GoType + ")(nil)", nil
+		}
+		elems, ok := v.([]any)
+		if !ok {
+			return "", fmt.Errorf("%s: expected a JSON array, got %v", p.Go, v)
+		}
+		var parts []string
+		for _, e := range elems {
+			var ep contract.ABIParam
+			if p.ElemParam != nil {
+				ep = *p.ElemParam
+			} else {
+				ep = contract.ABIParam{Go: p.Go, GoType: p.Elem, TypePkg: p.ElemPkg, Width: p.ElemWidth, Signed: p.ElemSigned, Kind: contract.ABIInt}
+			}
+			s, err := literal(abi, ep, e)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, s)
+		}
+		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
 	case contract.ABIPtr:
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
@@ -333,6 +383,9 @@ func collectImports(p contract.ABIParam, into map[string]bool) {
 	if p.Pointee != nil {
 		collectImports(*p.Pointee, into)
 	}
+	if p.ElemParam != nil {
+		collectImports(*p.ElemParam, into)
+	}
 }
 
 // needsErrors reports whether rendering the object needs the errors package
@@ -359,6 +412,13 @@ func needsErrors(p contract.ABIParam, raw json.RawMessage) bool {
 			}
 		case contract.ABIPtr:
 			return v != nil && p.Pointee != nil && walk(*p.Pointee, v)
+		case contract.ABISlice:
+			elems, _ := v.([]any)
+			for _, e := range elems {
+				if p.ElemParam != nil && walk(*p.ElemParam, e) {
+					return true
+				}
+			}
 		}
 		return false
 	}

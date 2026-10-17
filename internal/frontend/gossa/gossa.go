@@ -895,6 +895,36 @@ func (t *fnState) call(x *ssa.Call) error {
 				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strLen"), Args: []ir.Var{a}})
 				return nil
 			}
+		case "append", "copy":
+			// append(s, t...) and copy(dst, src) on slices of modelled
+			// elements; `append([]byte, string...)` and `copy([]byte, string)`
+			// go through a byte-slice copy of the string.
+			if !isSlice(x.Call.Args[0].Type()) {
+				break
+			}
+			a, err := t.val(x.Call.Args[0])
+			if err != nil {
+				return err
+			}
+			b, err := t.val(x.Call.Args[1])
+			if err != nil {
+				return err
+			}
+			if isString(x.Call.Args[1].Type()) {
+				bs := t.fresh()
+				t.emit(ir.Instr{Dst: bs, Op: ir.Simple("strToBytes"), Args: []ir.Var{b}})
+				b = bs
+			}
+			if bi.Name() == "copy" {
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("copySlice"), Args: []ir.Var{a, b}})
+				return nil
+			}
+			zero, ok := zeroVal(x.Type().Underlying().(*types.Slice).Elem())
+			if !ok {
+				return fmt.Errorf("append to unsupported slice type %s", x.Type())
+			}
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Append{Zero: zero}, Args: []ir.Var{a, b}})
+			return nil
 		}
 		if hasResult {
 			return t.havoc(x, "builtin "+bi.Name(), "unmodeled-call", "")
@@ -1017,8 +1047,8 @@ func isSlice(t types.Type) bool {
 }
 
 // valueOK says whether values of type t are representable in the model:
-// integers, bools, errors, strings, pointers to and structs of such
-// values, and slices of integers. Recursive types are fine: a pointer
+// integers, bools, errors, strings, and pointers to, structs of and slices
+// of such values. Recursive types are fine: a pointer
 // cycle is cut by treating the type under construction as representable.
 func valueOK(t types.Type) bool { return valueOKVisiting(t, map[types.Type]bool{}) }
 
@@ -1042,8 +1072,7 @@ func valueOKVisiting(t types.Type, visiting map[types.Type]bool) bool {
 		}
 		return true
 	case *types.Slice:
-		_, _, ok := intWidth(u.Elem())
-		return ok
+		return valueOKVisiting(u.Elem(), visiting)
 	}
 	return false
 }
@@ -1206,16 +1235,22 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
-		ew, esigned, ok := intWidth(u.Elem())
-		if !ok {
-			return contract.ABIParam{}, fmt.Errorf("slice of %s", u.Elem())
-		}
 		esrc, epath := spell(pkg, u.Elem())
-		return contract.ABIParam{
+		ap := contract.ABIParam{
 			Go: name, GoType: src, TypePkg: ipath, Kind: contract.ABISlice,
 			Model: []string{name + "_ref", name + "_off", name + "_len", name + "_cap"},
-			Elem:  esrc, ElemPkg: epath, ElemWidth: ew, ElemSigned: esigned,
-		}, nil
+			Elem:  esrc, ElemPkg: epath,
+		}
+		if ew, esigned, ok := intWidth(u.Elem()); ok {
+			ap.ElemWidth, ap.ElemSigned = ew, esigned
+			return ap, nil
+		}
+		elem, err := ab.param("elem", u.Elem(), stack)
+		if err != nil {
+			return contract.ABIParam{}, fmt.Errorf("slice of %s: %w", u.Elem(), err)
+		}
+		ap.ElemParam = &elem
+		return ap, nil
 	case *types.Struct:
 		ap := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct}
 		for i := 0; i < u.NumFields(); i++ {

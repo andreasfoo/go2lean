@@ -168,6 +168,8 @@ frontends sharing everything and translation being testable apart from semantics
 ### 4.3 `GoSSA` dialect
 
 Stage A (built): integers of every width, bools, read-only slices of integers.
+Stage B (built, §4.3b): heap-backed slices of any modelled element type,
+structs, pointers, strings, `append`/`copy`.
 
 | go/ssa | GoSSA op / term | Status |
 |---|---|---|
@@ -204,7 +206,7 @@ second. As built: `Dialect.denote` takes and returns the heap (`Array Val`,
 slot 0 reserved for nil), so the interpreter core only threads it; the
 dialect gains `ptr (ref, path)`, `structv`, `arr` values and the ops
 `alloc`, `loadPath`, `storePath`, `fieldAddr`, `indexAddr`, `field`,
-`mkStruct`, `makeSlice`. The generators materialise every slice argument and
+`mkStruct`, `makeSlice`, `appendSlice`, `copySlice`. The generators materialise every slice argument and
 every pointee on the heap before the run, so stores are exact and aliasing
 is real; the oracle remains only for slices that come out of unmodelled
 calls. A spec runs on the post-run heap, so it observes mutations through
@@ -212,7 +214,11 @@ its arguments (`examples/alias`: a deposit that overshoots its limit, a fill
 that misses the last element, nil dereferences — all confirmed by `go test`).
 Counterexamples carry struct and pointer arguments under `objects`; the
 harness materialises `&T{F: v, ...}` and `func() *int { v := ...; return &v }()`.
-Not yet: arrays, `append`/`copy`, methods (receivers), interfaces, strings.
+Slice elements are any modelled type (`examples/recs`: `[]Item`, `[]string`,
+built with `append`); `append` writes in place while the capacity allows and
+otherwise copies into a fresh backing array of twice the capacity (Go's
+exact growth is implementation-defined and visible only through `cap`).
+Not yet: interfaces, maps, closures.
 
 The original design notes, kept for the parts still to do:
 
@@ -622,6 +628,7 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | first full pipeline over the 111 packages with a model (855 properties): 53 confirmed, 146 spurious, 30 inconclusive | 43 of the confirmed were nil receivers/arguments; 112 of the spurious were stuck models reported as panics; the inconclusive were harness compile errors (name clashes, unused imports, internal/unexported types) |
 | after: stuck is moot, nil inputs opt-in, harness fixes, `strings.Split`/`Fields`/`Join`/`Repeat`/`Trim*`/`ToLower`/`ToUpper`/`ReplaceAll`/`IndexByte`/`LastIndex`/`Count`/`EqualFold` modelled, unmodelled pointer results point at fresh zero objects, one `go test` per package | **11 confirmed, 26 spurious, 0 inconclusive**. Confirmed: seven `truncate(s, n)` helpers that slice with a negative `n`, two `strings.Repeat` calls with a negative count, `blobPath` slicing a 3-byte hash to 4, and `budgetDuration` wrapping to a negative duration. The remaining spurious cases are unmodelled calls (see the attribution in the run log) |
 | `len`/`cap` on slices of anything but integers was havoc'd (random lengths, spurious index panics); shift counts ≥ 64 made Lean compute `2^k` | fixed; rerunning the 16 packages that had spurious verdicts: **9 confirmed, 5 spurious, 0 inconclusive**; the five that remain depend on `crypto/rand`, `sha256`, `base64`, an OAuth registry and `fmt` — genuine over-approximation that M3 filters. Three more real findings surfaced (`shortenPath`, `sliceLines`, `detectShellOperator`, all slicing with an unchecked length) |
+| the largest signature blocker after that was slices of non-integer elements (484 rejections), and `append` rejected every function building a result | slice elements are now any modelled type (`Gen.sliceOf`, `elem_param` in the ABI, `[]T{...}` literals in the harness) and `append`/`copy` are dialect ops; `examples/recs` confirms three planted bugs |
 
 ## 10. Milestones
 
