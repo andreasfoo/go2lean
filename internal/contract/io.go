@@ -152,9 +152,10 @@ func (w Workspace) ModelReport(frontend, pkgPath string) (*ModelReport, error) {
 	return &r, err
 }
 
-// TargetID is the workspace id of a function: package key and function name.
+// TargetID is the workspace id of a function: package key and function
+// name (a method is "Type.Method").
 func TargetID(pkgPath, funcName string) string {
-	return "t_" + strings.ToLower(PackageKey(pkgPath)+"_"+funcName)
+	return "t_" + strings.ToLower(nonIdent.ReplaceAllString(PackageKey(pkgPath)+"_"+funcName, "_"))
 }
 
 // Properties lists every property in the workspace.

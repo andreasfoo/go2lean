@@ -26,6 +26,9 @@ Rules for a spec function:
   names and types>, <the target's results>) bool, where a single result is
   named ret and several are named ret0, ret1, ... in order (an error result
   is "ret1 error"; test it only against nil).
+- For a method T.M (value or pointer receiver), the target is written T.M in
+  the marker, the spec is named SpecTM<Suffix>, and its parameters start with
+  the receiver (same type as the method's receiver) before M's parameters.
 - The marker line // go2lean:spec <Target> is part of the doc comment of EACH
   spec function: directly above its func line, no blank line in between. Example:
 

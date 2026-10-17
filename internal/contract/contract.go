@@ -218,12 +218,15 @@ type ModelGap struct {
 // after the parameters, named ret for one result or ret0, ret1, ... for
 // several.
 type ABI struct {
-	GoFunc   string      `json:"go_func"`
-	GoSig    string      `json:"go_sig"`
-	Frontend string      `json:"frontend"`
-	Params   []ABIParam  `json:"params"`
-	Results  []ABIResult `json:"results,omitempty"`
-	Havoc    []ABIHavoc  `json:"havoc,omitempty"`
+	GoFunc   string `json:"go_func"`
+	GoSig    string `json:"go_sig"`
+	Frontend string `json:"frontend"`
+	// Method is set for methods: the receiver is Params[0] and a call is
+	// written recv.Method(rest...).
+	Method  string      `json:"method,omitempty"`
+	Params  []ABIParam  `json:"params"`
+	Results []ABIResult `json:"results,omitempty"`
+	Havoc   []ABIHavoc  `json:"havoc,omitempty"`
 }
 
 // ABIParamKind classifies how a Go parameter is split into model values.

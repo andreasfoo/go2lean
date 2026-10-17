@@ -29,7 +29,7 @@ import (
 
 const Frontend = "gossa"
 
-var specRe = regexp.MustCompile(`go2lean:spec\s+(\w+)`)
+var specRe = regexp.MustCompile(`go2lean:spec\s+([\w.]+)`)
 
 // Translate loads the single package matching pattern (relative to dir) and
 // lowers every top-level function. It returns the program and the Go module
@@ -92,19 +92,35 @@ func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}}
 
-	// Pass 1: pick candidates and assign FuncIds so calls can be resolved.
+	// Pass 1: pick candidates (package-level functions and the methods of
+	// the package's named types) and assign FuncIds so calls can be resolved.
 	var fns []*ssa.Function
-	for _, m := range spkg.Members {
-		if f, ok := m.(*ssa.Function); ok && !isInit(f.Name()) && f.Synthetic == "" && !isTestFunc(f.Name()) {
+	seen := map[*ssa.Function]bool{}
+	add := func(f *ssa.Function) {
+		if f != nil && !seen[f] && f.Synthetic == "" && !isInit(f.Name()) && !isTestFunc(f.Name()) {
+			seen[f] = true
 			fns = append(fns, f)
 		}
 	}
-	sort.Slice(fns, func(i, j int) bool { return fns[i].Name() < fns[j].Name() })
+	for _, m := range spkg.Members {
+		switch m := m.(type) {
+		case *ssa.Function:
+			add(m)
+		case *ssa.Type:
+			for _, typ := range []types.Type{m.Type(), types.NewPointer(m.Type())} {
+				ms := spkg.Prog.MethodSets.MethodSet(typ)
+				for i := 0; i < ms.Len(); i++ {
+					add(spkg.Prog.MethodValue(ms.At(i)))
+				}
+			}
+		}
+	}
+	sort.Slice(fns, func(i, j int) bool { return funcName(fns[i]) < funcName(fns[j]) })
 	byName := map[string]*ssa.Function{}
 	for _, f := range fns {
 		st.ids[f] = len(p.Funcs)
-		p.Funcs = append(p.Funcs, &ir.Func{Name: f.Name(), GoSig: f.Signature.String()})
-		byName[f.Name()] = f
+		p.Funcs = append(p.Funcs, &ir.Func{Name: funcName(f), GoSig: goSig(f)})
+		byName[funcName(f)] = f
 	}
 	st.specFor = func(f *ssa.Function) string { return specTarget(f, byName) }
 	// Pass 2: bodies.
@@ -119,6 +135,29 @@ func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
 		return nil, fmt.Errorf("internal error: generated program is malformed: %w", err)
 	}
 	return p, nil
+}
+
+// goSig renders a signature with its receiver, as the agent should read it.
+func goSig(f *ssa.Function) string {
+	if recv := f.Signature.Recv(); recv != nil {
+		return "func (" + recv.Name() + " " + recv.Type().String() + ") " + f.Name() + strings.TrimPrefix(f.Signature.String(), "func")
+	}
+	return f.Signature.String()
+}
+
+// funcName is the model name of a function: its Go name, or Type.Method
+// for a method (the same for value and pointer receivers).
+func funcName(f *ssa.Function) string {
+	if recv := f.Signature.Recv(); recv != nil {
+		t := recv.Type()
+		if p, ok := t.(*types.Pointer); ok {
+			t = p.Elem()
+		}
+		if n, ok := t.(*types.Named); ok {
+			return n.Obj().Name() + "." + f.Name()
+		}
+	}
+	return f.Name()
 }
 
 // loadErrors collects the first few type/load errors of the packages (and
@@ -874,6 +913,9 @@ func spell(pkg *types.Package, t types.Type) (src, importPath string) {
 
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend}
+	if f.Signature.Recv() != nil {
+		abi.Method = f.Name()
+	}
 	pkg := f.Pkg.Pkg
 	for _, p := range f.Params {
 		ap, err := abiParam(pkg, p.Name(), p.Type())
@@ -955,32 +997,40 @@ func specTarget(f *ssa.Function, byName map[string]*ssa.Function) string {
 		return ""
 	}
 	rest := name[len("Spec"):]
-	// Longest target name that is a prefix of the rest and whose signature fits.
-	best := ""
+	// Longest target name that is a prefix of the rest and whose signature
+	// fits; a method Type.Method matches as TypeMethod.
+	best, bestFlat := "", ""
 	for tname, target := range byName {
-		if target == f || !strings.HasPrefix(rest, tname) || len(tname) <= len(best) {
+		flat := strings.ReplaceAll(tname, ".", "")
+		if target == f || !strings.HasPrefix(rest, flat) || len(flat) <= len(bestFlat) {
 			continue
 		}
 		if specSignatureFits(f.Signature, target.Signature) {
-			best = tname
+			best, bestFlat = tname, flat
 		}
 	}
 	return best
 }
 
-// specSignatureFits checks spec(params of target..., ret result) bool.
+// specSignatureFits checks spec(receiver?, params of target..., results of
+// target...) bool.
 func specSignatureFits(spec, target *types.Signature) bool {
-	tp, sp := target.Params(), spec.Params()
-	if spec.Results().Len() != 1 || sp.Len() != tp.Len()+target.Results().Len() {
-		return false
+	var want []types.Type
+	if recv := target.Recv(); recv != nil {
+		want = append(want, recv.Type())
 	}
-	for i := 0; i < tp.Len(); i++ {
-		if !types.Identical(sp.At(i).Type(), tp.At(i).Type()) {
-			return false
-		}
+	for i := 0; i < target.Params().Len(); i++ {
+		want = append(want, target.Params().At(i).Type())
 	}
 	for i := 0; i < target.Results().Len(); i++ {
-		if !types.Identical(sp.At(tp.Len()+i).Type(), target.Results().At(i).Type()) {
+		want = append(want, target.Results().At(i).Type())
+	}
+	sp := spec.Params()
+	if spec.Results().Len() != 1 || sp.Len() != len(want) {
+		return false
+	}
+	for i, t := range want {
+		if !types.Identical(sp.At(i).Type(), t) {
 			return false
 		}
 	}

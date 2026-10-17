@@ -56,3 +56,28 @@ func Swap(p, q *int) {
 	*p = *q
 	*q = t
 }
+
+// Withdraw removes amt from the balance when enough is available. It
+// forgets to reject negative amounts, so a negative withdrawal deposits.
+func (a *Account) Withdraw(amt int) bool {
+	if a.Balance < amt {
+		return false
+	}
+	a.Balance -= amt
+	return true
+}
+
+// SpecAccountWithdrawNeverGrows: a withdrawal never increases the balance.
+//
+// go2lean:spec Account.Withdraw
+func SpecAccountWithdrawNeverGrows(a *Account, amt int, ret bool) bool {
+	if a == nil || !ret {
+		return true
+	}
+	return amt >= 0
+}
+
+// Available reports the headroom below the limit; correct.
+func (a Account) Available() int {
+	return a.Limit - a.Balance
+}

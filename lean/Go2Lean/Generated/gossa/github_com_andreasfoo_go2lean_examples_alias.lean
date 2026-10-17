@@ -6,8 +6,49 @@ namespace Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_alias
 
 open Go2Lean.SSA Go2Lean.GoSSA
 
-/-- func(a *github.com/andreasfoo/go2lean/examples/alias.Account, amt int) bool (status: complete) -/
+/-- func (a github.com/andreasfoo/go2lean/examples/alias.Account) Available() int (status: complete) -/
 def f0 : GoSSA.Func := {
+  name := "Account.Available", params := [0], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.alloc (.structv [(.int 64 0#64), (.int 64 0#64)])) [],
+                 .op 2 .storePath [1, 0],
+                 .op 3 (.fieldAddr 1) [1],
+                 .op 4 .loadPath [3],
+                 .op 5 (.fieldAddr 0) [1],
+                 .op 6 .loadPath [5],
+                 .op 7 .sub [4, 6]],
+      term := .ret 7 }
+  ] }
+
+/-- func (a *github.com/andreasfoo/go2lean/examples/alias.Account) Withdraw(amt int) bool (status: complete) -/
+def f1 : GoSSA.Func := {
+  name := "Account.Withdraw", params := [0, 1], nvals := 12, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.fieldAddr 0) [0],
+                 .op 3 .loadPath [2],
+                 .op 4 .slt [3, 1]],
+      term := .br 4 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool false)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 6 (.fieldAddr 0) [0],
+                 .op 7 .loadPath [6],
+                 .op 8 .sub [7, 1],
+                 .op 9 (.fieldAddr 0) [0],
+                 .op 10 .storePath [9, 8],
+                 .op 11 (.const (.bool true)) []],
+      term := .ret 11 }
+  ] }
+
+/-- func(a *github.com/andreasfoo/go2lean/examples/alias.Account, amt int) bool (status: complete) -/
+def f2 : GoSSA.Func := {
   name := "Deposit", params := [0, 1], nvals := 17, entry := 0,
   blocks := #[
     -- 0: entry
@@ -43,7 +84,7 @@ def f0 : GoSSA.Func := {
   ] }
 
 /-- func(xs []int, v int) (status: complete) -/
-def f1 : GoSSA.Func := {
+def f3 : GoSSA.Func := {
   name := "Fill", params := [0, 1], nvals := 13, entry := 0,
   blocks := #[
     -- 0: entry
@@ -71,7 +112,31 @@ def f1 : GoSSA.Func := {
   ] }
 
 /-- func(a *github.com/andreasfoo/go2lean/examples/alias.Account, amt int, ret bool) bool (status: complete) -/
-def f2 : GoSSA.Func := {
+def f4 : GoSSA.Func := {
+  name := "SpecAccountWithdrawNeverGrows", params := [0, 1, 2], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 3 (.const (.ptr 0 [])) [],
+                 .op 4 .eq [0, 3]],
+      term := .br 4 1 [] 3 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 6 (.const (.int 64 0#64)) [],
+                 .op 7 .sge [1, 6]],
+      term := .ret 7 },
+    -- 3: cond.false
+    { params := [],
+      instrs := #[],
+      term := .br 2 2 [] 1 [] }
+  ] }
+
+/-- func(a *github.com/andreasfoo/go2lean/examples/alias.Account, amt int, ret bool) bool (status: complete) -/
+def f5 : GoSSA.Func := {
   name := "SpecDepositWithinLimit", params := [0, 1, 2], nvals := 9, entry := 0,
   blocks := #[
     -- 0: entry
@@ -93,7 +158,7 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func(xs []int, v int) bool (status: complete) -/
-def f3 : GoSSA.Func := {
+def f6 : GoSSA.Func := {
   name := "SpecFillLast", params := [0, 1], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
@@ -118,7 +183,7 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func(p *int, q *int) (status: complete) -/
-def f4 : GoSSA.Func := {
+def f7 : GoSSA.Func := {
   name := "Swap", params := [0, 1], nvals := 7, entry := 0,
   blocks := #[
     -- 0: entry
@@ -131,6 +196,6 @@ def f4 : GoSSA.Func := {
       term := .ret 6 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4], havocWidths := #[] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7], havocWidths := #[] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_alias

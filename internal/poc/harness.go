@@ -117,6 +117,11 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 	}
 	sort.Strings(d.Imports)
 	d.Args = strings.Join(names, ", ")
+	if abi.Method != "" && len(names) > 0 {
+		// Methods: the receiver is the first parameter.
+		d.Func = names[0] + "." + abi.Method
+		d.Args = strings.Join(names[1:], ", ")
+	}
 	if p.Precondition != nil {
 		d.Pre = p.Precondition.Go
 	}
