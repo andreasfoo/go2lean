@@ -132,11 +132,49 @@ type Result struct {
 
 // Run executes all three modules on one package.
 func Run(w contract.Workspace, env Env, pattern string, opts constraint.SearchOptions, out io.Writer) (*Result, error) {
-	fmt.Fprintln(out, "== M1 compile")
-	report, err := Compile(w, env, pattern, out)
+	results, err := RunAll(w, env, opts, out, pattern)
 	if err != nil {
 		return nil, err
 	}
+	if len(results) != 1 {
+		return nil, fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(results))
+	}
+	return results[0], nil
+}
+
+// RunAll executes all three modules on every package matching the patterns
+// with a single load of the module, skipping packages with nothing modelled.
+func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io.Writer, patterns ...string) ([]*Result, error) {
+	fmt.Fprintln(out, "== M1 compile")
+	reports, err := CompileAll(w, env, out, patterns...)
+	if err != nil {
+		return nil, err
+	}
+	var results []*Result
+	for _, report := range reports {
+		modelled := false
+		for _, f := range report.Funcs {
+			if f.Status != contract.ModelRejected {
+				modelled = true
+			}
+		}
+		if !modelled {
+			continue
+		}
+		fmt.Fprintf(out, "######## %s\n", report.Package)
+		res, err := runReport(w, env, report, opts, out)
+		if err != nil {
+			// One package's trouble (a Lean build failure, a harness that does
+			// not compile) must not end a sweep.
+			fmt.Fprintf(out, "  error: %v\n", err)
+			continue
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
+func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts constraint.SearchOptions, out io.Writer) (*Result, error) {
 	fmt.Fprintln(out, "== M2 properties")
 	props, err := Propose(w, report, out)
 	if err != nil {

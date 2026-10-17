@@ -105,13 +105,13 @@ func cmdRun(args []string) error {
 	ws := workspaceFlag(fs)
 	opts := searchFlags(fs)
 	fs.Parse(args)
-	if fs.NArg() != 1 {
-		return fmt.Errorf("run: exactly one package pattern expected")
+	if fs.NArg() < 1 {
+		return fmt.Errorf("run: at least one package pattern expected (e.g. ./...)")
 	}
 	w, env, err := openWorkspace(ws)
 	if err != nil {
 		return err
 	}
-	_, err = pipeline.Run(w, env, fs.Arg(0), opts.get(), os.Stdout)
+	_, err = pipeline.RunAll(w, env, opts.get(), os.Stdout, fs.Args()...)
 	return err
 }
