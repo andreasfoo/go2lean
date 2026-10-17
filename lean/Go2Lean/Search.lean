@@ -148,8 +148,12 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 (len + extraCap)), g, heap)
     | _ => (.unit, g, heap)
   | .sliceOf _ elem maxLen =>
+    -- Nested slices halve their length bound per level, so a struct of
+    -- slices of structs of slices stays a few hundred objects per trial
+    -- instead of growing exponentially.
+    let maxLen := if depth ≥ topDepth then maxLen else maxLen / 2 ^ (topDepth - depth)
     let (len, g) := randNat g 0 maxLen
-    let (extraCap, g) := randNat g 0 2
+    let (extraCap, g) := if maxLen == 0 then (0, g) else randNat g 0 2
     let (elems, g, heap) := genList pf extra g heap pool table (depth - 1) allowNil (List.replicate (len + extraCap) elem)
     let (p, heap) := heapAlloc heap (.arr elems)
     match p with
@@ -543,10 +547,11 @@ def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens 
     (table : TypeTable := #[]) (allowNil : Bool := true) : Nat :=
   gens.foldl (fun acc g => acc * genSize extra maxLen pool table 2 allowNil g) 1
 
-/-- The full argument domain, each entry with the heap holding its objects. -/
+/-- The inputs of the small domain as heap builders, so that the heaps are
+built one at a time inside the engine's budget. -/
 def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)
-    (table : TypeTable := #[]) (allowNil : Bool := true) : List (List Val × Heap Val) :=
-  (enumGen.enumList extra maxLen pool table 2 allowNil gens).map fun build => build #[]
+    (table : TypeTable := #[]) (allowNil : Bool := true) : List (Heap Val → List Val × Heap Val) :=
+  enumGen.enumList extra maxLen pool table 2 allowNil gens
 
 /-- Try every input in the small domain. Prints a counterexample line, or
 `{"found": false, "exhaustive": true, ...}` when the whole domain holds, or
@@ -567,7 +572,8 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut moots := 0
   let mut i : Nat := 0
   let start ← IO.monoMsNow
-  for (args, heap) in enumArgs extra maxLen pool gens table allowNil do
+  for build in enumArgs extra maxLen pool gens table allowNil do
+    let (args, heap) := build #[]
     if budgetMs > 0 && (← IO.monoMsNow) - start > budgetMs then
       -- Out of time: no certificate, but say how far it got.
       IO.println (Json.mkObj [("found", false), ("exhaustive", false), ("reason", "budget"),
