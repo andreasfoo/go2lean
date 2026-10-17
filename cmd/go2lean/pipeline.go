@@ -30,6 +30,7 @@ func searchFlags(fs *flag.FlagSet) *engineOptions {
 	fs.IntVar(&o.MaxLen, "maxlen", 8, "maximum generated slice length")
 	fs.IntVar(&o.ExhaustLen, "exhaust-len", 3, "maximum slice length in the exhaustive engine")
 	fs.IntVar(&o.ExhaustLimit, "exhaust-limit", 300000, "maximum domain size the exhaustive engine attempts")
+	fs.BoolVar(&o.NilInputs, "nil-inputs", false, "let top-level pointer arguments and receivers be nil")
 	return &engineOptions{o, engine}
 }
 

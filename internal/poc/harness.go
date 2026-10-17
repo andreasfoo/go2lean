@@ -7,6 +7,8 @@ package poc
 import (
 	"encoding/json"
 	"fmt"
+	"go/token"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,38 +48,39 @@ import (
 {{- end}}
 )
 
-func TestGo2LeanPoC_{{.ID}}(t *testing.T) {
+func TestGo2LeanPoC_{{.ID}}(go2leanT *testing.T) {
+	_ = go2leanT
 {{- range .Decls}}
 	{{.}}
 {{- end}}
 {{- range $i, $r := .Rets}}
 	var {{$r}} {{index $.RetTypes $i}}
 {{- end}}
-	res := map[string]any{"panicked": false}
+	go2leanRes := map[string]any{"panicked": false}
 	func() {
 		defer func() {
-			if r := recover(); r != nil {
-				res["panicked"] = true
-				res["panic"] = fmt.Sprint(r)
+			if go2leanR := recover(); go2leanR != nil {
+				go2leanRes["panicked"] = true
+				go2leanRes["panic"] = fmt.Sprint(go2leanR)
 			}
 		}()
 {{- if .Rets}}
 		{{.RetList}} = {{.Func}}({{.Args}})
-		res["ret"] = fmt.Sprint({{.RetList}})
+		go2leanRes["ret"] = fmt.Sprint({{.RetList}})
 {{- else}}
 		{{.Func}}({{.Args}})
 {{- end}}
 	}()
 {{- if .Pre}}
-	res["pre"] = {{.Pre}}
+	go2leanRes["pre"] = {{.Pre}}
 {{- end}}
 {{- if .SpecCall}}
-	if !res["panicked"].(bool) {
-		res["spec"] = {{.SpecCall}}
+	if !go2leanRes["panicked"].(bool) {
+		go2leanRes["spec"] = {{.SpecCall}}
 	}
 {{- end}}
-	b, _ := json.Marshal(res)
-	fmt.Println("GO2LEAN_RESULT " + string(b))
+	go2leanB, _ := json.Marshal(go2leanRes)
+	fmt.Println("GO2LEAN_RESULT " + string(go2leanB))
 }
 `))
 
@@ -90,10 +93,18 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 		if len(abi.Results) > 1 {
 			name = fmt.Sprintf("ret%d", i)
 		}
+		if r.GoType == "" {
+			return "", fmt.Errorf("result %d has no Go type", i)
+		}
 		d.Rets = append(d.Rets, name)
 		d.RetTypes = append(d.RetTypes, r.GoType)
 		if r.TypePkg != "" {
 			imports[r.TypePkg] = true
+		}
+	}
+	for _, ty := range abi.Types {
+		for _, f := range ty.Fields {
+			collectImports(f, imports)
 		}
 	}
 	var names []string
@@ -112,8 +123,14 @@ func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contr
 			imports["errors"] = true
 		}
 	}
+	// A nil pointer or an empty literal may leave a type package unused, and
+	// an unused import does not compile: keep only the packages whose
+	// qualifier the generated declarations mention.
+	decls := strings.Join(d.Decls, "\n") + "\n" + strings.Join(d.RetTypes, " ")
 	for ip := range imports {
-		d.Imports = append(d.Imports, ip)
+		if strings.Contains(decls, path.Base(ip)+".") {
+			d.Imports = append(d.Imports, ip)
+		}
 	}
 	sort.Strings(d.Imports)
 	d.Args = strings.Join(names, ", ")
@@ -247,8 +264,14 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if !ok || len(fields) != len(p.Fields) {
 			return "", fmt.Errorf("%s: expected %d fields, got %v", p.Go, len(p.Fields), v)
 		}
+		if strings.Contains(p.TypePkg, "/internal/") || strings.HasPrefix(p.TypePkg, "internal/") {
+			return "", fmt.Errorf("%s: type %s lives in an internal package the test cannot import", p.Go, p.GoType)
+		}
 		var parts []string
 		for i, f := range p.Fields {
+			if p.TypePkg != "" && !token.IsExported(f.Go) {
+				return "", fmt.Errorf("%s: cannot set unexported field %s of %s from the test", p.Go, f.Go, p.GoType)
+			}
 			e, err := literal(abi, f, fields[i])
 			if err != nil {
 				return "", err

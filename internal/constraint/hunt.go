@@ -35,6 +35,10 @@ type SearchOptions struct {
 	// bounds the domain size it will attempt.
 	ExhaustLen   int
 	ExhaustLimit int
+	// NilInputs lets top-level pointer arguments and receivers be nil. Off by
+	// default: "it panics on a nil receiver" is true of most Go code and
+	// drowns the findings people act on. Nested pointers may still be nil.
+	NilInputs bool
 }
 
 func (o SearchOptions) withDefaults() SearchOptions {
@@ -68,7 +72,7 @@ type searchResult struct {
 	OutOfFuel   int                        `json:"out_of_fuel"`
 	Moot        int                        `json:"moot"` // postcondition runs where the target panicked first
 	Exhaustive  bool                       `json:"exhaustive"`
-	Domain      int                        `json:"domain"`
+	Domain      float64                    `json:"domain"` // may exceed int64 when the domain is too large
 	Reason      string                     `json:"reason"`
 	MaxLen      int                        `json:"max_len"`
 	HavocSites  int                        `json:"havoc_sites"`
@@ -235,7 +239,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 
 	var summary []string
 	if opts.Engine == EngineRandom || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d %s %s", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel, strs, table)
+		call := fmt.Sprintf("Search.run %s %s %s %s %d %d %d %s %s %v", prog, leanProp, g, extra, opts.Seed, opts.Trials, opts.Fuel, strs, table, opts.NilInputs)
 		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_random", call)
 		if err != nil {
 			return nil, "", err
@@ -244,10 +248,10 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			cx, err := writeCx(ws, prop, res, "random", opts)
 			return cx, fmt.Sprintf("random: found at trial %d", res.Trial), err
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot)", res.Trials, res.OutOfFuel, res.Moot))
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)", res.Trials, res.OutOfFuel, res.Moot))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
-		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d %s %s", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel, strs, table)
+		call := fmt.Sprintf("Search.exhaust %s %s %s %s %d %d %d %s %s %v", prog, leanProp, g, extra, opts.ExhaustLen, opts.ExhaustLimit, opts.Fuel, strs, table, opts.NilInputs)
 		res, err := runSearch(leanDir, report.LeanModule, prop.ID+"_exhaustive", call)
 		if err != nil {
 			return nil, "", err
@@ -257,7 +261,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			cx, err := writeCx(ws, prop, res, "exhaustive", opts)
 			return cx, fmt.Sprintf("exhaustive: found at input %d", res.Trial), err
 		case res.Exhaustive:
-			domain := fmt.Sprintf("%d inputs: boundary values, mined literals and |v|<=8, slices up to length %d", res.Domain, res.MaxLen)
+			domain := fmt.Sprintf("%.0f inputs: boundary values, mined literals and |v|<=8, slices up to length %d", res.Domain, res.MaxLen)
 			if res.HavocSites > 0 {
 				domain += fmt.Sprintf("; %d havoc sites not enumerated", res.HavocSites)
 			}
@@ -265,11 +269,11 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			if err := ws.WriteProofResult(pr); err != nil {
 				return nil, "", err
 			}
-			summary = append(summary, fmt.Sprintf("exhaustive: holds on %d inputs (recorded as %s)", res.Domain, pr.Status))
+			summary = append(summary, fmt.Sprintf("exhaustive: holds on %.0f inputs (recorded as %s)", res.Domain, pr.Status))
 		case res.Reason != "":
-			summary = append(summary, fmt.Sprintf("exhaustive: skipped (%s: %d > %d)", res.Reason, res.Domain, opts.ExhaustLimit))
+			summary = append(summary, fmt.Sprintf("exhaustive: skipped (%s: %.3g > %d)", res.Reason, res.Domain, opts.ExhaustLimit))
 		case res.Moot > 0:
-			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d of %d inputs panicked before the oracle ran (see the no_panic property)", res.Moot, res.Domain))
+			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d of %.0f inputs were moot (the model got stuck, or the target panicked before the oracle ran)", res.Moot, res.Domain))
 		default:
 			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d inputs ran out of fuel", res.OutOfFuel))
 		}

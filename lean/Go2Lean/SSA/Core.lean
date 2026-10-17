@@ -34,6 +34,12 @@ inductive PanicKind where
   | modelStuck
   deriving Repr, DecidableEq, Inhabited
 
+/-- A stuck model says nothing about the program: `modelStuck` is an
+ill-formed model, `other` is what a rejected callee's stub raises. -/
+def PanicKind.isStuck : PanicKind → Bool
+  | .modelStuck | .other => true
+  | _ => false
+
 def PanicKind.tag : PanicKind → String
   | .indexOutOfRange => "index_out_of_range"
   | .divideByZero => "divide_by_zero"

@@ -46,7 +46,9 @@ func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error)
 	}
 	src, err := Harness(pkgName, target, prop, cx, abi)
 	if err != nil {
-		return nil, err
+		v := &contract.Verdict{Counterexample: cx.ID, Status: contract.VerdictInconclusive,
+			Diagnosis: &contract.Diagnosis{Reason: "cannot_materialise", Notes: []string{err.Error()}}}
+		return v, ws.WriteVerdict(v)
 	}
 
 	pocDir := ws.PocDir(cx.ID)
