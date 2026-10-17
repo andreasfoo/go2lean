@@ -490,9 +490,26 @@ func havocKind(t types.Type) (int, bool) {
 		return ir.HavocError, true
 	case isBool(t):
 		return ir.HavocBool, true
+	case isString(t):
+		return ir.HavocString, true
 	}
 	w, _, ok := intWidth(t)
 	return w, ok
+}
+
+// assumedValue is what an unmodelled call's result becomes when it cannot
+// be havoc'd: the zero value, or an opaque value for interfaces, maps and
+// funcs. The function is marked partial with the assumption spelled out;
+// this is an under-approximation M3 may expose as spurious results.
+func assumedValue(t types.Type) (ir.Val, bool) {
+	if z, ok := zeroVal(t); ok {
+		return z, true
+	}
+	switch t.Underlying().(type) {
+	case *types.Interface, *types.Map, *types.Signature, *types.Chan:
+		return ir.Opaque{}, true
+	}
+	return nil, false
 }
 
 func (t *fnState) havoc(x ssa.Value, site, reason, goHint string) error {
@@ -500,26 +517,37 @@ func (t *fnState) havoc(x ssa.Value, site, reason, goHint string) error {
 		// A multi-result call: havoc each component and pack them.
 		var parts []ir.Var
 		for i := 0; i < tu.Len(); i++ {
-			k, ok := havocKind(tu.At(i).Type())
-			if !ok {
-				return fmt.Errorf("cannot havoc result %d of type %s", i, tu.At(i).Type())
-			}
-			idx := t.prog.newHavoc(k, fmt.Sprintf("%s: %s #%d", t.f.Name(), site, i), reason, goHint)
 			v := t.fresh()
-			t.emit(ir.Instr{Dst: v, HavocSite: idx})
+			if err := t.havocInto(v, tu.At(i).Type(), fmt.Sprintf("%s: %s #%d", t.f.Name(), site, i), reason, goHint); err != nil {
+				return err
+			}
 			parts = append(parts, v)
 		}
 		t.issue("%s: %s is havoc (%s)", site, x.Name(), reason)
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: parts})
 		return nil
 	}
-	k, ok := havocKind(x.Type())
-	if !ok {
-		return fmt.Errorf("cannot havoc a value of type %s", x.Type())
+	if err := t.havocInto(t.def(x), x.Type(), t.f.Name()+": "+site, reason, goHint); err != nil {
+		return err
 	}
-	idx := t.prog.newHavoc(k, t.f.Name()+": "+site, reason, goHint)
 	t.issue("%s: %s is havoc (%s)", site, x.Name(), reason)
-	t.emit(ir.Instr{Dst: t.def(x), HavocSite: idx})
+	return nil
+}
+
+// havocInto binds dst to a havoc value of type ty, or to the assumed value
+// when the type cannot be havoc'd.
+func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint string) error {
+	if k, ok := havocKind(ty); ok {
+		idx := t.prog.newHavoc(k, site, reason, goHint)
+		t.emit(ir.Instr{Dst: dst, HavocSite: idx})
+		return nil
+	}
+	v, ok := assumedValue(ty)
+	if !ok {
+		return fmt.Errorf("cannot havoc a value of type %s", ty)
+	}
+	t.issue("%s: assumed the zero value of %s (not modelled)", site, ty)
+	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: v}})
 	return nil
 }
 
@@ -536,7 +564,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.ChangeType:
 		return t.conv(x, x.X)
 	case *ssa.IndexAddr:
-		if !isSlice(x.X.Type()) {
+		if !isSlice(x.X.Type()) && !isPointerToArray(x.X.Type()) {
 			return fmt.Errorf("index into non-slice type %s", x.X.Type())
 		}
 		s, err := t.val(x.X)
@@ -550,11 +578,34 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("indexAddr"), Args: []ir.Var{s, i}})
 		return nil
 	case *ssa.Alloc:
-		zero, ok := zeroVal(x.Type().(*types.Pointer).Elem())
+		elem := x.Type().(*types.Pointer).Elem()
+		zero, ok := zeroVal(elem)
 		if !ok {
-			return fmt.Errorf("alloc of unsupported type %s", x.Type().(*types.Pointer).Elem())
+			if zero, ok = assumedValue(elem); !ok {
+				return fmt.Errorf("alloc of unsupported type %s", elem)
+			}
+			t.issue("alloc of %s is opaque (not modelled)", elem)
 		}
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Alloc{Zero: zero}})
+		return nil
+	case *ssa.MakeInterface:
+		t.issue("interface value %s is opaque (not modelled)", x.Name())
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		return nil
+	case *ssa.MakeMap:
+		t.issue("map %s is opaque (not modelled)", x.Name())
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		return nil
+	case *ssa.Index:
+		a, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		i, err := t.val(x.Index)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("arrIndex"), Args: []ir.Var{a, i}})
 		return nil
 	case *ssa.FieldAddr:
 		p, err := t.val(x.X)
@@ -751,7 +802,7 @@ func (t *fnState) conv(dst ssa.Value, src ssa.Value) error {
 
 func (t *fnState) slice(x *ssa.Slice) error {
 	str := isString(x.X.Type())
-	if _, _, ok := sliceElem(x.X.Type()); !ok && !str {
+	if !isSlice(x.X.Type()) && !str && !isPointerToArray(x.X.Type()) {
 		return fmt.Errorf("reslice of non-slice type %s", x.X.Type())
 	}
 	if x.Max != nil {
@@ -760,6 +811,9 @@ func (t *fnState) slice(x *ssa.Slice) error {
 	lenOp, sliceOp := ir.Simple("len"), ir.Simple("reslice")
 	if str {
 		lenOp, sliceOp = ir.Simple("strLen"), ir.Simple("strSlice")
+	}
+	if isPointerToArray(x.X.Type()) {
+		lenOp = ir.Simple("strLen") // the dialect reads an array's length through this op too
 	}
 	s, err := t.val(x.X)
 	if err != nil {
@@ -914,6 +968,15 @@ func isPointer(t types.Type) bool {
 	return ok
 }
 
+func isPointerToArray(t types.Type) bool {
+	p, ok := t.Underlying().(*types.Pointer)
+	if !ok {
+		return false
+	}
+	_, ok = p.Elem().Underlying().(*types.Array)
+	return ok
+}
+
 func isSlice(t types.Type) bool {
 	_, ok := t.Underlying().(*types.Slice)
 	return ok
@@ -980,6 +1043,22 @@ func zeroVal(t types.Type) (ir.Val, bool) {
 			fields = append(fields, z)
 		}
 		return ir.StructVal{Fields: fields}, true
+	case *types.Array:
+		if u.Len() > 4096 {
+			return nil, false
+		}
+		z, ok := zeroVal(u.Elem())
+		if !ok {
+			// Arrays of interfaces (varargs) hold opaque values.
+			if z, ok = assumedValue(u.Elem()); !ok {
+				return nil, false
+			}
+		}
+		elems := make([]ir.Val, u.Len())
+		for i := range elems {
+			elems[i] = z
+		}
+		return ir.ArrVal{Elems: elems}, true
 	}
 	return nil, false
 }

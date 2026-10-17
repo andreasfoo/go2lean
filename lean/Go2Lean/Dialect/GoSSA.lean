@@ -88,6 +88,8 @@ inductive Op where
   | indexAddr
   /-- `s.f_i` of a struct value. -/
   | field (i : Nat)
+  /-- `a[i]` of an array value; args `[a, i]`. -/
+  | arrIndex
   /-- A struct value from its fields. -/
   | mkStruct
   /-- `make([]T, len, cap)` filled with `zero`; args `[len, cap]`. -/
@@ -321,6 +323,35 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     match asIndex i with
     | some i => if i.ult len then .ok (.ptr ref [(off + i).toNat]) else .panic .indexOutOfRange
     | none => .panic .modelStuck
+  | .indexAddr, [.ptr 0 _, _] => .panic .nilDereference
+  | .indexAddr, [.ptr ref path, i] =>
+    -- `&a[i]` for a pointer to an array: bounds come from the array object.
+    match asIndex i, heap[ref]? >>= (getPath · path) with
+    | some i, some (.arr es) =>
+      if i.toNat < es.length then .ok (.ptr ref (path ++ [i.toNat])) else .panic .indexOutOfRange
+    | _, _ => .panic .modelStuck
+  | .arrIndex, [.arr es, i] =>
+    match asIndex i with
+    | some i =>
+      match es[i.toNat]? with
+      | some v => .ok v
+      | none => .panic .indexOutOfRange
+    | none => .panic .modelStuck
+  | .reslice, [.ptr 0 _, _, _] => .panic .nilDereference
+  | .reslice, [.ptr ref path, lo, hi] =>
+    -- `a[lo:hi]` for a pointer to an array: the slice aliases the array.
+    match asIndex lo, asIndex hi, heap[ref]? >>= (getPath · path) with
+    | some lo, some hi, some (.arr es) =>
+      if path.isEmpty && lo.ule hi && hi.toNat ≤ es.length then
+        .ok (.slice ref lo (hi - lo) (BitVec.ofNat 64 es.length - lo))
+      else if !path.isEmpty then .panic .modelStuck
+      else .panic .sliceBounds
+    | _, _, _ => .panic .modelStuck
+  | .strLen, [.ptr ref path] =>
+    -- `len(a)` for a pointer to an array, reached through the generic path.
+    match heap[ref]? >>= (getPath · path) with
+    | some (.arr es) => .ok (.int 64 (BitVec.ofNat 64 es.length))
+    | _ => .panic .modelStuck
   | .isNil, [.ptr r _] => .ok (.bool (r == 0))
   | .isNil, [.err nonNil] => .ok (.bool !nonNil)
   | .strLen, [.str _ _ len] => .ok (.int 64 len)

@@ -52,6 +52,22 @@ type NilSlice struct{}
 
 func (NilSlice) Lean() string { return "(.slice 0 0#64 0#64 0#64)" }
 
+// ArrVal is an array value (also a heap object) from its elements.
+type ArrVal struct{ Elems []Val }
+
+func (v ArrVal) Lean() string {
+	parts := make([]string, len(v.Elems))
+	for i, e := range v.Elems {
+		parts[i] = e.Lean()
+	}
+	return "(.arr [" + strings.Join(parts, ", ") + "])"
+}
+
+// Opaque is a value the model does not look into (interfaces, maps, funcs).
+type Opaque struct{}
+
+func (Opaque) Lean() string { return ".unit" }
+
 // EmptyStr is the empty string value.
 type EmptyStr struct{}
 
@@ -155,10 +171,11 @@ var StdlibOps = map[string]Op{
 }
 
 // Havoc site kinds, encoded in Prog.HavocWidths: 0 is an opaque error, 1 a
-// bool, any other value the width of an integer.
+// bool, 2 a string, any other value the width of an integer.
 const (
-	HavocError = 0
-	HavocBool  = 1
+	HavocError  = 0
+	HavocBool   = 1
+	HavocString = 2
 )
 
 // Instr is `Dst := Op(Args)`, or a havoc when Op is nil.

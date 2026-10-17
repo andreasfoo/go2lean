@@ -202,14 +202,16 @@ def oracleOf (pf : Profile) (extra : List Nat) (seed : Nat) : Oracle :=
       (genBits pf extra (mkStdGen h.toNat) 64).1 }
 
 /-- A havoc oracle derived from the seed. Site widths encode the kind of
-value: 0 is an opaque `error` (nil or non-nil), 1 is a bool, anything else
-is an integer of that width. -/
+value: 0 is an opaque `error` (nil or non-nil), 1 is a bool, 2 is a string
+(the empty string: havoc strings carry no bytes until a heap is available
+to the oracle), anything else is an integer of that width. -/
 def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
   let w := widths[site]?.getD 64
   let h := mixHash (mixHash (UInt64.ofNat seed) (UInt64.ofNat site)) (UInt64.ofNat (iter + 1))
   let g := mkStdGen h.toNat
   if w == 0 then .err (randBool g).1
   else if w == 1 then .bool (randBool g).1
+  else if w == 2 then .str 0 0#64 0#64
   else
     let (v, _) := genBits .mixed [] g w
     .int w v
