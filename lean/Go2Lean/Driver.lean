@@ -50,6 +50,7 @@ structure Spec where
   fuel : Nat
   maxLen : Nat
   limit : Nat
+  budgetMs : Nat
 
 def specOfJson (j : Json) : Except String Spec := do
   let gens ← (← j.getObjValAs? (Array Json) "gens").toList.mapM genOfJson
@@ -66,12 +67,13 @@ def specOfJson (j : Json) : Except String Spec := do
     trials := ← j.getObjValAs? Nat "trials"
     fuel := ← j.getObjValAs? Nat "fuel"
     maxLen := ← j.getObjValAs? Nat "maxLen"
-    limit := ← j.getObjValAs? Nat "limit" }
+    limit := ← j.getObjValAs? Nat "limit"
+    budgetMs := (j.getObjValAs? Nat "budgetMs").toOption.getD 0 }
 
 def runSpec (p : GoSSA.Prog) (s : Spec) : IO UInt32 := do
   match s.engine with
-  | "random" => run p s.prop s.gens s.extra s.seed s.trials s.fuel s.strs s.table s.allowNil; return 0
-  | "exhaustive" => exhaust p s.prop s.gens s.extra s.maxLen s.limit s.fuel s.strs s.table s.allowNil; return 0
+  | "random" => run p s.prop s.gens s.extra s.seed s.trials s.fuel s.strs s.table s.allowNil s.budgetMs; return 0
+  | "exhaustive" => exhaust p s.prop s.gens s.extra s.maxLen s.limit s.fuel s.strs s.table s.allowNil s.budgetMs; return 0
   | other => IO.eprintln s!"unknown engine {other}"; return 2
 
 /-- Entry point of the `go2lean-search` executable: `go2lean-search spec.json`,

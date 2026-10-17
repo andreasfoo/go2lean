@@ -32,6 +32,7 @@ func searchFlags(fs *flag.FlagSet) *engineOptions {
 	fs.IntVar(&o.ExhaustLimit, "exhaust-limit", 300000, "maximum domain size the exhaustive engine attempts")
 	fs.BoolVar(&o.NilInputs, "nil-inputs", false, "let top-level pointer arguments and receivers be nil")
 	fs.IntVar(&o.Jobs, "jobs", 0, "properties searched in parallel (default: number of CPUs)")
+	fs.IntVar(&o.BudgetSeconds, "budget", 10, "seconds each engine may spend on one property (0: unlimited)")
 	return &engineOptions{o, engine}
 }
 

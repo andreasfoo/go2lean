@@ -398,12 +398,18 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
 /-- Run `trials` random trials; print one JSON line, `{"found": false, ...}` if nothing refutes. -/
 def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (seed trials fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
-    (allowNil : Bool := true) : IO Unit := do
+    (allowNil : Bool := true) (budgetMs : Nat := 0) : IO Unit := do
   let pool := strs.map fun s => s.toUTF8.toList.map (·.toNat)
   let mut g := mkStdGen seed
   let mut fuelOuts := 0
   let mut moots := 0
+  let start ← IO.monoMsNow
+  let mut done := 0
   for trial in [0:trials] do
+    -- A wall-clock budget (0: none) bounds a property whose inputs are
+    -- expensive to draw; the report says how many trials ran.
+    if budgetMs > 0 && (← IO.monoMsNow) - start > budgetMs then break
+    done := trial + 1
     let (pfn, g') := randNat g 0 2
     g := g'
     let pf := Profile.ofNat pfn
@@ -420,8 +426,8 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       return
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if o.moot prop then moots := moots + 1
-  IO.println (Json.mkObj [("found", false), ("trials", trials), ("out_of_fuel", fuelOuts),
-    ("moot", moots)]).compress
+  IO.println (Json.mkObj [("found", false), ("trials", done), ("out_of_fuel", fuelOuts),
+    ("moot", moots), ("budget_hit", decide (done < trials))]).compress
 
 -- Exhaustive engine ---------------------------------------------------------
 
@@ -541,7 +547,7 @@ def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : 
 are not enumerated; they take seed-derived values. -/
 def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (maxLen limit fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
-    (allowNil : Bool := true) : IO Unit := do
+    (allowNil : Bool := true) (budgetMs : Nat := 0) : IO Unit := do
   let pool := strs.map fun s => s.toUTF8.toList.map (·.toNat)
   let n := domainSize extra maxLen pool gens table allowNil
   if n > limit then
@@ -552,8 +558,14 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let or := oracleOf .mixed extra 0
   let mut fuelOuts := 0
   let mut moots := 0
-  let mut i := 0
+  let mut i : Nat := 0
+  let start ← IO.monoMsNow
   for (args, heap) in enumArgs extra maxLen pool gens table allowNil do
+    if budgetMs > 0 && (← IO.monoMsNow) - start > budgetMs then
+      -- Out of time: no certificate, but say how far it got.
+      IO.println (Json.mkObj [("found", false), ("exhaustive", false), ("reason", "budget"),
+        ("domain", n), ("limit", limit), ("checked", (i : Nat))]).compress
+      return
     let (o, s, ret) := check p or h prop args fuel heap
     if o.refutes prop then
       IO.println (report or heap gens args i 0 o s ret).compress

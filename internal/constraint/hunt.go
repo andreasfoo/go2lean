@@ -44,6 +44,10 @@ type SearchOptions struct {
 	// Jobs is how many properties HuntAll searches at once (default: the
 	// number of CPUs); each search is its own process.
 	Jobs int
+	// BudgetSeconds bounds the wall-clock time of each engine on one property
+	// (default 10; 0 for none). A property with expensive inputs then
+	// reports fewer trials instead of stalling the sweep.
+	BudgetSeconds int
 }
 
 func (o SearchOptions) withDefaults() SearchOptions {
@@ -55,6 +59,9 @@ func (o SearchOptions) withDefaults() SearchOptions {
 	}
 	if o.Jobs <= 0 {
 		o.Jobs = runtime.NumCPU()
+	}
+	if o.BudgetSeconds == 0 {
+		o.BudgetSeconds = 10
 	}
 	if o.MaxLen == 0 {
 		o.MaxLen = 8
@@ -84,6 +91,8 @@ type searchResult struct {
 	Reason      string                     `json:"reason"`
 	MaxLen      int                        `json:"max_len"`
 	HavocSites  int                        `json:"havoc_sites"`
+	BudgetHit   bool                       `json:"budget_hit"`
+	Checked     int                        `json:"checked"`
 	Inputs      map[string]string          `json:"inputs"`
 	Memory      map[string][]string        `json:"memory"`
 	Objects     map[string]json.RawMessage `json:"objects"`
@@ -266,6 +275,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		"gens": g, "extra": extra, "strs": strConsts, "table": table, "allowNil": opts.NilInputs,
 		"seed": opts.Seed, "trials": opts.Trials, "fuel": opts.Fuel,
 		"maxLen": opts.ExhaustLen, "limit": opts.ExhaustLimit,
+		"budgetMs": max(opts.BudgetSeconds, 0) * 1000,
 	}
 
 	var summary []string
@@ -278,7 +288,11 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			cx, err := writeCx(ws, prop, res, "random", opts)
 			return cx, fmt.Sprintf("random: found at trial %d", res.Trial), err
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)", res.Trials, res.OutOfFuel, res.Moot))
+		note := ""
+		if res.BudgetHit {
+			note = fmt.Sprintf(" [stopped by the %ds budget]", opts.BudgetSeconds)
+		}
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s", res.Trials, res.OutOfFuel, res.Moot, note))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
 		res, err := runSearch(leanDir, prop.ID+"_exhaustive", spec, "exhaustive")
@@ -299,6 +313,8 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 				return nil, "", err
 			}
 			summary = append(summary, fmt.Sprintf("exhaustive: holds on %.0f inputs (recorded as %s)", res.Domain, pr.Status))
+		case res.Reason == "budget":
+			summary = append(summary, fmt.Sprintf("exhaustive: stopped by the %ds budget after %d of %.0f inputs", opts.BudgetSeconds, res.Checked, res.Domain))
 		case res.Reason != "":
 			summary = append(summary, fmt.Sprintf("exhaustive: skipped (%s: %.3g > %d)", res.Reason, res.Domain, opts.ExhaustLimit))
 		case res.Moot > 0:
