@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -24,6 +25,9 @@ type result struct {
 
 // Verify realises and runs one counterexample and writes the verdict and the
 // PoC deliverables to the workspace.
+// compileErr matches a Go compile error line of the harness file.
+var compileErr = regexp.MustCompile(`zz_go2lean_poc_\d+_test\.go:\d+:\d+: .*`)
+
 func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error) {
 	vs, err := VerifyAll(ws, root, []string{cxID})
 	if err != nil {
@@ -184,7 +188,16 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 	res, ok := results[p.cx.ID]
 	if !ok {
 		v.Status = contract.VerdictInconclusive
-		v.Diagnosis = &contract.Diagnosis{Reason: "harness_failed", Notes: []string{"no GO2LEAN_RESULT line; see stdout/stderr"}}
+		// Tell a harness that did not compile (ours to fix) from a target
+		// that ended the process (log.Fatal, os.Exit): the latter is a
+		// finding of its own kind that M3 cannot judge.
+		reason, note := "harness_failed", "no GO2LEAN_RESULT line; see stdout/stderr"
+		if m := compileErr.FindString(stderr); m != "" {
+			reason, note = "harness_compile_error", m
+		} else if exit != 0 {
+			reason, note = "target_exited", "the test binary ended without reporting (log.Fatal or os.Exit in the target?)"
+		}
+		v.Diagnosis = &contract.Diagnosis{Reason: reason, Notes: []string{note}}
 		return v
 	}
 	judge(v, p.prop, p.cx, res)

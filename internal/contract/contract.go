@@ -279,6 +279,9 @@ type ABIParam struct {
 	// MaxLen, when negative, pins a string parameter to the empty string
 	// (strings.Builder: the test can only pass an empty one).
 	MaxLen int `json:"max_len,omitempty"`
+	// ExtraPkgs are the other import paths the Go type's spelling needs
+	// (a func or map type naming types of several packages).
+	ExtraPkgs []string `json:"extra_pkgs,omitempty"`
 	// Struct fields (Go holds the field name) and the pointee of a pointer.
 	Fields  []ABIParam `json:"fields,omitempty"`
 	Pointee *ABIParam  `json:"pointee,omitempty"`
@@ -299,6 +302,8 @@ type ABIResult struct {
 	GoType  string `json:"go_type"`
 	TypePkg string `json:"type_pkg,omitempty"`
 	Func    bool   `json:"func,omitempty"` // a func value: the harness prints its nil-ness
+	// ExtraPkgs are the other import paths the spelling needs.
+	ExtraPkgs []string `json:"extra_pkgs,omitempty"`
 }
 
 // IntInfo returns the width and signedness of an integer parameter,

@@ -1425,17 +1425,30 @@ func isUnitTuple(t types.Type) bool {
 // pkg's own types, `pkgname.T` otherwise. It also returns the import path
 // of a named type from another package.
 func spell(pkg *types.Package, t types.Type) (src, importPath string) {
+	src, paths := spellAll(pkg, t)
+	if n, ok := t.(*types.Named); ok && n.Obj().Pkg() != nil && n.Obj().Pkg() != pkg {
+		importPath = n.Obj().Pkg().Path()
+	} else if len(paths) > 0 {
+		importPath = paths[0]
+	}
+	return src, importPath
+}
+
+// spellAll is spell with every import path the spelling mentions, in
+// order of first appearance: a func or map type names other packages'
+// types inside it (`func(http.RoundTripper) http.RoundTripper`).
+func spellAll(pkg *types.Package, t types.Type) (src string, paths []string) {
 	qual := func(p *types.Package) string {
 		if p == pkg {
 			return ""
 		}
+		if !slices.Contains(paths, p.Path()) {
+			paths = append(paths, p.Path())
+		}
 		return p.Name()
 	}
 	src = types.TypeString(t, qual)
-	if n, ok := t.(*types.Named); ok && n.Obj().Pkg() != nil && n.Obj().Pkg() != pkg {
-		importPath = n.Obj().Pkg().Path()
-	}
-	return src, importPath
+	return src, paths
 }
 
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
@@ -1462,7 +1475,10 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 			return nil, fmt.Errorf("result type %s not supported", rt)
 		}
 		var r contract.ABIResult
-		r.GoType, r.TypePkg = spell(pkg, rt)
+		r.GoType, r.ExtraPkgs = spellAll(pkg, rt)
+		if len(r.ExtraPkgs) > 0 {
+			r.TypePkg = r.ExtraPkgs[0]
+		}
 		_, r.Func = rt.Underlying().(*types.Signature)
 		abi.Results = append(abi.Results, r)
 	}
@@ -1529,13 +1545,20 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 			return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
 		}
 	}
+	_, allPaths := spellAll(pkg, t)
+	extra := []string{}
+	for _, ip := range allPaths {
+		if ip != ipath {
+			extra = append(extra, ip)
+		}
+	}
 	switch {
 	case isStringsBuilder(t):
 		// An empty Builder (a copied non-empty one panics in Go): a string of
 		// length zero in the model, `strings.Builder{}` in the test.
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIString, MaxLen: -1}, nil
 	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t) || isForeignUnexported(pkg, t):
-		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, ExtraPkgs: extra, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
 	case isBool(t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIBool}, nil
 	case isError(t):

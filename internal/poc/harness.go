@@ -139,6 +139,9 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		if r.TypePkg != "" {
 			imports[r.TypePkg] = true
 		}
+		for _, ip := range r.ExtraPkgs {
+			imports[ip] = true
+		}
 	}
 	for _, ty := range abi.Types {
 		for _, f := range ty.Fields {
@@ -530,7 +533,7 @@ func isZeroJSON(abi *contract.ABI, p contract.ABIParam, v any) bool {
 }
 
 func collectImports(p contract.ABIParam, into map[string]bool) {
-	for _, ip := range []string{p.TypePkg, p.ElemPkg} {
+	for _, ip := range append([]string{p.TypePkg, p.ElemPkg}, p.ExtraPkgs...) {
 		if ip != "" {
 			into[ip] = true
 		}
