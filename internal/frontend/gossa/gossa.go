@@ -1450,7 +1450,7 @@ func spellAll(pkg *types.Package, t types.Type) (src string, paths []string) {
 			paths = append(paths, p.Path())
 		}
 		if recordImport != nil {
-			recordImport(p.Path(), p.Name())
+			return recordImport(p.Path(), p.Name())
 		}
 		return p.Name()
 	}
@@ -1458,16 +1458,28 @@ func spellAll(pkg *types.Package, t types.Type) (src string, paths []string) {
 	return src, paths
 }
 
-// recordImport, while an ABI is being built, notes the name of every
-// package a spelling mentions.
-var recordImport func(path, name string)
+// recordImport, while an ABI is being built, notes every package a
+// spelling mentions and returns the qualifier to spell it with: the
+// package name, or an alias when another package of that name is already
+// in use (two packages called `anthropic`).
+var recordImport func(path, name string) string
 
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path(), Variadic: f.Signature.Variadic(), Imports: map[string]string{}}
-	recordImport = func(path, name string) {
-		if name != filepath.Base(path) {
-			abi.Imports[path] = name
+	used := map[string]string{} // qualifier -> path
+	recordImport = func(path, name string) string {
+		alias := name
+		for i := 2; ; i++ {
+			if p, taken := used[alias]; !taken || p == path {
+				break
+			}
+			alias = fmt.Sprintf("%s%d", name, i)
 		}
+		used[alias] = path
+		if alias != filepath.Base(path) {
+			abi.Imports[path] = alias
+		}
+		return alias
 	}
 	defer func() { recordImport = nil }()
 	if f.Signature.Recv() != nil {
