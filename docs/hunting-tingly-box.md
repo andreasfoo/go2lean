@@ -80,6 +80,29 @@ types `fakeAnthropicDecoder`, `fakeChatDecoder`, `fakeResponsesDecoder`
 1 is `chatToResponsesConverter.emitCompletionEvents` with a receiver whose
 index field the test set to -2 (`index out of range [-2]`).
 
+## 3b. The agent with the guidance file
+
+`go2lean agent -guidance docs/specs/tingly-box/guidance.md -maxlen 48 -budget 60`
+on `internal/protocol/request` (MiniMax-M3, thinking off). Artefacts:
+`docs/specs/tingly-box/agent-request/` (prompts, responses, report).
+
+- Proposal round: 47 specs, all modelled.
+- Two postconditions were refuted and M3 reported `confirmed`:
+  - `SpecImageBlockToOpenAIURLURLPassthrough` on `imageBlockToOpenAIURL`:
+    the input's `Source.OfURL.URL` is the string `"data:"`; the function
+    returned `"data:"`; the spec returns false for any result starting with
+    `data:`.
+  - `SpecConvertBetaContentBlocksToStringKeepsText` on
+    `ConvertBetaContentBlocksToString`: the input's top-level text block
+    has `Text == ""`; the function returned `""`; the spec returns false
+    when a text block is present and the result is empty.
+- In the report round the agent replaced the spec file with one containing
+  no spec functions (its comment says the parameter types fall outside the
+  modelled subset, which the proposal round had just contradicted).
+- The `no_panic` properties of the package: 2 `confirmed`
+  (`ConvertGoogleToAnthropicRequest`, `ConvertGoogleToOpenAIRequest`, both
+  nil dereferences with `nil_opaque_input`), 15 `spurious`.
+
 ## 4. Changes made to go2lean during the hunt
 
 - Unions of the OpenAI and Anthropic SDKs (structs whose pointer fields are
