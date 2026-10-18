@@ -151,6 +151,13 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]
 	}
 	sort.Strings(imps)
 	src := File(pkgName, imps, funcs)
+	// A harness left behind by an interrupted run would redeclare the
+	// test; ours are the only files with this prefix.
+	if stale, _ := filepath.Glob(filepath.Join(pkgDir, "zz_go2lean_poc_*_test.go")); len(stale) > 0 {
+		for _, f := range stale {
+			os.Remove(f)
+		}
+	}
 	testPath := filepath.Join(pkgDir, fmt.Sprintf("zz_go2lean_poc_%d_test.go", os.Getpid()))
 	if err := os.WriteFile(testPath, []byte(src), 0o644); err != nil {
 		return nil, "", 0, "", "", err
