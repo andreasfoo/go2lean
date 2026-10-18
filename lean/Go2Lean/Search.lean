@@ -182,7 +182,9 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     -- Nested slices halve their length bound per level, so a struct of
     -- slices of structs of slices stays a few hundred objects per trial
     -- instead of growing exponentially.
-    let maxLen := if depth ≥ topDepth then maxLen else maxLen / 2 ^ (topDepth - depth)
+    -- At depth zero the slice is empty: `depth - 1` would stay zero and a
+    -- union whose variant holds a slice of itself would recurse forever.
+    let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else maxLen / 2 ^ (topDepth - depth)
     let (len, g) := randNat g 0 maxLen
     let (extraCap, g) := if maxLen == 0 then (0, g) else randNat g 0 2
     let (elems, g, heap) := genList pf extra g heap pool table (depth - 1) allowNil (List.replicate (len + extraCap) elem)
@@ -222,6 +224,9 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
   | .nilptr _ => (.ptr 0 [], g, heap)
   | .opaque _ => (.unit, g, heap)
   | .arrOf _ elem n =>
+    -- Below the budget an array holds zero values of its element kind:
+    -- the generator for the element at depth zero yields nil pointers and
+    -- empty slices, so the recursion ends there.
     let (elems, g, heap) := genList pf extra g heap pool table (depth - 1) allowNil (List.replicate n elem)
     (.arr elems, g, heap)
   | .str _ maxLen =>
@@ -464,6 +469,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let mut moots := 0
   let mut stuckSites : List (String × Nat) := []
   let mut fallback : Option Json := none
+  let trace := (← IO.getEnv "GO2LEAN_TRACE").isSome
   let start ← IO.monoMsNow
   let mut done := 0
   for trial in [0:trials] do
@@ -480,7 +486,13 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     let h := havocOf tseed p.havocWidths
     let (args, g', heap) := genArgs pf extra g gens pool table allowNil
     g := g'
+    if trace then
+      -- GO2LEAN_TRACE: every input before it runs, for crashes that leave
+      -- no report behind.
+      IO.eprintln (Json.mkObj [("trial", trial), ("objects", Json.mkObj (objectsOf heap gens args)),
+        ("inputs", Json.mkObj ((gens.zip args).flatMap fun (g, v) => flatten g v))]).compress
     let (o, s, ret) := check p or h prop args fuel heap
+    if trace then IO.eprintln s!"done trial {trial}: {repr o}"
     if o.refutes prop then
       -- Report the initial heap: what the inputs looked like before the run.
       -- A refutation whose run read a havoc value (an unmodelled call) is
@@ -546,7 +558,7 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
         | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 len), heap)
         | _ => (.unit, heap)
   | .sliceOf _ elem maxLen' =>
-    (List.range (min maxLen maxLen' + 1)).flatMap fun len =>
+    (List.range (if depth == 0 then 1 else min maxLen maxLen' + 1)).flatMap fun len =>
       (enumList extra maxLen pool table (depth - 1) allowNil (List.replicate len elem)).map fun build heap =>
         let (vs, heap) := build heap
         let (p, heap) := heapAlloc heap (.arr vs)
@@ -633,7 +645,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
   | .sliceOf _ elem maxLen' =>
     let k := genSize extra maxLen pool table (depth - 1) allowNil elem
-    (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
+    (List.range (if depth == 0 then 1 else min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
   | .structv _ fields => structSize extra maxLen pool table depth allowNil fields
   | .ptr _ pointee => (if depth > 0 && !allowNil then 0 else 1) + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .link _ pointee => 1 + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
