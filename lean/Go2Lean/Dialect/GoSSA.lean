@@ -143,6 +143,15 @@ inductive Op where
   | strJoin
   /-- `strings.Repeat`; a negative count panics as in Go. -/
   | strRepeat
+  /-- `errors.New` / `fmt.Errorf`: a non-nil error, whatever the arguments. -/
+  | errNew
+  -- strings.Builder, modelled as a pointer to a string cell
+  /-- `(*strings.Builder).WriteString`; args `[p, s]`; yields `(len s, nil)`. -/
+  | sbWriteString
+  /-- `WriteByte` / `WriteRune`; args `[p, c]`; yields `nil` resp. `(size, nil)`. -/
+  | sbWriteByte | sbWriteRune
+  /-- `String` / `Len` / `Reset`; arg `[p]`. -/
+  | sbString | sbLen | sbReset
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -692,6 +701,58 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     match strBytes heap s, strBytes heap o, strBytes heap n with
     | some x, some old, some new => .ok (strAlloc heap (replaceBytes x old new))
     | _, _, _ => .panic .modelStuck
+  | .errNew, _ => .ok (.err true, heap)
+  | .sbString, [p] =>
+    match heapLoad heap p with
+    | .ok s@(.str ..) => .ok (s, heap)
+    | .ok _ => .ok (.str 0 0#64 0#64, heap) -- a zero Builder cell holds the empty string
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .sbLen, [p] =>
+    match heapLoad heap p with
+    | .ok (.str _ _ len) => .ok (.int 64 len, heap)
+    | .ok _ => .ok (.int 64 0#64, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .sbReset, [p] =>
+    match heapStore heap p (.str 0 0#64 0#64) with
+    | .ok heap => .ok (.unit, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .sbWriteString, [p, s] =>
+    match heapLoad heap p, strBytes heap s with
+    | .ok cur, some bs =>
+      let old := match strBytes heap cur with | some x => x | none => []
+      let (v, heap) := strAlloc heap (old ++ bs)
+      match heapStore heap p v with
+      | .ok heap => .ok (.tuple [.int 64 (BitVec.ofNat 64 bs.length), .err false], heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .panic k, _ => .panic k
+    | _, _ => .panic .modelStuck
+  | .sbWriteByte, [p, .int _ c] =>
+    match heapLoad heap p with
+    | .ok cur =>
+      let old := match strBytes heap cur with | some x => x | none => []
+      let (v, heap) := strAlloc heap (old ++ [c.toNat % 256])
+      match heapStore heap p v with
+      | .ok heap => .ok (.err false, heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .sbWriteRune, [p, .int _ r] =>
+    match heapLoad heap p with
+    | .ok cur =>
+      let old := match strBytes heap cur with | some x => x | none => []
+      let enc := encodeRune r.toNat
+      let (v, heap) := strAlloc heap (old ++ enc)
+      match heapStore heap p v with
+      | .ok heap => .ok (.tuple [.int 64 (BitVec.ofNat 64 enc.length), .err false], heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
   | .strRepeat, [s, .int _ n] =>
     if n.msb then .panic .explicit -- strings: negative Repeat count
     else

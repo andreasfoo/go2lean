@@ -249,6 +249,9 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 		}
 		return fmt.Sprintf("var %s %s", p.Go, p.GoType), nil
 	case contract.ABIString:
+		if p.MaxLen < 0 {
+			return fmt.Sprintf("var %s %s", p.Go, p.GoType), nil // an empty strings.Builder
+		}
 		raw, ok := cx.Objects[p.Go]
 		if !ok {
 			return "", fmt.Errorf("counterexample has no value for %s", p.Go)
@@ -357,6 +360,9 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		}
 		return "nil", nil
 	case contract.ABIString:
+		if p.MaxLen < 0 {
+			return p.GoType + "{}", nil // an empty strings.Builder
+		}
 		sv, _ := v.(string)
 		return fmt.Sprintf("%s(%q)", p.GoType, sv), nil
 	case contract.ABIError:
@@ -415,7 +421,7 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if p.Pointee.Kind == contract.ABIStruct {
+		if p.Pointee.Kind == contract.ABIStruct || p.Pointee.MaxLen < 0 {
 			return "&" + inner, nil
 		}
 		// A pointer to a scalar: allocate it in a closure.

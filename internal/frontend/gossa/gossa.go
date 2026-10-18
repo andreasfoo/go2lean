@@ -1254,6 +1254,13 @@ func isOpaqueType(t types.Type) bool {
 	return false
 }
 
+// isStringsBuilder says whether t is strings.Builder, which the model keeps
+// as a string cell (its methods are dialect ops).
+func isStringsBuilder(t types.Type) bool {
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "strings" && n.Obj().Name() == "Builder"
+}
+
 // isForeignUnexported says whether t is an unexported named type of
 // another package (gin's `errorMsgs`): a test in the target package cannot
 // name it, so values of it are opaque parameters with the zero value.
@@ -1347,6 +1354,9 @@ func valueOKVisiting(t types.Type, visiting map[types.Type]bool) bool {
 func zeroVal(t types.Type) (ir.Val, bool) {
 	if w, _, ok := intWidth(t); ok {
 		return ir.IntVal{Width: w, Bits: "0"}, true
+	}
+	if isStringsBuilder(t) {
+		return ir.EmptyStr{}, true // a Builder is a string cell in the model
 	}
 	if isBool(t) {
 		return ir.BoolVal(false), true
@@ -1520,6 +1530,10 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		}
 	}
 	switch {
+	case isStringsBuilder(t):
+		// An empty Builder (a copied non-empty one panics in Go): a string of
+		// length zero in the model, `strings.Builder{}` in the test.
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIString, MaxLen: -1}, nil
 	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t) || isForeignUnexported(pkg, t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
 	case isBool(t):

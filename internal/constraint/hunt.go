@@ -189,6 +189,9 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 		}
 		return map[string]any{"k": "structv", "name": p.Go, "fields": fs}, nil
 	case contract.ABIString:
+		if p.MaxLen < 0 {
+			return map[string]any{"k": "str", "name": p.Go, "maxLen": 0}, nil
+		}
 		return map[string]any{"k": "str", "name": p.Go, "maxLen": maxLen}, nil
 	case contract.ABIOpaque:
 		return map[string]any{"k": "opaque", "name": p.Go}, nil
