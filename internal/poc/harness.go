@@ -158,7 +158,7 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		// The variable takes the parameter's name unless that is blank,
 		// repeated, or would shadow a package the test uses.
 		name := prm.Go
-		if name == "_" || name == "" || used[name] || reservedName[name] {
+		if name == "_" || name == "" || used[name] || reservedName[name] || shadowsImport(name, imports) {
 			name = fmt.Sprintf("go2leanP%d", i)
 		}
 		used[name] = true
@@ -461,6 +461,17 @@ var (
 	fixedImports = map[string]bool{"encoding/json": true, "fmt": true, "testing": true}
 	reservedName = map[string]bool{"json": true, "fmt": true, "testing": true, "errors": true}
 )
+
+// shadowsImport says whether a variable of this name would hide a package
+// the test may import (a parameter named `oauth` next to an `oauth` type).
+func shadowsImport(name string, imports map[string]bool) bool {
+	for ip := range imports {
+		if path.Base(ip) == name {
+			return true
+		}
+	}
+	return false
+}
 
 // usesPackage says whether the generated code refers to the package by
 // its qualifier: `io.Reader`, not the "io." inside a string literal or

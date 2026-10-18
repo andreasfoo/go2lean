@@ -1528,6 +1528,9 @@ func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named
 func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (contract.ABIParam, error) {
 	pkg := ab.pkg
 	src, ipath := spell(pkg, t)
+	// An alias (`type PairingManager = core.PairingManager`) is spelled by
+	// its own name but described as the type it stands for.
+	t = types.Unalias(t)
 	if n, ok := t.(*types.Named); ok {
 		if st, isStruct := n.Underlying().(*types.Struct); isStruct && !isForeignOpaqueStruct(pkg, t) && !isForeignUnexported(pkg, t) {
 			// Every named struct lives in the type table once and parameters
