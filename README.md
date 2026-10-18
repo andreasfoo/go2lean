@@ -155,6 +155,11 @@ dereferences of fields a caller is expected to set. The agent on
 `internal/typ` wrote 63 specs and found `pickWithinTier` indexing an
 empty slice.
 
+Issue-guided hunting is written up in [docs/hunting-tingly-box.md](docs/hunting-tingly-box.md):
+a hand-written postcondition reproduces the root cause of tingly-box's open
+issue #1924 (tool-call ids truncated on one side only), with the PoC under
+`docs/poc-issue-1924/`.
+
 ## Supported Go subset
 
 Integers of every width, bools, `error` values (nil-ness; `errors.New`

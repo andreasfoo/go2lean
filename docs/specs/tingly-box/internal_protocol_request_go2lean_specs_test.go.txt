@@ -1,0 +1,111 @@
+package request
+
+import (
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/openai/openai-go/v3"
+
+	"github.com/tingly-dev/tingly-box/internal/protocol"
+)
+
+// Hand-written go2lean specs for the invariants behind the tracker's
+// protocol-conversion bugs (#1924, #1923, #1427): tool-call ids and tool
+// results must survive Anthropic -> OpenAI Chat conversion consistently.
+
+const openAIToolCallIDLimit = 40
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestToolCallIDsBounded: every tool_call
+// id on an assistant message of the converted request is within OpenAI's
+// 40-character limit, as the tool messages' ids are (otherwise a tool
+// message no longer pairs with its call: issue #1924).
+func SpecConvertAnthropicBetaToOpenAIRequestToolCallIDsBounded(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if ret0 == nil {
+		return true
+	}
+	for _, msg := range ret0.Messages {
+		if msg.OfAssistant == nil {
+			continue
+		}
+		for _, tc := range msg.OfAssistant.ToolCalls {
+			if tc.OfFunction != nil && len(tc.OfFunction.ID) > openAIToolCallIDLimit {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestToolMessageIDsBounded: every tool
+// message's tool_call_id is within the limit.
+func SpecConvertAnthropicBetaToOpenAIRequestToolMessageIDsBounded(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if ret0 == nil {
+		return true
+	}
+	for _, msg := range ret0.Messages {
+		if msg.OfTool != nil && len(msg.OfTool.ToolCallID) > openAIToolCallIDLimit {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestToolPairsKept: a tool_result whose
+// tool_use_id matches a tool_use in the input is still paired in the output:
+// its tool message's tool_call_id equals some assistant tool_call id.
+func SpecConvertAnthropicBetaToOpenAIRequestToolPairsKept(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if anthropicReq == nil || ret0 == nil {
+		return true
+	}
+	paired := false
+	for _, m := range anthropicReq.Messages {
+		for _, b := range m.Content {
+			if b.OfToolResult == nil {
+				continue
+			}
+			for _, m2 := range anthropicReq.Messages {
+				for _, b2 := range m2.Content {
+					if b2.OfToolUse != nil && b2.OfToolUse.ID == b.OfToolResult.ToolUseID {
+						paired = true
+					}
+				}
+			}
+		}
+	}
+	if !paired {
+		return true
+	}
+	for _, msg := range ret0.Messages {
+		if msg.OfTool == nil {
+			continue
+		}
+		found := false
+		for _, m2 := range ret0.Messages {
+			if m2.OfAssistant == nil {
+				continue
+			}
+			for _, tc := range m2.OfAssistant.ToolCalls {
+				if tc.OfFunction != nil && tc.OfFunction.ID == msg.OfTool.ToolCallID {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec convertBetaToolResultContent
+// SpecConvertBetaToolResultContentKeepsText: a text block with content makes
+// the result non-empty (tool results must not be dropped: issue #1427).
+func SpecConvertBetaToolResultContentKeepsText(content []anthropic.BetaToolResultBlockParamContentUnion, ret string) bool {
+	for _, c := range content {
+		if c.OfText != nil && c.OfText.Text != "" {
+			return ret != ""
+		}
+	}
+	return true
+}

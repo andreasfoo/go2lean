@@ -1,0 +1,31 @@
+package stream
+
+// Hand-written go2lean specs for the stream helpers behind issue #1924
+// (tool-call id truncation) and #1923 (tool-call indexes).
+
+// go2lean:spec truncateToolCallID
+// SpecTruncateToolCallIDBounded: the result never exceeds the 40-character
+// limit OpenAI imposes on tool_call ids.
+func SpecTruncateToolCallIDBounded(id string, ret string) bool {
+	return len(ret) <= maxToolCallIDLength
+}
+
+// go2lean:spec truncateToolCallID
+// SpecTruncateToolCallIDPrefix: the result is a prefix of the input, and the
+// input is kept whole when it fits.
+func SpecTruncateToolCallIDPrefix(id string, ret string) bool {
+	if len(id) <= maxToolCallIDLength {
+		return ret == id
+	}
+	return len(ret) == maxToolCallIDLength && id[:maxToolCallIDLength] == ret
+}
+
+// go2lean:spec anthropicStopReasonToIncomplete
+// SpecAnthropicStopReasonToIncompleteNonEmpty: max_tokens is an incomplete
+// stop with a non-empty reason.
+func SpecAnthropicStopReasonToIncompleteNonEmpty(stopReason string, ret0 bool, ret1 string) bool {
+	if stopReason == "max_tokens" {
+		return ret0 && ret1 != ""
+	}
+	return true
+}
