@@ -1140,6 +1140,9 @@ func (t *fnState) call(x *ssa.Call) error {
 		next := len(t.out.Blocks)
 		// Terminate the current block before appending: append may move the
 		// backing array and t.cur would then point at a stale copy.
+		if !slices.Contains(t.out.Calls, id) {
+			t.out.Calls = append(t.out.Calls, id)
+		}
 		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: id, CArgs: args, Dst: dst, Next: next}
 		t.out.Blocks = append(t.out.Blocks, ir.Block{Name: t.cur.Name + ".after-call"})
 		t.cur = &t.out.Blocks[next]

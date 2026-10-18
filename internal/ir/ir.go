@@ -282,6 +282,7 @@ type Func struct {
 	SpecFor   string
 	Consts    []string // integer literals, see contract.ModelFunc.Consts
 	StrConsts []string // string literals
+	Calls     []int    // callees within the program, by function id
 	ABI       contract.ABI
 }
 

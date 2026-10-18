@@ -219,6 +219,43 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 	return nil, fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
 }
 
+// literalPool collects the integer and string literals of the given
+// functions and, transitively, of the functions they call.
+func literalPool(report *contract.ModelReport, roots []int) (consts, strConsts []string) {
+	byID := map[int]contract.ModelFunc{}
+	for _, f := range report.Funcs {
+		byID[f.ID] = f
+	}
+	seen := map[int]bool{}
+	var walk func(id int)
+	walk = func(id int) {
+		f, ok := byID[id]
+		if !ok || seen[id] {
+			return
+		}
+		seen[id] = true
+		for _, c := range f.Consts {
+			if !slices.Contains(consts, c) {
+				consts = append(consts, c)
+			}
+		}
+		for _, s := range f.StrConsts {
+			if !slices.Contains(strConsts, s) {
+				strConsts = append(strConsts, s)
+			}
+		}
+		for _, callee := range f.Calls {
+			walk(callee)
+		}
+	}
+	for _, r := range roots {
+		if r >= 0 {
+			walk(r)
+		}
+	}
+	return consts, strConsts
+}
+
 // Hunt runs the selected engines on one property. It returns the
 // counterexample it wrote to the workspace (nil when none was found) and a
 // one-line summary. When the exhaustive engine covers its whole domain
@@ -238,19 +275,18 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		return nil, "", err
 	}
 	fid, sid := -1, -1
-	var consts, strConsts []string
 	for _, f := range report.Funcs {
 		if f.Name == target.Func {
 			fid = f.ID
-			consts = append(consts, f.Consts...)
-			strConsts = append(strConsts, f.StrConsts...)
 		}
 		if prop.Spec != nil && f.Name == prop.Spec.GoFunc {
 			sid = f.ID
-			consts = append(consts, f.Consts...)
-			strConsts = append(strConsts, f.StrConsts...)
 		}
 	}
+	// The literal pool: the target's and the spec's constants and those of
+	// everything they call, so the branch a callee takes on "assistant" is
+	// reachable from the caller's inputs.
+	consts, strConsts := literalPool(report, []int{fid, sid})
 	if fid < 0 {
 		return nil, "", fmt.Errorf("function %s not in model report", target.Func)
 	}

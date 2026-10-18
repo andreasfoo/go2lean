@@ -367,7 +367,10 @@ type ModelFunc struct {
 	Consts []string `json:"consts,omitempty"`
 	// StrConsts are the string literals in the body, for the same purpose.
 	StrConsts []string `json:"str_consts,omitempty"`
-	ABI       string   `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+	// Calls lists the IDs of the package functions this one calls, so the
+	// engines can mine the literals of the whole call tree.
+	Calls []int  `json:"calls,omitempty"`
+	ABI   string `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
 }
 
 // ModelReport is M1's summary of one package, read by M2 to decide what to
