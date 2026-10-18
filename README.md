@@ -146,10 +146,10 @@ go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model Mi
 ```
 
 On tingly-box (7539 functions and methods) the model covers 7112; a full
-pass over its 156 packages (7088 properties) takes about three hours at
-four jobs and ends with 149 confirmed findings (80 of them not involving an
-input the test could only pass as nil), 141 spurious counterexamples and
-2794 exhaustive certificates (see the design doc, §9b): `truncate(s, n)`
+pass over its 156 packages (7095 properties) takes about three hours at
+four jobs and ends with 140 confirmed findings (80 of them not involving an
+input the test could only pass as nil), 152 spurious counterexamples and
+2779 exhaustive certificates (see the design doc, §9b): `truncate(s, n)`
 helpers that panic on a negative `n`, `strings.Repeat` with a negative
 count, writes to nil maps, slices of short hashes, and many nil
 dereferences of fields a caller is expected to set. The agent on
