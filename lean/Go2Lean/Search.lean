@@ -431,6 +431,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let mut fuelOuts := 0
   let mut moots := 0
   let mut stuckSites : List (String × Nat) := []
+  let mut fallback : Option Json := none
   let start ← IO.monoMsNow
   let mut done := 0
   for trial in [0:trials] do
@@ -450,12 +451,22 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     let (o, s, ret) := check p or h prop args fuel heap
     if o.refutes prop then
       -- Report the initial heap: what the inputs looked like before the run.
-      IO.println (report or heap gens args trial seed o s ret).compress
-      return
+      -- A refutation whose run read a havoc value (an unmodelled call) is
+      -- kept as a fallback while the search goes on for one that did not:
+      -- M3 refutes most havoc-dependent ones.
+      let j := report or heap gens args trial seed o s ret
+      if s.log.size == 0 then
+        IO.println j.compress
+        return
+      else if fallback.isNone then
+        fallback := some j
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if o.moot prop then
       moots := moots + 1
       if let some site := s.stuck then stuckSites := bump stuckSites site
+  if let some j := fallback then
+    IO.println (j.setObjVal! "havoc_dependent" true).compress
+    return
   let top := (stuckSites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 5
   IO.println (Json.mkObj [("found", false), ("trials", done), ("out_of_fuel", fuelOuts),
     ("moot", moots), ("budget_hit", decide (done < trials)),
@@ -623,6 +634,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut fuelOuts := 0
   let mut moots := 0
   let mut i : Nat := 0
+  let mut fallback : Option Json := none
   let start ← IO.monoMsNow
   for build in enumArgs extra maxLen pool gens table allowNil do
     let (args, heap) := build #[]
@@ -633,11 +645,18 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       return
     let (o, s, ret) := check p or h prop args fuel heap
     if o.refutes prop then
-      IO.println (report or heap gens args i 0 o s ret).compress
-      return
+      let j := report or heap gens args i 0 o s ret
+      if s.log.size == 0 then
+        IO.println j.compress
+        return
+      else if fallback.isNone then
+        fallback := some j
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if o.moot prop then moots := moots + 1
     i := i + 1
+  if let some j := fallback then
+    IO.println (j.setObjVal! "havoc_dependent" true).compress
+    return
   IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
     ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
     ("havoc_sites", p.havocWidths.size)]).compress
