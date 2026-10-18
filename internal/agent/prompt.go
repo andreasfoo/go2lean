@@ -195,6 +195,15 @@ Model report (which functions go2lean could model, and how):
 Write go2lean_specs_test.go for this package.`, pkgPath, pkgName, fence(source), reportSummary(r))
 }
 
+// guidanceSection appends the user's guidance (bug classes seen in the
+// issue tracker, invariants to target) to the proposal prompt.
+func guidanceSection(g string) string {
+	if strings.TrimSpace(g) == "" {
+		return ""
+	}
+	return "\n\nGuidance from the maintainers (bug classes and invariants to target first):\n" + g
+}
+
 func reportUserPrompt(pkgPath, pkgName, source, verdicts string) string {
 	return fmt.Sprintf(`Package %s (package clause: "package %s").
 

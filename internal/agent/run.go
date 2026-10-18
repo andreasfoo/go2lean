@@ -22,6 +22,9 @@ type Options struct {
 	Search      constraint.SearchOptions
 	MaxRepairs  int // rounds spent fixing specs the frontend rejected
 	ReportRound bool
+	// Guidance is extra text for the proposal round: known bug classes,
+	// invariants from the issue tracker, functions to focus on.
+	Guidance string
 }
 
 // Run drives the agent on one package: propose specs, repair until they
@@ -107,7 +110,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 		}
 	}
 
-	resp, err := ask(systemPrompt, proposePrompt(pkgPath, pkgName, source, report))
+	resp, err := ask(systemPrompt, proposePrompt(pkgPath, pkgName, source, report)+guidanceSection(opts.Guidance))
 	if err != nil {
 		return err
 	}

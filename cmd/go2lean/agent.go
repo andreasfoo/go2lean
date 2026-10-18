@@ -18,8 +18,17 @@ func cmdAgent(args []string) error {
 	thinking := fs.Bool("thinking", true, "send adaptive thinking (turn off for providers that reject the parameter)")
 	repairs := fs.Int("repairs", 2, "rounds spent repairing specs the frontend rejected")
 	report := fs.Bool("report", true, "ask the agent for a report (and possibly revised specs) after the verdicts")
+	guidance := fs.String("guidance", "", "file with guidance for the proposal round (bug classes, invariants, functions to target)")
 	opts := searchFlags(fs)
 	fs.Parse(args)
+	guidanceText := ""
+	if *guidance != "" {
+		b, err := os.ReadFile(*guidance)
+		if err != nil {
+			return err
+		}
+		guidanceText = string(b)
+	}
 	if fs.NArg() != 1 {
 		return fmt.Errorf("agent: exactly one package pattern expected")
 	}
@@ -32,6 +41,6 @@ func cmdAgent(args []string) error {
 		return err
 	}
 	return agent.Run(context.Background(), w, env, fs.Arg(0), llm, agent.Options{
-		Search: opts.get(), MaxRepairs: *repairs, ReportRound: *report,
+		Search: opts.get(), MaxRepairs: *repairs, ReportRound: *report, Guidance: guidanceText,
 	}, os.Stdout)
 }
