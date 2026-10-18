@@ -219,7 +219,8 @@ type ModelGap struct {
 // several.
 type ABI struct {
 	GoFunc   string `json:"go_func"`
-	Package  string `json:"package,omitempty"` // import path of the target's package (decides what the test may import)
+	Package  string `json:"package,omitempty"`  // import path of the target's package (decides what the test may import)
+	Variadic bool   `json:"variadic,omitempty"` // the last parameter is `...T` (its Go type is the slice)
 	GoSig    string `json:"go_sig"`
 	Frontend string `json:"frontend"`
 	// Method is set for methods: the receiver is Params[0] and a call is
@@ -294,6 +295,7 @@ type ABIType struct {
 type ABIResult struct {
 	GoType  string `json:"go_type"`
 	TypePkg string `json:"type_pkg,omitempty"`
+	Func    bool   `json:"func,omitempty"` // a func value: the harness prints its nil-ness
 }
 
 // IntInfo returns the width and signedness of an integer parameter,

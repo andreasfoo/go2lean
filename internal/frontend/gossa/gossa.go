@@ -1429,7 +1429,7 @@ func spell(pkg *types.Package, t types.Type) (src, importPath string) {
 }
 
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
-	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path()}
+	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path(), Variadic: f.Signature.Variadic()}
 	if f.Signature.Recv() != nil {
 		abi.Method = f.Name()
 	}
@@ -1453,6 +1453,7 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		}
 		var r contract.ABIResult
 		r.GoType, r.TypePkg = spell(pkg, rt)
+		_, r.Func = rt.Underlying().(*types.Signature)
 		abi.Results = append(abi.Results, r)
 	}
 	return abi, nil
@@ -1530,6 +1531,14 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 	}
 	if w, signed, ok := intWidth(t); ok {
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt}, nil
+	}
+	// A slice, array or pointer of an unexported type of another package
+	// cannot be written down by the test either.
+	switch u := t.Underlying().(type) {
+	case *types.Array, *types.Slice, *types.Pointer:
+		if isForeignUnexported(pkg, u.(interface{ Elem() types.Type }).Elem()) {
+			return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIOpaque, Zero: "nil"}, nil
+		}
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Array:

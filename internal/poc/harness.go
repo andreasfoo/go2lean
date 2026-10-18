@@ -29,11 +29,17 @@ type harnessData struct {
 	Func     string
 	Rets     []string // result variable names (ret, or ret0, ret1, ...); empty when none
 	RetTypes []string
+	// RetPrint is what the test prints for the results: a func value is
+	// printed as its nil-ness (vet rejects printing a func).
+	RetPrint []string
 	Pre      string // Go expression or ""
 	SpecCall string // e.g. SpecSum(xs, ret) or ""
 }
 
 func (d harnessData) RetList() string { return strings.Join(d.Rets, ", ") }
+
+// RetPrintList is the Sprint argument list for the results.
+func (d harnessData) RetPrintList() string { return strings.Join(d.RetPrint, ", ") }
 
 var fileTmpl = template.Must(template.New("file").Parse(`package {{.Package}}
 
@@ -71,7 +77,7 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 		}()
 {{- if .Rets}}
 		{{.RetList}} = {{.Func}}({{.Args}})
-		go2leanRes["ret"] = fmt.Sprint({{.RetList}})
+		go2leanRes["ret"] = fmt.Sprint({{.RetPrintList}})
 {{- else}}
 		{{.Func}}({{.Args}})
 {{- end}}
@@ -125,6 +131,11 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		}
 		d.Rets = append(d.Rets, name)
 		d.RetTypes = append(d.RetTypes, r.GoType)
+		if r.Func {
+			d.RetPrint = append(d.RetPrint, name+" != nil")
+		} else {
+			d.RetPrint = append(d.RetPrint, name)
+		}
 		if r.TypePkg != "" {
 			imports[r.TypePkg] = true
 		}
@@ -135,13 +146,24 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		}
 	}
 	var names []string
-	for _, prm := range abi.Params {
+	used := map[string]bool{}
+	for i, prm := range abi.Params {
 		decl, err := paramDecl(abi, prm, cx)
 		if err != nil {
 			return "", nil, err
 		}
+		// The variable takes the parameter's name unless that is blank,
+		// repeated, or would shadow a package the test uses.
+		name := prm.Go
+		if name == "_" || name == "" || used[name] || reservedName[name] {
+			name = fmt.Sprintf("go2leanP%d", i)
+		}
+		used[name] = true
+		if name != prm.Go {
+			decl = strings.Replace(decl, prm.Go, name, 1)
+		}
 		d.Decls = append(d.Decls, decl)
-		names = append(names, prm.Go)
+		names = append(names, name)
 		collectImports(prm, imports)
 		if prm.Kind == contract.ABIError && cx.Inputs[prm.Model[0]] != "nil" {
 			imports["errors"] = true
@@ -166,11 +188,18 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 	// qualifier the generated declarations mention.
 	decls := strings.Join(d.Decls, "\n") + "\n" + strings.Join(d.RetTypes, " ")
 	for ip := range imports {
+		if fixedImports[ip] {
+			continue
+		}
 		if usesPackage(decls, path.Base(ip)) {
 			d.Imports = append(d.Imports, ip)
 		}
 	}
 	sort.Strings(d.Imports)
+	specNames := append([]string{}, names...) // the spec takes the slice itself
+	if abi.Variadic && len(names) > 0 {
+		names[len(names)-1] += "..."
+	}
 	d.Args = strings.Join(names, ", ")
 	if abi.Method != "" && len(names) > 0 {
 		// Methods: the receiver is the first parameter.
@@ -181,7 +210,7 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		d.Pre = p.Precondition.Go
 	}
 	if p.Spec != nil {
-		specArgs := append(append([]string{}, names...), d.Rets...)
+		specArgs := append(append([]string{}, specNames...), d.Rets...)
 		d.SpecCall = fmt.Sprintf("%s(%s)", p.Spec.GoFunc, strings.Join(specArgs, ", "))
 	}
 	var b strings.Builder
@@ -416,6 +445,13 @@ func canImport(from, pkg string) bool {
 	}
 	return from == root || strings.HasPrefix(from, root+"/")
 }
+
+// fixedImports are in every harness file; reservedName lists the
+// identifiers a parameter must not take in it.
+var (
+	fixedImports = map[string]bool{"encoding/json": true, "fmt": true, "testing": true}
+	reservedName = map[string]bool{"json": true, "fmt": true, "testing": true, "errors": true}
+)
 
 // usesPackage says whether the generated code refers to the package by
 // its qualifier: `io.Reader`, not the "io." inside a string literal or
