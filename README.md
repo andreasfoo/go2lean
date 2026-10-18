@@ -135,6 +135,7 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/recs` | `First`/`Longest`/`Dedup` index slices of structs and strings without a length check | all confirmed with `[]Item{...}` literals; `Total`, `Names` (built with `append`) and `Push` satisfy their specs |
 | `examples/opaque` | `(*Cache).Share` divides by a struct field next to a map; `Lookup(ctx, map, keys)` indexes `keys[0]` | both confirmed: the map and the context are opaque to the model and the test passes `context.Background()` and a nil map |
 | `examples/runes` | `(*Counter).Bump` indexes a fixed array with `n%4` under a mutex and a deferred unlock; `Head` returns a 3-index slice with `max < len` | both confirmed (`index out of range [-2]`); `Reverse` (`[]rune` round trip) and `Initials` (`range` over a string) are certified |
+| `examples/builder` | `Join` builds a string with `strings.Builder` and indexes an empty result at -1 | confirmed; `Parse`'s `fmt.Errorf` paths and `Tag`'s builder growth are certified |
 
 ## On a real module
 
@@ -156,9 +157,10 @@ empty slice.
 
 ## Supported Go subset
 
-Integers of every width, bools, `error` values (nil-ness), strings (with
-the common `strings.*` functions, `strconv.Atoi/Itoa`, `[]rune` and
-`[]byte` conversions and `range` over a string modelled rune by rune),
+Integers of every width, bools, `error` values (nil-ness; `errors.New`
+and `fmt.Errorf` are never nil), strings (with the common `strings.*`
+functions, `strings.Builder`, `strconv.Atoi/Itoa`, `[]rune` and `[]byte`
+conversions and `range` over a string modelled rune by rune),
 structs, pointers, recursive types, arrays, slices with reads and writes,
 `make`, `new`, 3-index slices, multiple results,
 methods, `len`/`cap`, reslicing, `append` and `copy` (including
