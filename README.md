@@ -157,9 +157,11 @@ dereferences of fields a caller is expected to set. The agent on
 empty slice.
 
 Issue-guided hunting is written up in [docs/hunting-tingly-box.md](docs/hunting-tingly-box.md):
-a hand-written postcondition reproduces the root cause of tingly-box's open
-issue #1924 (tool-call ids truncated on one side only), with the PoC under
-`docs/poc-issue-1924/`.
+a hand-written postcondition on `ConvertAnthropicBetaToOpenAIRequest` is
+refuted and the counterexample is confirmed by M3: tool_use ids of 43 to 51
+characters reach the assistant `tool_calls[].id` untruncated while the
+tool-result side is truncated to 40. Open issue #1924 describes a mismatch of
+tool-call ids between the two sides; the PoC is under `docs/poc-issue-1924/`.
 
 ## Supported Go subset
 
