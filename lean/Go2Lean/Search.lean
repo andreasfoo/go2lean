@@ -126,6 +126,36 @@ def alphabet : Array Nat := #[97, 98, 99, 65, 66, 48, 49, 57, 32, 45, 95, 46, 47
 /-- The depth budget a top-level argument starts with. -/
 def topDepth : Nat := 4
 
+/-- The SDKs of OpenAI and Anthropic spell a union as a struct whose
+pointer fields are all named `Of<Variant>`: exactly one is set. -/
+def Gen.isVariant : Gen → Bool
+  | .ptr name _ => name.startsWith "Of"
+  | _ => false
+
+/-- The number of `Of<Variant>` pointer fields; two or more make a union. -/
+def variantCount (fields : List Gen) : Nat := (fields.filter Gen.isVariant).length
+
+/-- The fields of a union with only its `k`-th variant live: the other
+variant pointers become nil. -/
+def selectVariant (fields : List Gen) (k : Nat) : List Gen :=
+  let rec go (fs : List Gen) (i : Nat) : List Gen :=
+    match fs with
+    | [] => []
+    | f :: rest =>
+      if f.isVariant then
+        (if i == k then f else match f with | .ptr name _ => .nilptr name | g => g) :: go rest (i + 1)
+      else f :: go rest i
+  go fields 0
+
+/-- The field generators of a struct, with one union variant chosen at
+random when the struct is a union. -/
+def chooseFields (g : StdGen) (fields : List Gen) : List Gen × StdGen :=
+  let n := variantCount fields
+  if n ≥ 2 then
+    let (k, g) := randNat g 0 (n - 1)
+    (selectVariant fields k, g)
+  else (fields, g)
+
 /-- Generate one value. Slices and pointees are materialised on the heap,
 so stores through them are exact and the report can dump them. -/
 partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap Val)
@@ -161,6 +191,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 (len + extraCap)), g, heap)
     | _ => (.unit, g, heap)
   | .structv _ fields =>
+    let (fields, g) := chooseFields g fields
     let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
     (.structv vs, g, heap)
   | .ptr _ pointee =>
@@ -184,6 +215,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
   | .ref _ tyIdx =>
     match table[tyIdx]? with
     | some fields =>
+      let (fields, g) := chooseFields g fields
       let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
       (.structv vs, g, heap)
     | none => (.unit, g, heap)
@@ -228,13 +260,13 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
 where
   genMany (pf : Profile) (extra : List Nat) (g : StdGen) (w n : Nat) : List Val × StdGen :=
     (List.range n).foldl (fun (acc, g) _ => let (v, g) := genBits pf extra g w; (acc ++ [.int w v], g)) ([], g)
+  -- A loop, not a recursion: a struct can have thousands of leaves.
   genList (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap Val) (pool : List (List Nat))
-      (table : TypeTable) (depth : Nat) (allowNil : Bool) : List Gen → List Val × StdGen × Heap Val
-    | [] => ([], g, heap)
-    | gen :: rest =>
+      (table : TypeTable) (depth : Nat) (allowNil : Bool) (gens : List Gen) : List Val × StdGen × Heap Val :=
+    let (acc, g, heap) := gens.foldl (fun (acc, g, heap) gen =>
       let (v, g, heap) := genVal pf extra g heap pool table depth allowNil gen
-      let (vs, g, heap) := genList pf extra g heap pool table depth allowNil rest
-      (v :: vs, g, heap)
+      (v :: acc, g, heap)) (([] : List Val), g, heap)
+    (acc.reverse, g, heap)
 
 def genArgs (pf : Profile) (extra : List Nat) (g : StdGen) (gens : List Gen) (pool : List (List Nat) := [])
     (table : TypeTable := #[]) (allowNil : Bool := true) : List Val × StdGen × Heap Val :=
@@ -522,9 +554,10 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
         | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 len), heap)
         | _ => (.unit, heap)
   | .structv _ fields =>
-    (enumList extra maxLen pool table depth allowNil fields).map fun build heap =>
-      let (vs, heap) := build heap
-      (.structv vs, heap)
+    (enumVariants fields).flatMap fun fields =>
+      (enumList extra maxLen pool table depth allowNil fields).map fun build heap =>
+        let (vs, heap) := build heap
+        (.structv vs, heap)
   | .ptr _ pointee =>
     (if depth > 0 && !allowNil then [] else [fun heap => (.ptr 0 [], heap)]) ++
       (if depth == 0 then [] else
@@ -540,9 +573,10 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
   | .ref _ tyIdx =>
     match table[tyIdx]? with
     | some fields =>
-      (enumList extra maxLen pool table depth allowNil fields).map fun build heap =>
-        let (vs, heap) := build heap
-        (.structv vs, heap)
+      (enumVariants fields).flatMap fun fields =>
+        (enumList extra maxLen pool table depth allowNil fields).map fun build heap =>
+          let (vs, heap) := build heap
+          (.structv vs, heap)
     | none => [fun heap => (.unit, heap)]
   | .str _ maxLen' =>
     (if maxLen' == 0 then [[]] else smallStrs extra pool).map fun bs heap => strAlloc heap bs
@@ -553,6 +587,11 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
       let (vs, heap) := build heap
       (.arr vs, heap)
 where
+  /-- The field lists to enumerate: one per variant for a union, else the
+  fields as they are. -/
+  enumVariants (fields : List Gen) : List (List Gen) :=
+    let n := variantCount fields
+    if n ≥ 2 then (List.range n).map (selectVariant fields) else [fields]
   enumList (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat)
       (allowNil : Bool) : List Gen → List (Heap Val → List Val × Heap Val)
     | [] => [fun heap => ([], heap)]
@@ -568,14 +607,20 @@ expanded once: the exhaustive engine only enumerates small signatures,
 since the builders of a wide structure are expensive to construct even
 when the domain is small. -/
 partial def leaves (table : TypeTable) (seen : List Nat := []) : Gen → Nat
-  | .structv _ fields => (fields.map (leaves table seen)).sum
+  | .structv _ fields => structLeaves table seen fields
   | .ptr _ pointee | .link _ pointee | .sliceOf _ pointee _ | .arrOf _ pointee _ => 1 + leaves table seen pointee
   | .ref _ tyIdx =>
     if seen.contains tyIdx then 1
     else match table[tyIdx]? with
-      | some fields => (fields.map (leaves table (tyIdx :: seen))).sum
+      | some fields => structLeaves table (tyIdx :: seen) fields
       | none => 1
   | _ => 1
+where
+  /-- A union counts its widest variant, since one is live at a time. -/
+  structLeaves (table : TypeTable) (seen : List Nat) (fields : List Gen) : Nat :=
+    let (vars, rest) := fields.partition Gen.isVariant
+    (rest.map (leaves table seen)).sum +
+      (if vars.length ≥ 2 then (vars.map (leaves table seen)).foldl max 0 else (vars.map (leaves table seen)).sum)
 
 /-- Size of the domain `enumArgs` would produce, computed before building it. -/
 partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable := #[])
@@ -589,17 +634,23 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
   | .sliceOf _ elem maxLen' =>
     let k := genSize extra maxLen pool table (depth - 1) allowNil elem
     (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
-  | .structv _ fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
+  | .structv _ fields => structSize extra maxLen pool table depth allowNil fields
   | .ptr _ pointee => (if depth > 0 && !allowNil then 0 else 1) + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .link _ pointee => 1 + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .ref _ tyIdx =>
     match table[tyIdx]? with
-    | some fields => fields.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
+    | some fields => structSize extra maxLen pool table depth allowNil fields
     | none => 1
   | .str _ maxLen' => if maxLen' == 0 then 1 else (smallStrs extra pool).length
   | .opaque _ => 1
   | .arrOf _ elem n => (genSize extra maxLen pool table (depth - 1) allowNil elem) ^ n
   | .nilptr _ => 1
+where
+  structSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat)
+      (allowNil : Bool) (fields : List Gen) : Nat :=
+    let product (fs : List Gen) := fs.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
+    let n := variantCount fields
+    if n ≥ 2 then ((List.range n).map fun k => product (selectVariant fields k)).sum else product fields
 
 def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)
     (table : TypeTable := #[]) (allowNil : Bool := true) : Nat :=
