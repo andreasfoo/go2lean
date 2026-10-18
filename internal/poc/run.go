@@ -78,19 +78,19 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.
 		if err != nil {
 			return nil, err
 		}
-		if results == nil && len(batch) > 1 {
-			// The batch did not compile: fall back to one test per run.
-			for _, p := range batch {
-				r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{p})
-				if err != nil {
-					return nil, err
-				}
-				p.v = verdictOf(p, r, c, e, o, eo)
-			}
-			continue
-		}
+		// A test without a result in the batch (the batch did not compile,
+		// or an earlier test ended the process with log.Fatal) is run on
+		// its own, so one target's exit does not hide the others.
 		for _, p := range batch {
-			p.v = verdictOf(p, results, cmd, exit, out, errOut)
+			if _, ok := results[p.cx.ID]; ok || len(batch) == 1 {
+				p.v = verdictOf(p, results, cmd, exit, out, errOut)
+				continue
+			}
+			r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{p})
+			if err != nil {
+				return nil, err
+			}
+			p.v = verdictOf(p, r, c, e, o, eo)
 		}
 	}
 	var vs []*contract.Verdict
