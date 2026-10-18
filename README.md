@@ -144,13 +144,15 @@ go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model Mi
     -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
 ```
 
-On tingly-box (7498 functions and methods) the model covers 6588; a full
-pass over the 111 packages with a model takes about an hour and ends with
-11 confirmed findings and 26 spurious counterexamples (see the design doc,
-§9b): seven `truncate(s, n)` helpers that panic on a negative `n`, two
-`strings.Repeat` calls with a negative count, a `blobPath` that slices a
-short hash, and `budgetDuration(seconds int) time.Duration` wrapping to
-`-1s` for `seconds = MaxInt64` — the last one from a spec the agent wrote.
+On tingly-box (7539 functions and methods) the model covers 7112; a full
+pass over its 156 packages (7076 properties) takes about two hours at four
+jobs and ends with 97 confirmed findings, 114 spurious counterexamples and
+2754 exhaustive certificates (see the design doc, §9b): `truncate(s, n)`
+helpers that panic on a negative `n`, `strings.Repeat` with a negative
+count, writes to nil maps, slices of short hashes, and many nil
+dereferences of fields a caller is expected to set. The agent on
+`internal/typ` wrote 63 specs and found `pickWithinTier` indexing an
+empty slice.
 
 ## Supported Go subset
 
@@ -175,8 +177,10 @@ for a context). A deferred call the model does not look into (a mutex
 unlock, a close) is ignored; a closure is an opaque func value. Goroutines,
 `select` and `defer` of a modelled function still reject the function,
 with the reason in the model report.
-On tingly-box (7498 functions and methods) this models 6588 (1988
-completely); 319 of the 910 rejected are test helpers taking `*testing.T`.
+On tingly-box (7539 functions and methods, including agent-written specs)
+this models 7112 (2025 completely); most of the 427 rejected are test
+helpers taking `*testing.T`, `select` statements and `defer` of modelled
+functions.
 
 ## Layout
 
