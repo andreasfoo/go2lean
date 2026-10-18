@@ -233,6 +233,19 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 }
 
 // judge fills Status, Observed and Diagnosis from the harness result.
+// hasNilInput says whether any object the test built held a nil opaque
+// value (rendered as JSON null by the model).
+func hasNilInput(cx *contract.Counterexample) bool {
+	for _, raw := range cx.Objects {
+		if nullRe.Match(raw) {
+			return true
+		}
+	}
+	return false
+}
+
+var nullRe = regexp.MustCompile(`(^|[\[,:\s])null([\]},\s]|$)`)
+
 func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexample, r result) {
 	v.Observed = map[string]string{}
 	if r.Ret != "" {
@@ -265,6 +278,13 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 		case prop.ExpectedPanic == "" || prop.ExpectedPanic == ClassifyPanic(r.Panic):
 			v.Status = contract.VerdictConfirmed
 			diag = nil
+			if strings.Contains(r.Panic, "nil pointer dereference") && hasNilInput(cx) {
+				// Confirmed, but worth a reader's second look: the test could
+				// only pass nil for an interface, map, func or foreign private
+				// field, and the panic may be the dereference of that nil.
+				diag = &contract.Diagnosis{Reason: "nil_opaque_input", Notes: []string{
+					"an opaque input (interface, map, func, or an unexported field of another package's struct) was nil in the test; the dereference may be of that value"}}
+			}
 		default:
 			v.Status = contract.VerdictInconclusive
 			diag.Reason = "panic_kind_mismatch"
