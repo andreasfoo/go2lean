@@ -221,8 +221,12 @@ type ABI struct {
 	GoFunc   string `json:"go_func"`
 	Package  string `json:"package,omitempty"`  // import path of the target's package (decides what the test may import)
 	Variadic bool   `json:"variadic,omitempty"` // the last parameter is `...T` (its Go type is the slice)
-	GoSig    string `json:"go_sig"`
-	Frontend string `json:"frontend"`
+	// Imports maps every import path a Go type mentions to the package's
+	// name, which the harness needs when the two differ
+	// (github.com/anthropics/anthropic-sdk-go is package anthropic).
+	Imports  map[string]string `json:"imports,omitempty"`
+	GoSig    string            `json:"go_sig"`
+	Frontend string            `json:"frontend"`
 	// Method is set for methods: the receiver is Params[0] and a call is
 	// written recv.Method(rest...).
 	Method string `json:"method,omitempty"`

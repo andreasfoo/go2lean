@@ -52,7 +52,7 @@ import (
 	"fmt"
 	"testing"
 {{- range .Imports}}
-	"{{.}}"
+	{{.}}
 {{- end}}
 )
 {{range .Funcs}}
@@ -158,7 +158,7 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		// The variable takes the parameter's name unless that is blank,
 		// repeated, or would shadow a package the test uses.
 		name := prm.Go
-		if name == "_" || name == "" || used[name] || reservedName[name] || shadowsImport(name, imports) {
+		if name == "_" || name == "" || used[name] || reservedName[name] || shadowsImport(abi, name, imports) {
 			name = fmt.Sprintf("go2leanP%d", i)
 		}
 		used[name] = true
@@ -171,7 +171,7 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		if prm.Kind == contract.ABIError && cx.Inputs[prm.Model[0]] != "nil" {
 			imports["errors"] = true
 		}
-		if needsErrors(prm, cx.Objects[prm.Go]) {
+		if needsErrors(abi, prm, cx.Objects[prm.Go]) {
 			imports["errors"] = true
 		}
 	}
@@ -194,8 +194,13 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		if fixedImports[ip] {
 			continue
 		}
-		if usesPackage(decls, path.Base(ip)) {
-			d.Imports = append(d.Imports, ip)
+		name := importName(abi, ip)
+		if usesPackage(decls, name) {
+			if name != path.Base(ip) {
+				d.Imports = append(d.Imports, fmt.Sprintf("%s %q", name, ip))
+			} else {
+				d.Imports = append(d.Imports, fmt.Sprintf("%q", ip))
+			}
 		}
 	}
 	sort.Strings(d.Imports)
@@ -464,13 +469,22 @@ var (
 
 // shadowsImport says whether a variable of this name would hide a package
 // the test may import (a parameter named `oauth` next to an `oauth` type).
-func shadowsImport(name string, imports map[string]bool) bool {
+func shadowsImport(abi *contract.ABI, name string, imports map[string]bool) bool {
 	for ip := range imports {
-		if path.Base(ip) == name {
+		if importName(abi, ip) == name {
 			return true
 		}
 	}
 	return false
+}
+
+// importName is the package name of an import path: recorded by the
+// frontend when it differs from the path's last element.
+func importName(abi *contract.ABI, ip string) string {
+	if n, ok := abi.Imports[ip]; ok {
+		return n
+	}
+	return path.Base(ip)
 }
 
 // usesPackage says whether the generated code refers to the package by
@@ -562,7 +576,7 @@ func collectImports(p contract.ABIParam, into map[string]bool) {
 
 // needsErrors reports whether rendering the object needs the errors package
 // (a non-nil error somewhere inside a struct or pointee).
-func needsErrors(p contract.ABIParam, raw json.RawMessage) bool {
+func needsErrors(abi *contract.ABI, p contract.ABIParam, raw json.RawMessage) bool {
 	if raw == nil {
 		return false
 	}
@@ -572,6 +586,13 @@ func needsErrors(p contract.ABIParam, raw json.RawMessage) bool {
 	}
 	var walk func(p contract.ABIParam, v any) bool
 	walk = func(p contract.ABIParam, v any) bool {
+		if p.TypeRef != "" {
+			for _, t := range abi.Types {
+				if t.GoType == p.TypeRef {
+					p.Fields = t.Fields
+				}
+			}
+		}
 		switch p.Kind {
 		case contract.ABIError:
 			return v != nil && v != "nil"

@@ -14,6 +14,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -1445,14 +1446,27 @@ func spellAll(pkg *types.Package, t types.Type) (src string, paths []string) {
 		if !slices.Contains(paths, p.Path()) {
 			paths = append(paths, p.Path())
 		}
+		if recordImport != nil {
+			recordImport(p.Path(), p.Name())
+		}
 		return p.Name()
 	}
 	src = types.TypeString(t, qual)
 	return src, paths
 }
 
+// recordImport, while an ABI is being built, notes the name of every
+// package a spelling mentions.
+var recordImport func(path, name string)
+
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
-	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path(), Variadic: f.Signature.Variadic()}
+	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path(), Variadic: f.Signature.Variadic(), Imports: map[string]string{}}
+	recordImport = func(path, name string) {
+		if name != filepath.Base(path) {
+			abi.Imports[path] = name
+		}
+	}
+	defer func() { recordImport = nil }()
 	if f.Signature.Recv() != nil {
 		abi.Method = f.Name()
 	}
