@@ -24,7 +24,7 @@ def f0 : GoSSA.Func := {
 
 /-- func(v any, m map[string]int) string (status: partial) -/
 def f1 : GoSSA.Func := {
-  name := "Describe", params := [0, 1], nvals := 8, entry := 0,
+  name := "Describe", params := [0, 1], nvals := 10, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -41,9 +41,11 @@ def f1 : GoSSA.Func := {
     -- 3: cond.true
     { params := [],
       instrs := #[.havoc 5 1,
-                 .op 6 (.const (.int 64 0#64)) [],
-                 .op 7 .eq [5, 6]],
-      term := .br 7 1 [] 2 [] }
+                 .op 6 (.const (.int 64 16#64)) [],
+                 .op 7 .urem [5, 6],
+                 .op 8 (.const (.int 64 0#64)) [],
+                 .op 9 .eq [7, 8]],
+      term := .br 9 1 [] 2 [] }
   ] }
 
 /-- func(ctx context.Context, m map[string]int, keys []string) int (status: partial) -/
