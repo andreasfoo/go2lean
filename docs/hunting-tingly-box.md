@@ -1,94 +1,93 @@
 # Bug hunting on tingly-box, guided by its issue tracker
 
-How the properties were chosen, what they proved, and what they found.
-Everything here was reproduced by M3 with a real `go test`; the PoC for the
-confirmed finding is in `docs/poc-issue-1924/`.
+What was run and what was observed. Every result below is the output of
+a go2lean run or of a real `go test` that M3 executed; the PoC of the
+confirmed finding is in `docs/poc-issue-1924/`. Interpretation is left to
+the reader; the one sentence of ours is marked as such.
 
-## 1. Where the properties come from
+## 1. Inputs
 
-The tracker (62 bug issues, 11 open) clusters in protocol conversion
-between the Anthropic, OpenAI Chat, OpenAI Responses and Google formats:
-
-| issue | invariant it states |
-|---|---|
-| #1924 (open) | tool-call ids are truncated to OpenAI's 40 characters on the tool-result side only, so calls and results stop pairing |
-| #1923 (open) | parallel tool calls in a stream must keep distinct indexes |
-| #1427 (closed) | a tool result given as an array of text blocks must not be dropped |
-| #1921 (open) | mid-conversation system messages must survive the OpenAI paths |
-| #1897 (closed) | thinking budgets must map to a real effort, not silently to "low" |
-
-Specula's list of found bugs (about 270 rows) is mostly consensus and
-memory-safety work in distributed systems, but roughly half of the
-entries are single-function logic errors: truncation and buffer sizing,
-inverted conditions, counter asymmetry, validation gaps, off-by-one. Those
-are the class go2lean's properties target, so the guidance file for the
-agent (`docs/specs/tingly-box/guidance.md`) lists exactly these shapes:
-ids bounded by 40 on both sides, counts preserved, non-empty in implies
-non-empty out.
+- tingly-box issue tracker, label `bug`: 51 closed, 11 open (2026-10-18).
+  Open issues about protocol conversion, quoted from their titles:
+  #1924 "tool-use ids over 40 characters are truncated on the tool message
+  only, so tool calls and results stop pairing"; #1923 "streamed tool_calls
+  always use index 0"; #1922, #1921, #1427, #1897.
+- Specula's spreadsheet of found bugs (about 270 rows; link in its README).
+  We used it only to choose property shapes: bounded ids, preserved counts,
+  non-empty in implies non-empty out. The agent guidance file derived from
+  both lists is `docs/specs/tingly-box/guidance.md`.
 
 ## 2. Properties written by hand
 
-`docs/specs/tingly-box/` holds the spec files as installed in the package
-directories (`go2lean_specs_test.go`).
+The spec files as installed in the package directories are in
+`docs/specs/tingly-box/`.
 
 `internal/protocol/request`, target `ConvertAnthropicBetaToOpenAIRequest`:
 
-- `ToolCallIDsBounded`: every tool_call id on an assistant message of the
-  converted request is at most 40 characters.
-- `ToolMessageIDsBounded`: every tool message's tool_call_id is at most 40
-  characters.
-- `ToolPairsKept`: a tool_result paired with a tool_use in the input is
-  still paired in the output.
-- `ConvertBetaToolResultContentKeepsText`: a text block with content makes
-  the converted tool result non-empty.
+- `ToolCallIDsBounded`: every `tool_calls[].id` on an assistant message of
+  the converted request has at most 40 characters.
+- `ToolMessageIDsBounded`: every tool message's `tool_call_id` has at most
+  40 characters.
+- `ToolPairsKept`: a tool_result whose `tool_use_id` matches a tool_use in
+  the input has, in the output, a tool message whose `tool_call_id`
+  equals some assistant `tool_calls[].id`.
+- `ConvertBetaToolResultContentKeepsText` (target
+  `convertBetaToolResultContent`): a text block with non-empty text gives a
+  non-empty result.
 
 `internal/protocol/stream`:
 
-- `truncateToolCallID`: the result is at most 40 characters, and a prefix
-  of the input, kept whole when it fits.
-- `anthropicStopReasonToIncomplete`: `max_tokens` maps to an incomplete
-  stop with a non-empty reason.
+- `truncateToolCallID`: the result has at most 40 characters; it equals the
+  input when the input fits, else it is the input's first 40 characters.
+- `anthropicStopReasonToIncomplete`: `"max_tokens"` gives `(true, s)` with
+  `s != ""`.
 
-## 3. Results
+## 3. Runs and observations
 
-Run with `-maxlen 48` (ids longer than 40 characters must be drawable) and
-`-budget 120` on the wide request type.
+Options: `-maxlen 48 -budget 120` for the request package, `-maxlen 48`
+for the stream package. go2lean at commit `154fddf` or later.
 
-| property | engine result | M3 |
+| property | engine output | M3 output |
 |---|---|---|
-| `ToolCallIDsBounded` | refuted at trial 168 | **confirmed**: the converted request carries assistant tool_call ids of 43, 47, 50 and 51 characters |
-| `ToolMessageIDsBounded` | no counterexample in 2000 trials | — |
-| `ToolPairsKept` | no counterexample (745 of 1974 runs out of fuel) | — |
-| `ConvertBetaToolResultContentKeepsText` | no counterexample in 2000 trials | — |
-| `truncateToolCallID` bounded, prefix | certified: holds on the whole small domain (16 inputs each) | — |
-| `anthropicStopReasonToIncomplete` | certified (40 inputs) | — |
+| `ToolCallIDsBounded` | `random: found at trial 168` | `confirmed`; the test's `GO2LEAN_RESULT` line reads `"panicked": false, "spec": false` |
+| `ToolMessageIDsBounded` | `none in 2000 trials` | not run (no counterexample) |
+| `ToolPairsKept` | `none in 1974 trials (745 out of fuel)` | not run |
+| `ConvertBetaToolResultContentKeepsText` | `none in 2000 trials` | not run |
+| `truncateToolCallID` bounded | `exhaustive: holds on 16 inputs (recorded as exhausted)` | — |
+| `truncateToolCallID` prefix | `exhaustive: holds on 16 inputs` | — |
+| `anthropicStopReasonToIncomplete` | `exhaustive: holds on 40 inputs` | — |
 
-The confirmed finding is the root cause of issue #1924: the call side
-copies `block.OfToolUse.ID` verbatim (`anthropic_view.go` lines 94, 416,
-851) while the result side goes through `truncateToolCallID`
-(`anthropic_view.go:510`), so for an id longer than 40 characters the tool
-message's `tool_call_id` no longer equals the assistant's `tool_calls[].id`.
-The PoC test builds a request with such an id, converts it, and prints the
-oracle's verdict (`"spec": false`).
+The confirmed counterexample (`docs/poc-issue-1924/`): the input request
+holds tool_use blocks whose ids have 51, 50, 47 and 43 characters; after
+`ConvertAnthropicBetaToOpenAIRequest` the oracle finds an assistant
+`tool_calls[].id` longer than 40 characters.
 
-The templated `no_panic` properties of `internal/protocol/stream` found
-thirteen counterexamples; M3 confirmed seven, of which three are nil
-dereferences of an interface the test can only pass as nil
-(`nil_opaque_input`), three are the package's own fake decoders indexing
-past their event list, and one (`chatToResponsesConverter.emitCompletionEvents`)
-indexes with a state field the test set to -2: a state the converter never
-builds itself. Four were spurious (havoc values), two ended the test
-process. None of these seven is a finding to report upstream.
+In the source at the tested commit (`5f83f04`):
+`internal/protocol/request/anthropic_view.go` lines 94, 416 and 851 assign
+`block.OfToolUse.ID` to the call-side id without change; line 510 assigns
+`truncateToolCallID(block.ToolUseID)` to the result-side id.
 
-## 4. What the hunt changed in go2lean
+Our judgement, the only one in this document: this matches the symptom
+issue #1924 reports.
 
-- A union in the OpenAI and Anthropic SDKs is a struct whose pointer
-  fields are all `Of<Variant>`; with pointers non-nil by default every
-  variant was live at once and a request type had 4718 leaf generators.
-  Unions now get one variant at a time.
-- The literal pool is mined from the whole call tree, so `"assistant"` in a
-  callee is reachable from the caller's inputs.
-- A slice at depth zero is empty; before, a union holding a slice of itself
-  recursed until the stack overflowed.
+The templated `no_panic` properties of `internal/protocol/stream` produced
+13 counterexamples. M3 outputs: 7 `confirmed`, 4 `spurious`
+(`no_panic_in_real_run`), 2 `inconclusive` (`target_exited`). Of the 7
+confirmed, 3 carry the diagnosis `nil_opaque_input` (an interface, map or
+func input was nil in the test); 3 are methods of the package's test-only
+types `fakeAnthropicDecoder`, `fakeChatDecoder`, `fakeResponsesDecoder`
+(`index out of range` with an index taken from a field of the receiver);
+1 is `chatToResponsesConverter.emitCompletionEvents` with a receiver whose
+index field the test set to -2 (`index out of range [-2]`).
+
+## 4. Changes made to go2lean during the hunt
+
+- Unions of the OpenAI and Anthropic SDKs (structs whose pointer fields are
+  all `Of<Variant>`) are generated one variant at a time; before, every
+  variant was non-nil and the request type had 4718 leaf generators, 15
+  trials per 10 s.
+- The literal pool is mined from the target's whole call tree.
+- A slice generated at depth zero is empty; before, a union holding a slice
+  of itself recursed until the stack overflowed.
 - `GO2LEAN_TRACE=1` prints every input the random engine draws.
-- `-guidance file` adds issue-derived bug classes to the agent's prompt.
+- `-guidance file` appends text to the agent's proposal prompt.
