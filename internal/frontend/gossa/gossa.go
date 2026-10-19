@@ -185,6 +185,9 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 			return nil, "", err
 		}
 		p.Dependency = !mainPaths[u.path]
+		if !p.Dependency {
+			addCtorWrappers(p, u.fns)
+		}
 		progs = append(progs, p)
 	}
 	return progs, modPath, nil
@@ -354,6 +357,176 @@ func testHelper(f *ssa.Function) bool {
 		f = f.Parent()
 	}
 	return strings.HasSuffix(f.Name(), "ForTest") || strings.HasSuffix(f.Name(), "ForTesting")
+}
+
+// addCtorWrappers adds, for each method of a type T whose package has a
+// constructor (NewT or newT returning T or *T, possibly with an error), a
+// function T.M~NewT that builds the receiver with the constructor and calls
+// the method on it. The method is then targeted through the wrapper: a
+// receiver no constructor made (nil maps, nil collaborators) is a misuse,
+// not a bug. Wrappers go after every other function, so no FuncId moves.
+func addCtorWrappers(p *ir.Prog, fns []*ssa.Function) {
+	ids := map[*ssa.Function]int{}
+	ctors := map[*types.TypeName]*ssa.Function{}
+	for i, f := range fns {
+		ids[f] = i
+	}
+	for _, f := range fns {
+		if f.Signature.Recv() != nil || f.Parent() != nil || p.Funcs[ids[f]].Status == contract.ModelRejected {
+			continue
+		}
+		if tn, ok := ctorOf(f); ok {
+			if _, dup := ctors[tn]; !dup {
+				ctors[tn] = f
+			}
+		}
+	}
+	for _, m := range fns {
+		recv := m.Signature.Recv()
+		if recv == nil || m.Parent() != nil || p.Funcs[ids[m]].Status == contract.ModelRejected || p.Funcs[ids[m]].SpecFor != "" {
+			continue
+		}
+		rt := recv.Type()
+		ptrRecv := false
+		if pt, ok := rt.(*types.Pointer); ok {
+			rt, ptrRecv = pt.Elem(), true
+		}
+		named, ok := rt.(*types.Named)
+		if !ok {
+			continue
+		}
+		ctor, ok := ctors[named.Obj()]
+		if !ok || ctor.Signature.Variadic() {
+			continue
+		}
+		_, ctorPtr := ctor.Signature.Results().At(0).Type().(*types.Pointer)
+		if ptrRecv && !ctorPtr {
+			continue // the constructor's value would need an address
+		}
+		w, err := ctorWrapper(p, ctor, m, ids[ctor], ids[m], ctorPtr && !ptrRecv)
+		if err != nil {
+			continue
+		}
+		p.Funcs[ids[m]].WrappedBy = w.Name
+		p.Funcs = append(p.Funcs, w)
+	}
+}
+
+// ctorOf reports the type f constructs: a package-level function named
+// New<T> or new<T> whose first result is T or *T for a named T of its own
+// package, and whose other result, if any, is an error.
+func ctorOf(f *ssa.Function) (*types.TypeName, bool) {
+	res := f.Signature.Results()
+	if res.Len() == 0 || res.Len() > 2 || (res.Len() == 2 && !isError(res.At(1).Type())) {
+		return nil, false
+	}
+	t := res.At(0).Type()
+	if pt, ok := t.(*types.Pointer); ok {
+		t = pt.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok || f.Pkg == nil || named.Obj().Pkg() != f.Pkg.Pkg {
+		return nil, false
+	}
+	n := named.Obj().Name()
+	if f.Name() != "New"+n && f.Name() != "new"+n && f.Name() != "New"+strings.ToUpper(n[:1])+n[1:] {
+		return nil, false
+	}
+	return named.Obj(), true
+}
+
+// ctorWrapper builds T.M~NewT: call the constructor on the first
+// parameters, stop (returning unit) when it reports an error, call the
+// method on its result and the remaining parameters. Either call getting
+// stuck makes the run stuck (the wrapper exists to be checked, so an
+// unmodelled callee must not read as "no panic"). deref loads the receiver
+// from the constructor's pointer for a value receiver.
+func ctorWrapper(p *ir.Prog, ctor, m *ssa.Function, ctorID, mID int, deref bool) (*ir.Func, error) {
+	cabi, err := abiOf(ctor)
+	if err != nil {
+		return nil, err
+	}
+	mabi, err := abiOf(m)
+	if err != nil {
+		return nil, err
+	}
+	name := funcName(m) + "~" + ctor.Name()
+	abi := *mabi
+	abi.GoFunc = m.String()
+	abi.GoSig = fmt.Sprintf("func%s via %s", strings.TrimPrefix(m.Signature.String(), "func"), ctor.Name())
+	abi.Method = ""
+	abi.Variadic = m.Signature.Variadic()
+	errRes := ctor.Signature.Results().Len() == 2
+	abi.Ctor = &contract.ABICtor{Func: ctor.Name(), N: len(cabi.Params), Err: errRes, Method: m.Name()}
+	abi.Imports = map[string]string{}
+	for k, v := range cabi.Imports {
+		abi.Imports[k] = v
+	}
+	for k, v := range mabi.Imports {
+		abi.Imports[k] = v
+	}
+	seenT := map[string]bool{}
+	abi.Types = nil
+	for _, t := range append(append([]contract.ABIType{}, cabi.Types...), mabi.Types...) {
+		if !seenT[t.GoType] {
+			seenT[t.GoType] = true
+			abi.Types = append(abi.Types, t)
+		}
+	}
+	// Constructor parameters, then the method's without the receiver; a
+	// method parameter named like a constructor one is renamed.
+	taken := map[string]bool{}
+	abi.Params = nil
+	for _, prm := range cabi.Params {
+		taken[prm.Go] = true
+		abi.Params = append(abi.Params, prm)
+	}
+	for _, prm := range mabi.Params[1:] {
+		for taken[prm.Go] {
+			prm.Go += "_"
+			prm.Model = append([]string{prm.Go}, prm.Model[1:]...)
+		}
+		taken[prm.Go] = true
+		abi.Params = append(abi.Params, prm)
+	}
+	nc, nm := len(ctor.Params), len(m.Params)-1
+	w := &ir.Func{Name: name, GoSig: abi.GoSig, ABI: abi, Status: contract.ModelComplete, Calls: []int{ctorID, mID}}
+	v := 0
+	fresh := func() ir.Var { v++; return ir.Var(v - 1) }
+	for i := 0; i < nc+nm; i++ {
+		w.Params = append(w.Params, fresh())
+	}
+	r, res, unit := fresh(), fresh(), fresh()
+	// Blocks: 0 call ctor; 1 receiver (and error check); 2 call method;
+	// 3 return the method's result; 4 return unit; 5 stuck.
+	w.Blocks = make([]ir.Block, 6)
+	w.Blocks[0] = ir.Block{Name: "ctor", Term: ir.Term{Kind: ir.TermCall, Callee: ctorID, CArgs: w.Params[:nc], Dst: r, Next: 1, Fallback: 5}}
+	recv := r
+	b1 := ir.Block{Name: "recv"}
+	if errRes {
+		recv = fresh()
+		e, nilErr, isNil := fresh(), fresh(), fresh()
+		b1.Instrs = append(b1.Instrs,
+			ir.Instr{Dst: recv, Op: ir.Extract{I: 0}, Args: []ir.Var{r}},
+			ir.Instr{Dst: e, Op: ir.Extract{I: 1}, Args: []ir.Var{r}},
+			ir.Instr{Dst: nilErr, Op: ir.Const{V: ir.ErrVal{}}},
+			ir.Instr{Dst: isNil, Op: ir.Simple("eq"), Args: []ir.Var{e, nilErr}})
+		b1.Term = ir.Term{Kind: ir.TermBr, Cond: isNil, T: 2, F: 4}
+	} else {
+		b1.Term = ir.Term{Kind: ir.TermJump, B: 2}
+	}
+	if deref {
+		val := fresh()
+		b1.Instrs = append(b1.Instrs, ir.Instr{Dst: val, Op: ir.Simple("loadPath"), Args: []ir.Var{recv}})
+		recv = val
+	}
+	w.Blocks[1] = b1
+	w.Blocks[2] = ir.Block{Name: "method", Term: ir.Term{Kind: ir.TermCall, Callee: mID, CArgs: append([]ir.Var{recv}, w.Params[nc:]...), Dst: res, Next: 3, Fallback: 5}}
+	w.Blocks[3] = ir.Block{Name: "ret", Term: ir.Term{Kind: ir.TermRet, V: res}}
+	w.Blocks[4] = ir.Block{Name: "ctor-error", Instrs: []ir.Instr{{Dst: unit, Op: ir.Const{V: ir.UnitVal{}}}}, Term: ir.Term{Kind: ir.TermRet, V: unit}}
+	w.Blocks[5] = ir.Block{Name: "stuck", Term: ir.Term{Kind: ir.TermPanic, Panic: contract.PanicOther}}
+	w.NVals = v
+	return w, nil
 }
 
 // withAnon appends the anonymous functions of fns (and theirs, nested)

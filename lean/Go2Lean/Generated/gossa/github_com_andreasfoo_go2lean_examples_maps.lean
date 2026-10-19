@@ -8,8 +8,74 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 set_option maxRecDepth 100000
 
-/-- func(words []string) int (status: partial) -/
+/-- func (c *github.com/andreasfoo/go2lean/examples/maps.Counter) Add(k string) (status: partial) -/
 def f0 : GoSSA.Func := {
+  name := "Counter.Add", params := [0, 1], nvals := 11, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.fieldAddr 0) [0],
+                 .op 3 .loadPath [2],
+                 .op 5 .nilKnown [3]],
+      term := .br 5 1 [] 2 [] },
+    -- 1: entry.known
+    { params := [],
+      instrs := #[.op 4 (.mapLookup false (.int 64 0#64)) [3, 1]],
+      term := .jump 3 [] },
+    -- 2: entry.unknown
+    { params := [],
+      instrs := #[.havoc 4 0],
+      term := .jump 3 [] },
+    -- 3: entry.known-join
+    { params := [],
+      instrs := #[.op 6 (.const (.int 64 1#64)) [],
+                 .op 7 .add [4, 6],
+                 .op 8 .nilKnown [3]],
+      term := .br 8 4 [] 5 [] },
+    -- 4: entry.known-join.known
+    { params := [],
+      instrs := #[.op 9 .mapUpdate [3, 1, 7]],
+      term := .jump 6 [] },
+    -- 5: entry.known-join.unknown
+    { params := [],
+      instrs := #[],
+      term := .jump 6 [] },
+    -- 6: entry.known-join.known-join
+    { params := [],
+      instrs := #[.op 10 (.const .unit) []],
+      term := .ret 10 }
+  ] }
+
+/-- func (c *github.com/andreasfoo/go2lean/examples/maps.Counter) Share(k string) int (status: partial) -/
+def f1 : GoSSA.Func := {
+  name := "Counter.Share", params := [0, 1], nvals := 11, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.fieldAddr 0) [0],
+                 .op 3 .loadPath [2],
+                 .op 5 .nilKnown [3]],
+      term := .br 5 1 [] 2 [] },
+    -- 1: entry.known
+    { params := [],
+      instrs := #[.op 4 (.mapLookup false (.int 64 0#64)) [3, 1]],
+      term := .jump 3 [] },
+    -- 2: entry.unknown
+    { params := [],
+      instrs := #[.havoc 4 1],
+      term := .jump 3 [] },
+    -- 3: entry.known-join
+    { params := [],
+      instrs := #[.op 6 (.const (.int 64 100#64)) [],
+                 .op 7 .mul [4, 6],
+                 .op 8 (.fieldAddr 1) [0],
+                 .op 9 .loadPath [8],
+                 .op 10 .sdiv [7, 9]],
+      term := .ret 10 }
+  ] }
+
+/-- func(words []string) int (status: partial) -/
+def f2 : GoSSA.Func := {
   name := "Distinct", params := [0], nvals := 17, entry := 0,
   blocks := #[
     -- 0: entry
@@ -53,7 +119,7 @@ def f0 : GoSSA.Func := {
       term := .jump 9 [] },
     -- 8: rangeindex.done.unknown
     { params := [],
-      instrs := #[.havoc 15 0,
+      instrs := #[.havoc 15 2,
                  .op 16 (.const (.int 64 16#64)) [],
                  .op 13 .urem [15, 16]],
       term := .jump 9 [] },
@@ -63,8 +129,37 @@ def f0 : GoSSA.Func := {
       term := .ret 13 }
   ] }
 
+/-- func(limit int) (*github.com/andreasfoo/go2lean/examples/maps.Counter, error) (status: complete) -/
+def f3 : GoSSA.Func := {
+  name := "NewCounter", params := [0], nvals := 15, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.const (.int 64 0#64)) [],
+                 .op 2 .slt [0, 1]],
+      term := .br 2 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 3 (.strConst [110, 101, 103, 97, 116, 105, 118, 101, 32, 108, 105, 109, 105, 116]) [],
+                 .op 4 .errNew [3],
+                 .op 5 (.const (.ptr 0 [])) [],
+                 .op 6 .mkTuple [5, 4]],
+      term := .ret 6 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 7 (.alloc (.structv [.opaqueNil, (.int 64 0#64)])) [],
+                 .op 8 (.fieldAddr 0) [7],
+                 .op 9 .makeMap [],
+                 .op 10 .storePath [8, 9],
+                 .op 11 (.fieldAddr 1) [7],
+                 .op 12 .storePath [11, 0],
+                 .op 13 (.const (.err false)) [],
+                 .op 14 .mkTuple [7, 13]],
+      term := .ret 14 }
+  ] }
+
 /-- func() *github.com/andreasfoo/go2lean/examples/maps.Registry (status: complete) -/
-def f1 : GoSSA.Func := {
+def f4 : GoSSA.Func := {
   name := "NewRegistry", params := [], nvals := 4, entry := 0,
   blocks := #[
     -- 0: entry
@@ -77,7 +172,7 @@ def f1 : GoSSA.Func := {
   ] }
 
 /-- func(names []string, want string) string (status: partial) -/
-def f2 : GoSSA.Func := {
+def f5 : GoSSA.Func := {
   name := "Pick", params := [0, 1], nvals := 19, entry := 0,
   blocks := #[
     -- 0: entry
@@ -120,7 +215,7 @@ def f2 : GoSSA.Func := {
       term := .jump 9 [] },
     -- 8: rangeindex.done.unknown
     { params := [],
-      instrs := #[.havoc 13 1],
+      instrs := #[.havoc 13 3],
       term := .jump 9 [] },
     -- 9: rangeindex.done.known-join
     { params := [],
@@ -132,7 +227,7 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func (r *github.com/andreasfoo/go2lean/examples/maps.Registry) Put(k string, v int) (status: partial) -/
-def f3 : GoSSA.Func := {
+def f6 : GoSSA.Func := {
   name := "Registry.Put", params := [0, 1, 2], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
@@ -156,7 +251,7 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func(words []string, ret int) bool (status: complete) -/
-def f4 : GoSSA.Func := {
+def f7 : GoSSA.Func := {
   name := "SpecDistinctBounded", params := [0, 1], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
@@ -187,7 +282,7 @@ def f4 : GoSSA.Func := {
   ] }
 
 /-- func(keys []string, ret int) bool (status: complete) -/
-def f5 : GoSSA.Func := {
+def f8 : GoSSA.Func := {
   name := "SpecSumNonNegative", params := [0, 1], nvals := 4, entry := 0,
   blocks := #[
     -- 0: entry
@@ -198,13 +293,13 @@ def f5 : GoSSA.Func := {
   ] }
 
 /-- func(keys []string) int (status: partial) -/
-def f6 : GoSSA.Func := {
+def f9 : GoSSA.Func := {
   name := "Sum", params := [0], nvals := 31, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[],
-      term := .call 1 [] 3 7 [] 8 },
+      term := .call 4 [] 3 7 [] 8 },
     -- 1: rangeindex.loop
     { params := [1],
       instrs := #[.op 9 (.const (.int 64 1#64)) [],
@@ -217,7 +312,7 @@ def f6 : GoSSA.Func := {
                  .op 13 .loadPath [12],
                  .op 14 (.const (.int 64 1#64)) [],
                  .op 15 .add [10, 14]],
-      term := .call 3 [3, 13, 15] 16 9 [] 10 },
+      term := .call 6 [3, 13, 15] 16 9 [] 10 },
     -- 3: rangeindex.done
     { params := [],
       instrs := #[.op 17 (.fieldAddr 0) [3],
@@ -276,6 +371,102 @@ def f6 : GoSSA.Func := {
       term := .jump 4 [26] }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[64, 64] }
+/-- func((k string)) via NewCounter (status: complete) -/
+def f10 : GoSSA.Func := {
+  name := "Counter.Add~NewCounter", params := [0, 1], nvals := 9, entry := 0,
+  blocks := #[
+    -- 0: ctor
+    { params := [],
+      instrs := #[],
+      term := .call 3 [0] 2 1 [] 5 },
+    -- 1: recv
+    { params := [],
+      instrs := #[.op 5 (.extract 0) [2],
+                 .op 6 (.extract 1) [2],
+                 .op 7 (.const (.err false)) [],
+                 .op 8 .eq [6, 7]],
+      term := .br 8 2 [] 4 [] },
+    -- 2: method
+    { params := [],
+      instrs := #[],
+      term := .call 0 [5, 1] 3 3 [] 5 },
+    -- 3: ret
+    { params := [],
+      instrs := #[],
+      term := .ret 3 },
+    -- 4: ctor-error
+    { params := [],
+      instrs := #[.op 4 (.const .unit) []],
+      term := .ret 4 },
+    -- 5: stuck
+    { params := [],
+      instrs := #[],
+      term := .panic .other }
+  ] }
+
+/-- func((k string) int) via NewCounter (status: complete) -/
+def f11 : GoSSA.Func := {
+  name := "Counter.Share~NewCounter", params := [0, 1], nvals := 9, entry := 0,
+  blocks := #[
+    -- 0: ctor
+    { params := [],
+      instrs := #[],
+      term := .call 3 [0] 2 1 [] 5 },
+    -- 1: recv
+    { params := [],
+      instrs := #[.op 5 (.extract 0) [2],
+                 .op 6 (.extract 1) [2],
+                 .op 7 (.const (.err false)) [],
+                 .op 8 .eq [6, 7]],
+      term := .br 8 2 [] 4 [] },
+    -- 2: method
+    { params := [],
+      instrs := #[],
+      term := .call 1 [5, 1] 3 3 [] 5 },
+    -- 3: ret
+    { params := [],
+      instrs := #[],
+      term := .ret 3 },
+    -- 4: ctor-error
+    { params := [],
+      instrs := #[.op 4 (.const .unit) []],
+      term := .ret 4 },
+    -- 5: stuck
+    { params := [],
+      instrs := #[],
+      term := .panic .other }
+  ] }
+
+/-- func((k string, v int)) via NewRegistry (status: complete) -/
+def f12 : GoSSA.Func := {
+  name := "Registry.Put~NewRegistry", params := [0, 1], nvals := 5, entry := 0,
+  blocks := #[
+    -- 0: ctor
+    { params := [],
+      instrs := #[],
+      term := .call 4 [] 2 1 [] 5 },
+    -- 1: recv
+    { params := [],
+      instrs := #[],
+      term := .jump 2 [] },
+    -- 2: method
+    { params := [],
+      instrs := #[],
+      term := .call 6 [2, 0, 1] 3 3 [] 5 },
+    -- 3: ret
+    { params := [],
+      instrs := #[],
+      term := .ret 3 },
+    -- 4: ctor-error
+    { params := [],
+      instrs := #[.op 4 (.const .unit) []],
+      term := .ret 4 },
+    -- 5: stuck
+    { params := [],
+      instrs := #[],
+      term := .panic .other }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12], havocWidths := #[64, 64, 64, 64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_maps

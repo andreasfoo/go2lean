@@ -401,6 +401,7 @@ type Func struct {
 	Issues    []string
 	SpecFor   string
 	Closure   bool
+	WrappedBy string
 	Consts    []string         // integer literals, see contract.ModelFunc.Consts
 	StrConsts []string         // string literals
 	Calls     []int            // callees within the program, by function id

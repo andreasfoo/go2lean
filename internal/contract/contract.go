@@ -244,12 +244,25 @@ type ABI struct {
 	// Method is set for methods: the receiver is Params[0] and a call is
 	// written recv.Method(rest...).
 	Method string `json:"method,omitempty"`
+	// Ctor is set for a method called on a receiver its package's
+	// constructor built: the first N parameters go to the constructor.
+	Ctor *ABICtor `json:"ctor,omitempty"`
 	// Types is the table of recursive struct types referenced by TypeRef,
 	// in a fixed order (the generators index it by position).
 	Types   []ABIType   `json:"types,omitempty"`
 	Params  []ABIParam  `json:"params"`
 	Results []ABIResult `json:"results,omitempty"`
 	Havoc   []ABIHavoc  `json:"havoc,omitempty"`
+}
+
+// ABICtor describes a constructor-built receiver: recv := Func(params[:N]...)
+// (recv, err := ... when Err; a non-nil err ends the run as a false
+// precondition), then recv.Method(params[N:]...).
+type ABICtor struct {
+	Func   string `json:"func"`
+	N      int    `json:"n"`
+	Err    bool   `json:"err,omitempty"`
+	Method string `json:"method"`
 }
 
 // ABIParamKind classifies how a Go parameter is split into model values.
@@ -387,6 +400,9 @@ type ModelFunc struct {
 	// Closure marks an anonymous function: modelled so calls through func
 	// values can follow it, never a target (its free variables come first).
 	Closure bool `json:"closure,omitempty"`
+	// WrappedBy names the constructor wrapper that targets this method in
+	// its place (T.M~NewT).
+	WrappedBy string `json:"wrapped_by,omitempty"`
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`

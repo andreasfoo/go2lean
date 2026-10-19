@@ -2,6 +2,8 @@
 // lookups, updates, len, delete and range.
 package maps
 
+import "errors"
+
 // Pick returns the name before want in names. Bug: the position of a
 // missing name, or of the first one, is 0, and names[-1] panics.
 func Pick(names []string, want string) string {
@@ -46,3 +48,24 @@ func Sum(keys []string) int {
 	}
 	return total
 }
+
+// Counter counts per key against a limit set by NewCounter.
+type Counter struct {
+	m     map[string]int
+	limit int
+}
+
+// NewCounter makes a counter; a negative limit is an error.
+func NewCounter(limit int) (*Counter, error) {
+	if limit < 0 {
+		return nil, errors.New("negative limit")
+	}
+	return &Counter{m: map[string]int{}, limit: limit}, nil
+}
+
+// Add counts k once.
+func (c *Counter) Add(k string) { c.m[k]++ }
+
+// Share is k's count in percent of the limit. Bug: NewCounter accepts a
+// limit of 0, and the division panics.
+func (c *Counter) Share(k string) int { return c.m[k] * 100 / c.limit }

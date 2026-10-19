@@ -33,6 +33,9 @@ type harnessData struct {
 	// printed as its nil-ness (vet rejects printing a func).
 	RetPrint []string
 	Pre      string // Go expression or ""
+	// Setup are statements run before the call inside the panic guard
+	// (a constructor-built receiver).
+	Setup []string
 	SpecCall string // e.g. SpecSum(xs, ret) or ""
 }
 
@@ -75,6 +78,9 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 				go2leanRes["panic"] = fmt.Sprint(go2leanR)
 			}
 		}()
+{{- range .Setup}}
+		{{.}}
+{{- end}}
 {{- if .Rets}}
 		{{.RetList}} = {{.Func}}({{.Args}})
 		go2leanRes["ret"] = fmt.Sprint({{.RetPrintList}})
@@ -213,6 +219,21 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		// Methods: the receiver is the first parameter.
 		d.Func = names[0] + "." + abi.Method
 		d.Args = strings.Join(names[1:], ", ")
+	}
+	if c := abi.Ctor; c != nil && len(names) >= c.N {
+		// The receiver comes from the package's constructor; an error from
+		// it means the inputs were not valid for it (a false precondition).
+		ctorArgs := strings.Join(names[:c.N], ", ")
+		if c.Err {
+			d.Setup = []string{
+				fmt.Sprintf("go2leanRecv, go2leanErr := %s(%s)", c.Func, ctorArgs),
+				`if go2leanErr != nil { go2leanRes["pre"] = false; return }`,
+			}
+		} else {
+			d.Setup = []string{fmt.Sprintf("go2leanRecv := %s(%s)", c.Func, ctorArgs)}
+		}
+		d.Func = "go2leanRecv." + c.Method
+		d.Args = strings.Join(names[c.N:], ", ")
 	}
 	if p.Precondition != nil {
 		d.Pre = p.Precondition.Go
