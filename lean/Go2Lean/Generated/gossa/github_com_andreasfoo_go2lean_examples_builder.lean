@@ -93,7 +93,7 @@ def f1 : GoSSA.Func := {
       instrs := #[.op 13 (.alloc (.arr (List.replicate 2 .unit))) [],
                  .op 14 (.const (.int 64 0#64)) [],
                  .op 15 .indexAddr [13, 14],
-                 .op 16 (.const .unit) [],
+                 .op 16 (.box 398550328) [0],
                  .op 17 .storePath [15, 16],
                  .op 18 (.const (.int 64 1#64)) [],
                  .op 19 .indexAddr [13, 18],

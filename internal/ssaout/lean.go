@@ -71,6 +71,8 @@ func panicCtor(k contract.PanicKind) string {
 		return "sliceBounds"
 	case contract.PanicMakeSliceLen:
 		return "makeSliceLen"
+	case contract.PanicTypeAssertion:
+		return "typeAssertion"
 	case contract.PanicExplicit:
 		return "explicit"
 	}

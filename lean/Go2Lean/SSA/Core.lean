@@ -27,6 +27,8 @@ inductive PanicKind where
   | negativeShift
   | sliceBounds
   | makeSliceLen
+  /-- A failed single-result type assertion ("interface conversion"). -/
+  | typeAssertion
   | explicit
   | other
   /-- Not a Go panic: the model got stuck (ill-typed operands, missing block).
@@ -47,6 +49,7 @@ def PanicKind.tag : PanicKind → String
   | .negativeShift => "negative_shift"
   | .sliceBounds => "slice_bounds"
   | .makeSliceLen => "make_slice_len"
+  | .typeAssertion => "type_assertion"
   | .explicit => "explicit"
   | .other => "other"
   | .modelStuck => "model_stuck"

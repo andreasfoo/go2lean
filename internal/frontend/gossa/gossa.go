@@ -14,6 +14,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"hash/fnv"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -78,13 +79,15 @@ func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
 	// Cross-package references: every candidate function of every package
 	// of this compile, so a call into a sibling package links to its model
 	// instead of becoming a havoc value.
-	xrefs := map[*ssa.Function]contract.XCall{}
+	// Keyed by name: a package compiled as its test variant holds other
+	// function objects than the plain variant its importers call.
+	xrefs := map[string]contract.XCall{}
 	for i, spkg := range spkgs {
 		if spkg == nil {
 			continue
 		}
 		for id, f := range candidates(spkg) {
-			xrefs[f] = contract.XCall{Package: pkgs[i].PkgPath, ID: id}
+			xrefs[f.String()] = contract.XCall{Package: pkgs[i].PkgPath, ID: id}
 		}
 	}
 	var progs []*ir.Prog
@@ -130,7 +133,7 @@ func candidates(spkg *ssa.Package) []*ssa.Function {
 	return fns
 }
 
-func translatePackage(pkgPath string, spkg *ssa.Package, xrefs map[*ssa.Function]contract.XCall) (*ir.Prog, error) {
+func translatePackage(pkgPath string, spkg *ssa.Package, xrefs map[string]contract.XCall) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs}
 
@@ -235,7 +238,7 @@ func isTestFunc(name string) bool {
 type progState struct {
 	prog    *ir.Prog
 	ids     map[*ssa.Function]int
-	xrefs   map[*ssa.Function]contract.XCall // functions of sibling packages
+	xrefs   map[string]contract.XCall // functions of sibling packages, by name
 	specFor func(*ssa.Function) string
 }
 
@@ -664,6 +667,12 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Alloc{Zero: zero}})
 		return nil
 	case *ssa.MakeInterface:
+		// The value is boxed with a tag for its dynamic type, so a type
+		// assertion back to that type gets it out again.
+		if v, err := t.val(x.X); err == nil {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Box{Tag: typeTag(x.X.Type())}, Args: []ir.Var{v}})
+			return nil
+		}
 		t.issue("interface value %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
 		return nil
@@ -750,6 +759,9 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
 		return nil
 	case *ssa.TypeAssert:
+		if zero, ok := zeroVal(x.AssertedType); ok && !types.IsInterface(x.AssertedType) {
+			return t.typeAssert(x, zero)
+		}
 		if x.CommaOk {
 			return t.havoc(x, "type assertion", "opaque-assert", "")
 		}
@@ -1139,7 +1151,8 @@ func (t *fnState) call(x *ssa.Call) error {
 		return nil
 	}
 	callee := x.Call.StaticCallee()
-	if callee != nil && hasResult {
+	if callee != nil {
+		// Ops without a result (Builder.Reset) return the unit value.
 		if op, ok := ir.StdlibOps[callee.String()]; ok {
 			var args []ir.Var
 			for _, a := range x.Call.Args {
@@ -1159,7 +1172,9 @@ func (t *fnState) call(x *ssa.Call) error {
 		}
 		return t.emitCall(x, ir.Term{Kind: ir.TermCall, Callee: id}, callee.String())
 	}
-	if xr, ok := t.prog.xrefs[callee]; ok && callee != nil && xr.Package != t.prog.prog.Package {
+	if callee == nil {
+		// fall through to the unmodelled cases below
+	} else if xr, ok := t.prog.xrefs[callee.String()]; ok && xr.Package != t.prog.prog.Package {
 		if !slices.Contains(t.out.XCalls, xr) {
 			t.out.XCalls = append(t.out.XCalls, xr)
 		}
@@ -1173,6 +1188,46 @@ func (t *fnState) call(x *ssa.Call) error {
 		return t.havoc(x, "call "+name, "unmodeled-call", "")
 	}
 	t.issue("call to %s ignored (no result, effects not modelled)", name)
+	return nil
+}
+
+// typeTag names a dynamic type in boxed interface values: a hash of the
+// type's fully qualified name, so every package of a linked model agrees.
+func typeTag(t types.Type) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(types.TypeString(t, nil)))
+	return h.Sum32()
+}
+
+// typeAssert lowers x.(T) for a concrete T. A value the model boxed itself
+// is unboxed (a mismatch gives the zero value and false, or panics); any
+// other interface value (an input, a havoc) gives a havoc result as before.
+func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
+	v, err := t.val(x.X)
+	if err != nil {
+		return err
+	}
+	dst := t.def(x)
+	isBoxed := t.fresh()
+	t.emit(ir.Instr{Dst: isBoxed, Op: ir.Simple("isBoxed"), Args: []ir.Var{v}})
+	boxed := len(t.out.Blocks)
+	other, join := boxed+1, boxed+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isBoxed, T: boxed, F: other}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".assert-boxed"},
+		ir.Block{Name: name + ".assert-unknown"},
+		ir.Block{Name: name + ".assert-join"})
+	t.cur = &t.out.Blocks[boxed]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Unbox{Tag: typeTag(x.AssertedType), CommaOk: x.CommaOk, Zero: zero}, Args: []ir.Var{v}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[other]
+	t.issue("type assertion %s on an interface value the model did not build is havoc", x.Name())
+	if err := t.havocResult(dst, x, "type assertion", "opaque-assert"); err != nil {
+		return err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
 	return nil
 }
 

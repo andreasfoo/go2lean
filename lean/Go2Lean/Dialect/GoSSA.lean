@@ -34,6 +34,10 @@ inductive Val where
   /-- A string: `len` bytes starting at `off` in the immutable byte array
   `ref` (elements are `.int 8`). The empty string is `str 0 0 0`. -/
   | str (ref : Nat) (off len : BitVec 64)
+  /-- A concrete value stored in an interface: `tag` names its dynamic type
+  (a hash of the Go type's name, the same in every package). Interface
+  values the model did not build itself (inputs, havoc) are `unit`. -/
+  | boxed (tag : Nat) (v : Val)
   | unit
   deriving Repr
 
@@ -152,6 +156,15 @@ inductive Op where
   | sbWriteByte | sbWriteRune
   /-- `String` / `Len` / `Reset`; arg `[p]`. -/
   | sbString | sbLen | sbReset
+  -- interfaces
+  /-- Store a concrete value of dynamic type `tag` in an interface. -/
+  | box (tag : Nat)
+  /-- Did the model build this interface value (so its dynamic type is known)? -/
+  | isBoxed
+  /-- `x.(T)` for a concrete `T` of tag `tag` on a boxed value; with
+  `commaOk` the result is `(v, ok)` and a mismatch gives `(zero, false)`,
+  without it a mismatch panics. -/
+  | unbox (tag : Nat) (commaOk : Bool) (zero : Val)
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -185,6 +198,7 @@ def eqVal : Val → Val → Option Bool
   | .bool a, .bool b => some (a == b)
   | .err a, .err b => some (a == b)
   | .ptr r p, .ptr r' p' => some (r == r' && p == p')
+  | .boxed t v, .boxed t' v' => if t == t' then eqVal v v' else some false
   -- Go only compares slices against nil: equal when both are nil.
   | .slice r .., .slice r' .. => some ((r == 0) == (r' == 0))
   | .unit, .unit => none -- opaque values: the frontend havocs these comparisons
@@ -380,6 +394,12 @@ def asIndex : Val → Option (BitVec 64)
 /-- Pure instructions: no heap access. -/
 def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .const v, [] => .ok v
+  | .box tag, [v] => .ok (.boxed tag v)
+  | .isBoxed, [x] => .ok (.bool (match x with | .boxed .. => true | _ => false))
+  | .unbox tag commaOk zero, [.boxed t v] =>
+    if t == tag then .ok (if commaOk then .tuple [v, .bool true] else v)
+    else if commaOk then .ok (.tuple [zero, .bool false])
+    else .panic .typeAssertion
   | .add, args => binInt (· + ·) args
   | .sub, args => binInt (· - ·) args
   | .mul, args => binInt (· * ·) args

@@ -77,6 +77,7 @@ const (
 	PanicNegativeShift   PanicKind = "negative_shift"
 	PanicSliceBounds     PanicKind = "slice_bounds"
 	PanicMakeSliceLen    PanicKind = "make_slice_len"
+	PanicTypeAssertion   PanicKind = "type_assertion"
 	PanicExplicit        PanicKind = "explicit"
 	PanicOther           PanicKind = "other"
 )

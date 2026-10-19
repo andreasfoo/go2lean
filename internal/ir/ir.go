@@ -140,6 +140,22 @@ type Extract struct{ I int }
 func (e Extract) Lean() string { return fmt.Sprintf("(.extract %d)", e.I) }
 
 // Alloc allocates a heap object initialised to Zero and yields a pointer.
+// Box stores a concrete value in an interface; Tag names its dynamic type.
+type Box struct{ Tag uint32 }
+
+func (b Box) Lean() string { return fmt.Sprintf("(.box %d)", b.Tag) }
+
+// Unbox is x.(T) on a boxed value for a concrete T of tag Tag.
+type Unbox struct {
+	Tag     uint32
+	CommaOk bool
+	Zero    Val
+}
+
+func (u Unbox) Lean() string {
+	return fmt.Sprintf("(.unbox %d %t %s)", u.Tag, u.CommaOk, u.Zero.Lean())
+}
+
 type Alloc struct{ Zero Val }
 
 func (a Alloc) Lean() string { return "(.alloc " + a.Zero.Lean() + ")" }

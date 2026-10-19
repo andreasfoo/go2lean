@@ -438,6 +438,7 @@ partial def renderVal : Val → Json
   | .str ref off len => Json.str s!"str(ref={ref}, off={off.toNat}, len={len.toNat})"
   | .structv fs => Json.arr (fs.map renderVal).toArray
   | .arr es => Json.arr (es.map renderVal).toArray
+  | .boxed t v => Json.mkObj [("type", (t : Json)), ("value", renderVal v)]
   | .unit => Json.str "unit"
 
 def modelOutput : Outcome → Option Val → Json
