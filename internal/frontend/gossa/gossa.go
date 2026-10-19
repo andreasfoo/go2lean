@@ -135,6 +135,16 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 		for _, path := range paths {
 			fns := deps[path]
 			sort.Slice(fns, func(i, j int) bool { return funcName(fns[i]) < funcName(fns[j]) })
+			if mainPaths[path] {
+				// Generic instances of a compiled package: after its own
+				// functions, so their FuncIds do not move.
+				for k := range units {
+					if units[k].path == path {
+						units[k].fns = append(units[k].fns, fns...)
+					}
+				}
+				continue
+			}
 			units = append(units, unit{path, fns})
 		}
 	}
@@ -182,7 +192,7 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 				// package is that of the generic origin.
 				instance := len(callee.TypeArgs()) > 0 && callee.Origin() != nil
 				if seen[callee] || (callee.Synthetic != "" && !instance) ||
-					callee.Parent() != nil || callee.TypeParams().Len() > 0 ||
+					callee.Parent() != nil || (callee.TypeParams().Len() > 0 && !instance) ||
 					isInit(callee.Name()) || len(callee.Blocks) == 0 {
 					continue
 				}
@@ -194,7 +204,9 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 					continue
 				}
 				path := pkg.Pkg.Path()
-				if mainPaths[path] || isStdlib(path) {
+				// A compiled package's own functions are modelled already,
+				// except instances of its generic functions.
+				if (mainPaths[path] && !instance) || isStdlib(path) {
 					continue
 				}
 				if _, std := ir.StdlibOps[callee.String()]; std {
@@ -1914,8 +1926,20 @@ func spellAll(pkg *types.Package, t types.Type) (src string, paths []string) {
 // in use (two packages called `anthropic`).
 var recordImport func(path, name string) string
 
+// funcPkg is the package a function belongs to; an instance of a generic
+// function has none of its own and belongs to its origin's.
+func funcPkg(f *ssa.Function) *types.Package {
+	if f.Pkg == nil && f.Origin() != nil && f.Origin().Pkg != nil {
+		return f.Origin().Pkg.Pkg
+	}
+	if f.Pkg == nil {
+		return nil
+	}
+	return f.Pkg.Pkg
+}
+
 func abiOf(f *ssa.Function) (*contract.ABI, error) {
-	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: f.Pkg.Pkg.Path(), Variadic: f.Signature.Variadic(), Imports: map[string]string{}}
+	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: funcPkg(f).Path(), Variadic: f.Signature.Variadic(), Imports: map[string]string{}}
 	used := map[string]string{} // qualifier -> path
 	recordImport = func(path, name string) string {
 		alias := name
@@ -1935,7 +1959,7 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 	if f.Signature.Recv() != nil {
 		abi.Method = f.Name()
 	}
-	pkg := f.Pkg.Pkg
+	pkg := funcPkg(f)
 	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}}
 	for _, p := range f.Params {
 		if isTestingType(p.Type()) {

@@ -138,7 +138,10 @@ var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)
 // WriteABI stores an ABI record under models/<frontend>/<pkg>/<func>.json
 // and returns the workspace-relative path for Target.Models.
 func (w Workspace) WriteABI(a *ABI, pkgPath, funcName string) (string, error) {
-	rel := filepath.Join("models", a.Frontend, PackageKey(pkgPath), funcName+".json")
+	// Instances of generic functions carry their type arguments, import
+	// paths included, in the name: keep them out of the directory layout.
+	file := strings.NewReplacer("/", "_", "*", "_").Replace(funcName)
+	rel := filepath.Join("models", a.Frontend, PackageKey(pkgPath), file+".json")
 	return rel, writeJSON(filepath.Join(w.Root, rel), a)
 }
 
