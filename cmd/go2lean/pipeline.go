@@ -107,6 +107,7 @@ func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	ws := workspaceFlag(fs)
 	opts := searchFlags(fs)
+	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("run: at least one package pattern expected (e.g. ./...)")
@@ -115,6 +116,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	env.Deps = *deps
 	_, err = pipeline.RunAll(w, env, opts.get(), os.Stdout, fs.Args()...)
 	return err
 }
