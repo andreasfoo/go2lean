@@ -139,6 +139,10 @@ structure HState (Val : Type) where
   /-- The op (with its operands) at which the model got stuck, for the
   engines' diagnostics. -/
   stuck : Option String := none
+  /-- The function and block of the last `ret` executed: after a spec ran,
+  the spec's own return, so the engines can tell which `return` a trial
+  left through (a guard's `return true` or the real check). -/
+  exit : Option (String × Nat) := none
 
 namespace HState
 
@@ -201,7 +205,7 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
       | (.outOfFuel, s) => (.outOfFuel, s)
       | (.ok env, s) =>
         match blk.term with
-        | .ret v => (.ok env[v]!, s)
+        | .ret v => (.ok env[v]!, { s with exit := some (fn.name, bid) })
         | .panic k => (.panic k, s)
         | .jump b args =>
           runBlock p or h fn b (enter fn b env args) s fuel

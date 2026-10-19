@@ -989,6 +989,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.Call:
 		return t.call(x)
 	case *ssa.Return:
+		t.recordExit(x)
 		switch len(x.Results) {
 		case 0:
 			v := t.fresh()
@@ -1321,6 +1322,28 @@ func (t *fnState) call(x *ssa.Call) error {
 	}
 	t.issue("call to %s ignored (no result, effects not modelled)", name)
 	return nil
+}
+
+// recordExit notes a return statement: its block (the current one), its
+// source line, and whether it returns the constant true.
+func (t *fnState) recordExit(x *ssa.Return) {
+	block := -1
+	for i := range t.out.Blocks {
+		if &t.out.Blocks[i] == t.cur {
+			block = i
+		}
+	}
+	line := 0
+	if t.f.Prog != nil && x.Pos().IsValid() {
+		line = t.f.Prog.Fset.Position(x.Pos()).Line
+	}
+	constTrue := false
+	if len(x.Results) == 1 {
+		if c, ok := x.Results[0].(*ssa.Const); ok && c.Value != nil && isBool(c.Type()) && constant.BoolVal(c.Value) {
+			constTrue = true
+		}
+	}
+	t.out.Exits = append(t.out.Exits, contract.ExitSite{Block: block, Line: line, ConstTrue: constTrue})
 }
 
 // typeTag names a dynamic type in boxed interface values: a hash of the

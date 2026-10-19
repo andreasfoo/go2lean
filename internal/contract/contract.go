@@ -374,7 +374,19 @@ type ModelFunc struct {
 	// XCalls lists the functions of other packages this one calls, when
 	// those packages were compiled together with this one.
 	XCalls []XCall `json:"xcalls,omitempty"`
-	ABI    string  `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+	// Exits lists the function's return statements (read for specs: which
+	// return a trial left through).
+	Exits []ExitSite `json:"exits,omitempty"`
+	ABI   string     `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+}
+
+// ExitSite is one `return` of a function: the model block it is in, its
+// source line, and whether it returns the constant true (in a spec, a
+// guard that makes the trial vacuous).
+type ExitSite struct {
+	Block     int  `json:"block"`
+	Line      int  `json:"line"`
+	ConstTrue bool `json:"const_true,omitempty"`
 }
 
 // XCall names a function of another package by its import path and its ID

@@ -469,6 +469,14 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
     ("havoc", Json.arr havoc.toArray),
     ("model_output", modelOutput o ret)]
 
+/-- The block a postcondition's spec returned from, when the spec ran to
+its end (the trial reached the oracle and the oracle finished). -/
+def specExit (prop : Property) (o : Outcome) (s : HState Val) : Option String :=
+  match prop, o with
+  | .postcondition .., .holds | .postcondition .., .violated | .postcondition .., .specUnknown =>
+    s.exit.map fun (_, b) => toString b
+  | _, _ => none
+
 /-- Run `trials` random trials; print one JSON line, `{"found": false, ...}` if nothing refutes. -/
 def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (seed trials fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
@@ -479,6 +487,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let mut moots := 0
   let mut stuckSites : List (String × Nat) := []
   let mut fallback : Option Json := none
+  let mut exits : List (String × Nat) := []
   let trace := (← IO.getEnv "GO2LEAN_TRACE").isSome
   let start ← IO.monoMsNow
   let mut done := 0
@@ -515,6 +524,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       else if fallback.isNone then
         fallback := some j
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
+    if let some b := specExit prop o s then exits := bump exits b
     if o.moot prop then
       moots := moots + 1
       if let some site := s.stuck then stuckSites := bump stuckSites site
@@ -524,7 +534,8 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let top := (stuckSites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 5
   IO.println (Json.mkObj [("found", false), ("trials", done), ("out_of_fuel", fuelOuts),
     ("moot", moots), ("budget_hit", decide (done < trials)),
-    ("stuck_sites", Json.mkObj (top.map fun (site, n) => (site, (n : Json))))]).compress
+    ("stuck_sites", Json.mkObj (top.map fun (site, n) => (site, (n : Json)))),
+    ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 where
   bump (sites : List (String × Nat)) (site : String) : List (String × Nat) :=
     match sites.lookup site with
@@ -708,6 +719,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut moots := 0
   let mut i : Nat := 0
   let mut fallback : Option Json := none
+  let mut exits : List (String × Nat) := []
   let start ← IO.monoMsNow
   for build in enumArgs extra maxLen pool gens table allowNil do
     let (args, heap) := build #[]
@@ -725,6 +737,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       else if fallback.isNone then
         fallback := some j
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
+    if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
     i := i + 1
   if let some j := fallback then
@@ -732,6 +745,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     return
   IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
     ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
-    ("havoc_sites", p.havocWidths.size)]).compress
+    ("havoc_sites", p.havocWidths.size),
+    ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 
 end Go2Lean.Search

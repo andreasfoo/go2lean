@@ -321,6 +321,7 @@ type Func struct {
 	StrConsts []string         // string literals
 	Calls     []int            // callees within the program, by function id
 	XCalls    []contract.XCall // callees in other packages of the same compile
+	Exits     []contract.ExitSite
 	ABI       contract.ABI
 }
 

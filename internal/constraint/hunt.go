@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -94,6 +95,7 @@ type searchResult struct {
 	HavocSites  int                        `json:"havoc_sites"`
 	BudgetHit   bool                       `json:"budget_hit"`
 	StuckSites  map[string]int             `json:"stuck_sites"` // where the model got stuck, by count
+	SpecExits   map[string]int             `json:"spec_exits"`  // spec return block -> trials that left through it
 	Checked     int                        `json:"checked"`
 	Inputs      map[string]string          `json:"inputs"`
 	Memory      map[string][]string        `json:"memory"`
@@ -314,6 +316,12 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	// everything they call, so the branch a callee takes on "assistant" is
 	// reachable from the caller's inputs.
 	consts, strConsts := literalPool(ws, report, []int{fid, sid})
+	var specExits []contract.ExitSite
+	for _, f := range report.Funcs {
+		if f.ID == sid && sid >= 0 {
+			specExits = f.Exits
+		}
+	}
 	if fid < 0 {
 		return nil, "", fmt.Errorf("function %s not in model report", target.Func)
 	}
@@ -371,7 +379,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		if res.BudgetHit {
 			note = fmt.Sprintf(" [stopped by the %ds budget]", opts.BudgetSeconds)
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s", res.Trials, res.OutOfFuel, res.Moot, note, stuckNote(res.StuckSites)))
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s%s", res.Trials, res.OutOfFuel, res.Moot, exitNote(specExits, res.SpecExits), note, stuckNote(res.StuckSites)))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
 		res, err := runSearch(leanDir, prop.ID+"_exhaustive", spec, "exhaustive")
@@ -384,6 +392,10 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			return cx, fmt.Sprintf("exhaustive: found at input %d", res.Trial), err
 		case res.Exhaustive:
 			domain := fmt.Sprintf("%.0f inputs: boundary values, mined literals and |v|<=8, slices up to length %d", res.Domain, res.MaxLen)
+			if prop.Kind == contract.KindPostcondition {
+				_, checked := exitCounts(specExits, res.SpecExits)
+				domain += fmt.Sprintf("; %d of them got past the spec's guards", checked)
+			}
 			if res.HavocSites > 0 {
 				domain += fmt.Sprintf("; %d havoc sites not enumerated", res.HavocSites)
 			}
@@ -391,7 +403,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			if err := ws.WriteProofResult(pr); err != nil {
 				return nil, "", err
 			}
-			summary = append(summary, fmt.Sprintf("exhaustive: holds on %.0f inputs (recorded as %s)", res.Domain, pr.Status))
+			summary = append(summary, fmt.Sprintf("exhaustive: holds on %.0f inputs%s (recorded as %s)", res.Domain, exitNote(specExits, res.SpecExits), pr.Status))
 		case res.Reason == "budget":
 			summary = append(summary, fmt.Sprintf("exhaustive: stopped by the %ds budget after %d of %.0f inputs", opts.BudgetSeconds, res.Checked, res.Domain))
 		case res.Reason == "signature too wide":
@@ -517,4 +529,45 @@ func lake(dir string, args ...string) (string, error) {
 	cmd.Stderr = &buf
 	err = cmd.Run()
 	return buf.String(), err
+}
+
+// exitCounts splits the trials that ran a spec to its end into those that
+// left through a `return true` guard (vacuous) and the others (checked).
+func exitCounts(sites []contract.ExitSite, exits map[string]int) (vacuous, checked int) {
+	for b, n := range exits {
+		vac := false
+		for _, s := range sites {
+			if strconv.Itoa(s.Block) == b && s.ConstTrue {
+				vac = true
+			}
+		}
+		if vac {
+			vacuous += n
+		} else {
+			checked += n
+		}
+	}
+	return vacuous, checked
+}
+
+// exitNote says how many trials got past the spec's guards, and through
+// which return statements (by source line) they left.
+func exitNote(sites []contract.ExitSite, exits map[string]int) string {
+	if len(exits) == 0 {
+		return ""
+	}
+	vacuous, checked := exitCounts(sites, exits)
+	var parts []string
+	for _, s := range sites {
+		n := exits[strconv.Itoa(s.Block)]
+		if n == 0 {
+			continue
+		}
+		label := fmt.Sprintf("line %d", s.Line)
+		if s.ConstTrue {
+			label += " (return true)"
+		}
+		parts = append(parts, fmt.Sprintf("%s: %d", label, n))
+	}
+	return fmt.Sprintf("; spec checked %d, vacuous %d [%s]", checked, vacuous, strings.Join(parts, ", "))
 }
