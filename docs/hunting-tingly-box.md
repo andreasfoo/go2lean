@@ -185,3 +185,51 @@ linked by `compile -deps`.
 - M3: compile errors without a column are recognised; zero-valued
   fields are left out of literals; a non-nil pointer to an opaque object
   is passed as `new(T)`.
+
+## 7. Third round: equivalence of direct and converted paths
+
+Specs (in `docs/specs/tingly-box/`), go2lean `ad4d134` to `6871c36` with
+`compile -deps`, `-maxlen 6`, budget 180 s:
+
+- Request round trips: an Anthropic request converted to OpenAI Chat and
+  back, and an OpenAI Chat request converted to Anthropic and back, keep
+  the system text, each role's text, the tool calls (id and name) and the
+  tool results (id and text). Preconditions: roles user and assistant
+  (plus system and tool for OpenAI), tool ids non-empty and at most 40
+  characters.
+- Streaming vs non-streaming: one Anthropic message replayed as an event
+  stream through the stream converter, and converted by
+  `nonstream.ConvertAnthropicBetaToOpenAIChat`; text, reasoning text,
+  tool calls and finish reason compared. Preconditions: thinking blocks
+  carry their text in `Thinking`; the stop reason is `tool_use` exactly
+  when a tool_use block is present; `max_tokens` excluded.
+
+| property | engine output | M3 |
+|---|---|---|
+| request round trip, Anthropic -> Chat -> Anthropic | none in 2000 trials; 950 got past the guards | not run |
+| request round trip, Chat -> Anthropic -> Chat | none in 2000 trials; 1193 got past the guards | not run |
+| stream vs non-stream: text | none in 2000 trials; 2000 checked | not run |
+| stream vs non-stream: tool calls | none in 2000 trials; 2000 checked | not run |
+| stream vs non-stream: finish reason | none in 2000 trials; 1651 checked | not run |
+| stream vs non-stream: reasoning text | found at trial 1335 | `confirmed` |
+
+The confirmed case and a second check on a decoded API response are in
+`docs/poc-tingly-round3/`: for a `thinking` block the non-streaming
+converter returns an empty `reasoning_content`, the streaming converter
+the thinking text. A search of the tracker for `reasoning_content`
+(2026-10-19) lists #1863 (the Chat -> Anthropic direction) and none for
+this direction.
+
+Earlier runs of the same specs, before the model changes listed below,
+gave refutations M3 judged `spurious` (the model lost the system text in
+the generic `openai.SystemMessage`, which was then unmodelled) and rounds
+in which every trial past the guards was moot (`time.Now`, a
+package-level map, `param.IsOmitted`). Without the precondition on the
+stop reason, the finish-reason spec was refuted on messages whose stop
+reason disagrees with their blocks (`tool_use` without a tool_use block,
+`pause_turn` with one); M3 confirmed those too.
+
+Changes to go2lean in this round: the exit report (`spec checked N,
+vacuous M`), named-type string constants in the generators, the havoc
+agreement rule, field-wise havoc of struct results, assumption markers
+and their names in the report, `-deps` following generic instances.
