@@ -26,7 +26,8 @@ type result struct {
 // Verify realises and runs one counterexample and writes the verdict and the
 // PoC deliverables to the workspace.
 // compileErr matches a Go compile error line of the harness file.
-var compileErr = regexp.MustCompile(`zz_go2lean_poc_\d+_test\.go:\d+:\d+: .*`)
+// The column is missing when the compiler reports a long type mismatch.
+var compileErr = regexp.MustCompile(`zz_go2lean_poc_\d+_test\.go:\d+(:\d+)?: .*`)
 
 func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error) {
 	vs, err := VerifyAll(ws, root, []string{cxID})

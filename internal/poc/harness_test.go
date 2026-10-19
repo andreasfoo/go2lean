@@ -117,3 +117,10 @@ func TestUsesPackage(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileErrWithoutColumn(t *testing.T) {
+	line := "internal/protocol/stream/zz_go2lean_poc_6421_test.go:19: cannot use struct{raw string}{} (value of type struct{raw string}) as struct{raw string} value in struct literal"
+	if compileErr.FindString(line) == "" {
+		t.Fatal("a compile error without a column is not recognised")
+	}
+}

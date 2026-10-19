@@ -391,6 +391,9 @@ partial def renderObj (heap : Heap Val) (signed : Bool) : Val → Json
     | none => Json.str "?"
   | .slice 0 _ _ _ => Json.null
   | .unit => Json.null
+  -- Opaque values: M3 passes the zero value (nil) for inputs of these types.
+  | .opaqueNil => Json.null
+  | .boxed .. => Json.null
   | s@(.str ..) =>
     match strBytes heap s with
     | some bs => bytesToJson bs
