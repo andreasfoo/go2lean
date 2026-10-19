@@ -126,6 +126,9 @@ func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.S
 		fmt.Fprintf(out, " model %s %s %s", cx.ModelOutput.Res, cx.ModelOutput.Value, cx.ModelOutput.Panic)
 	}
 	fmt.Fprintln(out)
+	for _, pr := range cx.Probes {
+		fmt.Fprintf(out, "      probe %s = %s\n", pr.Label, pr.Value)
+	}
 	return cx, nil
 }
 
@@ -217,6 +220,9 @@ func printVerdict(v *contract.Verdict, out io.Writer) {
 	fmt.Fprintln(out)
 	if v.Status == contract.VerdictConfirmed {
 		fmt.Fprintf(out, "      PoC: %s\n", v.PocDir)
+	}
+	for _, pr := range v.Probes {
+		fmt.Fprintf(out, "      real probe %s = %s\n", pr.Label, pr.Value)
 	}
 }
 

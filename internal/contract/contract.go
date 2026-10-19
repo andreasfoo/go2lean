@@ -139,6 +139,16 @@ type Counterexample struct {
 	Havoc             []HavocValue               `json:"havoc,omitempty"`
 	ModelOutput       *ModelOutput               `json:"model_output,omitempty"`
 	RevalidatedInLean bool                       `json:"revalidated_in_lean"`
+	// Probes are the values the spec's go2leanProbe calls recorded in the
+	// model run, in order; M3 records the real run's in Verdict.Probes.
+	Probes []Probe `json:"probes,omitempty"`
+}
+
+// Probe is one go2leanProbe value: its label and the value (JSON as the
+// model renders it, or the string the real run printed).
+type Probe struct {
+	Label string          `json:"label"`
+	Value json.RawMessage `json:"value"`
 }
 
 // VerdictStatus is M3's judgement on a Counterexample.
@@ -176,6 +186,8 @@ type Verdict struct {
 	Observed       map[string]string `json:"observed,omitempty"`
 	Diagnosis      *Diagnosis        `json:"diagnosis,omitempty"`
 	PocDir         string            `json:"poc_dir,omitempty"`
+	// Probes are the go2leanProbe values the real run printed.
+	Probes []Probe `json:"probes,omitempty"`
 }
 
 // ProofStatus is the outcome of a proof attempt.

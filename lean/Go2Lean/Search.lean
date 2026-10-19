@@ -336,8 +336,10 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
           | _ => false
         -- An assumed value (an unmodelled result taken as zero) is the same
         -- under every havoc assignment, so agreement says nothing about it.
+        -- A havoc string is always "" (the havoc oracle has no heap to put
+        -- other strings in), so it is a fixed guess like an assumption.
         let assumedAt := (s'.log.toList.drop before).find? fun (site, _, _) =>
-          p.havocWidths[site]? == some 3
+          p.havocWidths[site]? == some 3 || p.havocWidths[site]? == some 2
         -- Name the first assumption read, for the engines' moot report.
         let s' := match assumedAt with
           | some (site, _, _) =>
@@ -490,9 +492,11 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
   let objects := objectsOf heap gens args
   let havoc := s.log.toList.map fun (site, iter, v) =>
     Json.mkObj [("idx", site), ("iter", iter), ("value", renderVal v)]
+  let probes := s.probes.toList.map fun (label, v) =>
+    Json.mkObj [("label", label), ("value", renderObj s.heap true v)]
   Json.mkObj [("found", true), ("trial", trial), ("seed", seed),
     ("inputs", Json.mkObj inputs), ("memory", Json.mkObj memory), ("objects", Json.mkObj objects),
-    ("havoc", Json.arr havoc.toArray),
+    ("havoc", Json.arr havoc.toArray), ("probes", Json.arr probes.toArray),
     ("model_output", modelOutput o ret)]
 
 /-- The block a postcondition's spec returned from, when the spec ran to

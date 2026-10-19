@@ -132,7 +132,9 @@ func Print(p *ir.Prog, module string) string {
 				if ii > 0 {
 					b.WriteString(",\n                 ")
 				}
-				if in.Op == nil {
+				if in.Probe != "" {
+					fmt.Fprintf(&b, ".probe %q %d", in.Probe, in.Args[0])
+				} else if in.Op == nil {
 					fmt.Fprintf(&b, ".havoc %d %d", in.Dst, in.HavocSite)
 				} else {
 					fmt.Fprintf(&b, ".op %d %s %s", in.Dst, in.Op.Lean(), vars(in.Args))

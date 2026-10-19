@@ -1,6 +1,8 @@
 package request
 
 import (
+	"fmt"
+
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -427,4 +429,216 @@ func SpecConvertOpenAIToAnthropicRequestRoundTrip(req *openai.ChatCompletionNewP
 	s1, u1, a1, c1, r1 := openAIConversation(req)
 	s2, u2, a2, c2, r2 := openAIConversation(back)
 	return s1 == s2 && u1 == u2 && a1 == a2 && sameStrings(c1, c2) && sameStrings(r1, r2)
+}
+
+// Round trips through the Responses API. Texts are compared with
+// whitespace removed: Chat -> Responses joins several system messages into
+// one instructions string with blank lines.
+
+// squash drops spaces, tabs and newlines.
+func squash(s string) string {
+	out := ""
+	for i := 0; i < len(s); i++ {
+		if s[i] != ' ' && s[i] != '\n' && s[i] != '\t' && s[i] != '\r' {
+			out += s[i : i+1]
+		}
+	}
+	return out
+}
+
+// responsesConversation is what an upstream reads from a Responses request.
+func responsesConversation(req *responses.ResponseNewParams) (system, user, assistant string, calls, results []string) {
+	system = req.Instructions.Value
+	user = req.Input.OfString.Value
+	for _, item := range req.Input.OfInputItemList {
+		switch {
+		case item.OfMessage != nil:
+			role := string(item.OfMessage.Role)
+			text := item.OfMessage.Content.OfString.Value
+			for _, c := range item.OfMessage.Content.OfInputItemContentList {
+				if c.OfInputText != nil {
+					text += c.OfInputText.Text
+				}
+			}
+			switch role {
+			case "system", "developer":
+				system += text
+			case "assistant":
+				assistant += text
+			default:
+				user += text
+			}
+		case item.OfInputMessage != nil:
+			text := ""
+			for _, c := range item.OfInputMessage.Content {
+				if c.OfInputText != nil {
+					text += c.OfInputText.Text
+				}
+			}
+			if item.OfInputMessage.Role == "system" || item.OfInputMessage.Role == "developer" {
+				system += text
+			} else {
+				user += text
+			}
+		case item.OfOutputMessage != nil:
+			for _, c := range item.OfOutputMessage.Content {
+				if c.OfOutputText != nil {
+					assistant += c.OfOutputText.Text
+				}
+			}
+		case item.OfFunctionCall != nil:
+			calls = append(calls, item.OfFunctionCall.CallID+"/"+item.OfFunctionCall.Name)
+		case item.OfFunctionCallOutput != nil:
+			text := item.OfFunctionCallOutput.Output.OfString.Value
+			for _, o := range item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray {
+				if o.OfInputText != nil {
+					text += o.OfInputText.Text
+				}
+			}
+			results = append(results, item.OfFunctionCallOutput.CallID.Value+":"+text)
+		}
+	}
+	return
+}
+
+// plainResponsesRequest: message, input message, output message, function
+// call and function call output items only; roles user, assistant, system
+// and developer; call ids non-empty.
+func plainResponsesRequest(req *responses.ResponseNewParams) bool {
+	for _, item := range req.Input.OfInputItemList {
+		switch {
+		case item.OfMessage != nil:
+			role := string(item.OfMessage.Role)
+			if role != "user" && role != "assistant" && role != "system" && role != "developer" {
+				return false
+			}
+		case item.OfInputMessage != nil:
+			role := item.OfInputMessage.Role
+			if role != "user" && role != "system" && role != "developer" {
+				return false
+			}
+		case item.OfOutputMessage != nil:
+		case item.OfFunctionCall != nil:
+			if item.OfFunctionCall.CallID == "" {
+				return false
+			}
+		case item.OfFunctionCallOutput != nil:
+			if item.OfFunctionCallOutput.CallID.Value == "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// sameConversation compares two extracted conversations: texts without
+// whitespace, ids and names exactly.
+func sameConversation(s1, u1, a1 string, c1, r1 []string, s2, u2, a2 string, c2, r2 []string) bool {
+	if squash(s1) != squash(s2) || squash(u1) != squash(u2) || squash(a1) != squash(a2) || !sameStrings(c1, c2) {
+		return false
+	}
+	if len(r1) != len(r2) {
+		return false
+	}
+	for i := range r1 {
+		if squash(r1[i]) != squash(r2[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec ConvertChatToOpenAIResponses
+// SpecConvertChatToOpenAIResponsesRoundTrip: a Chat client through
+// tingly-box to a Responses upstream; converting back gives the
+// conversation the client sent.
+func SpecConvertChatToOpenAIResponsesRoundTrip(params *openai.ChatCompletionNewParams, defaultMaxTokens int64, ret *responses.ResponseNewParams) bool {
+	if params == nil || ret == nil || !plainOpenAIRequest(params) {
+		return true
+	}
+	go2leanProbe("stage", "before-back")
+	back := ConvertOpenAIResponsesToChat(ret, defaultMaxTokens)
+	if back == nil {
+		go2leanProbe("stage", "back-nil")
+		return false
+	}
+	go2leanProbe("stage", "back-ok")
+	s1, u1, a1, c1, r1 := openAIConversation(params)
+	s2, u2, a2, c2, r2 := openAIConversation(back)
+	probeConversation("in", s1, u1, a1, c1, r1)
+	probeConversation("back", s2, u2, a2, c2, r2)
+	return sameConversation(s1, u1, a1, c1, r1, s2, u2, a2, c2, r2)
+}
+
+// go2lean:spec ConvertOpenAIResponsesToChat
+// SpecConvertOpenAIResponsesToChatRoundTrip: a Responses client (Codex)
+// through tingly-box to a Chat upstream; converting back gives the
+// conversation the client sent.
+func SpecConvertOpenAIResponsesToChatRoundTrip(params *responses.ResponseNewParams, defaultMaxTokens int64, ret *openai.ChatCompletionNewParams) bool {
+	if params == nil || ret == nil || !plainResponsesRequest(params) {
+		return true
+	}
+	back := ConvertChatToOpenAIResponses(ret, defaultMaxTokens)
+	if back == nil {
+		return false
+	}
+	s1, u1, a1, c1, r1 := responsesConversation(params)
+	s2, u2, a2, c2, r2 := responsesConversation(back)
+	return sameConversation(s1, u1, a1, c1, r1, s2, u2, a2, c2, r2)
+}
+
+// go2lean:spec ConvertAnthropicBetaToResponsesRequest
+// SpecConvertAnthropicBetaToResponsesRequestRoundTrip: an Anthropic client
+// through tingly-box to a Responses upstream; converting back gives the
+// conversation the client sent.
+func SpecConvertAnthropicBetaToResponsesRequestRoundTrip(anthropicReq *anthropic.BetaMessageNewParams, ret *responses.ResponseNewParams) bool {
+	if anthropicReq == nil || ret == nil || !plainBetaRequest(anthropicReq) {
+		return true
+	}
+	back := ConvertOpenAIResponsesToAnthropicBetaRequest(*ret, anthropicReq.MaxTokens)
+	if back == nil {
+		return false
+	}
+	s1, u1, a1, c1, r1 := betaConversation(anthropicReq)
+	s2, u2, a2, c2, r2 := betaConversation(back)
+	return sameConversation(s1, u1, a1, c1, r1, s2, u2, a2, c2, r2)
+}
+
+// go2lean:spec ConvertOpenAIResponsesToAnthropicBetaRequest
+// SpecConvertOpenAIResponsesToAnthropicBetaRequestRoundTrip: a Responses
+// client (Codex) through tingly-box to an Anthropic upstream; converting
+// back gives the conversation the client sent.
+func SpecConvertOpenAIResponsesToAnthropicBetaRequestRoundTrip(params responses.ResponseNewParams, defaultMaxTokens int64, ret *anthropic.BetaMessageNewParams) bool {
+	if ret == nil || !plainResponsesRequest(&params) {
+		return true
+	}
+	back := ConvertAnthropicBetaToResponsesRequest(ret)
+	if back == nil {
+		return false
+	}
+	s1, u1, a1, c1, r1 := responsesConversation(&params)
+	s2, u2, a2, c2, r2 := responsesConversation(back)
+	return sameConversation(s1, u1, a1, c1, r1, s2, u2, a2, c2, r2)
+}
+
+// go2leanProbe records v under label: go2lean's model keeps it in the
+// counterexample, the real run prints it, so the two can be compared.
+func go2leanProbe(label string, v string) {
+	fmt.Printf("GO2LEAN_PROBE %s %q\n", label, v)
+}
+
+// probeConversation probes each part of a conversation; labels must be
+// constants for go2lean, so the side goes into the value.
+func probeConversation(side string, s, u, a string, c, r []string) {
+	go2leanProbe("system", side+": "+s)
+	go2leanProbe("user", side+": "+u)
+	go2leanProbe("assistant", side+": "+a)
+	for _, x := range c {
+		go2leanProbe("call", side+": "+x)
+	}
+	for _, x := range r {
+		go2leanProbe("result", side+": "+x)
+	}
 }

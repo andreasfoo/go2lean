@@ -1382,6 +1382,18 @@ func (t *fnState) call(x *ssa.Call) error {
 		return nil
 	}
 	callee := x.Call.StaticCallee()
+	if callee != nil && callee.Name() == "go2leanProbe" && len(x.Call.Args) == 2 {
+		// A spec's probe: record the value, run nothing.
+		if c, ok := x.Call.Args[0].(*ssa.Const); ok && c.Value != nil && c.Value.Kind() == constant.String {
+			v, err := t.val(x.Call.Args[1])
+			if err != nil {
+				return err
+			}
+			t.emit(ir.Instr{Probe: constant.StringVal(c.Value), Args: []ir.Var{v}})
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
+			return nil
+		}
+	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
 		if op, ok := ir.StdlibOps[callee.String()]; ok {

@@ -102,6 +102,7 @@ type searchResult struct {
 	Objects     map[string]json.RawMessage `json:"objects"`
 	Havoc       []contract.HavocValue      `json:"havoc"`
 	ModelOutput *contract.ModelOutput      `json:"model_output"`
+	Probes      []contract.Probe           `json:"probes"`
 }
 
 // gens renders the Search.Gen list for a function's parameters.
@@ -529,6 +530,7 @@ func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, 
 		ModelOutput: res.ModelOutput,
 		// The reported values are the ones the model actually executed on.
 		RevalidatedInLean: true,
+		Probes:            res.Probes,
 	}
 	return cx, ws.WriteCounterexample(cx)
 }

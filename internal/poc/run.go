@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
@@ -21,6 +22,8 @@ type result struct {
 	Ret      string `json:"ret"`
 	Pre      *bool  `json:"pre"`
 	Spec     *bool  `json:"spec"`
+	// probes are the GO2LEAN_PROBE lines the test printed.
+	probes []contract.Probe
 }
 
 // Verify realises and runs one counterexample and writes the verdict and the
@@ -209,6 +212,7 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 		return v
 	}
 	judge(v, p.prop, p.cx, res)
+	v.Probes = res.probes
 	return v
 }
 
@@ -363,15 +367,27 @@ func ClassifyPanic(msg string) contract.PanicKind {
 func parseResults(stdout string) map[string]result {
 	out := map[string]result{}
 	current := ""
+	var probes []contract.Probe
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if name, ok := strings.CutPrefix(line, "=== RUN   TestGo2LeanPoC_"); ok {
-			current = name
+			current, probes = name, nil
+			continue
+		}
+		// "GO2LEAN_PROBE <label> <value as a Go quoted string>", printed by
+		// a spec's go2leanProbe helper in the real run.
+		if rest, ok := strings.CutPrefix(line, "GO2LEAN_PROBE "); ok && current != "" {
+			label, val, _ := strings.Cut(rest, " ")
+			if s, err := strconv.Unquote(val); err == nil {
+				b, _ := json.Marshal(s)
+				probes = append(probes, contract.Probe{Label: label, Value: b})
+			}
 			continue
 		}
 		if rest, ok := strings.CutPrefix(line, "GO2LEAN_RESULT "); ok && current != "" {
 			var r result
 			if json.Unmarshal([]byte(rest), &r) == nil {
+				r.probes = probes
 				out[current] = r
 			}
 		}

@@ -261,6 +261,9 @@ type Instr struct {
 	Op        Op
 	Args      []Var
 	HavocSite int
+	// Probe, when set, makes this a probe: record Args[0] under this label
+	// (Op is nil and Dst unused).
+	Probe string
 }
 
 type TermKind int

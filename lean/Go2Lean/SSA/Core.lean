@@ -85,6 +85,9 @@ inductive Instr (Op : Type) where
   /-- `dst := havoc site` — a fresh non-deterministic value for havoc site
   `site`. Sites are numbered per program; iterations are counted at run time. -/
   | havoc (dst : Var) (site : Nat)
+  /-- Record `v` under `label` in the run state (a spec's `go2leanProbe`),
+  so a counterexample reports the values the model computed. -/
+  | probe (label : String) (v : Var)
   deriving Repr
 
 inductive Term where
@@ -146,6 +149,8 @@ structure HState (Val : Type) where
   the spec's own return, so the engines can tell which `return` a trial
   left through (a guard's `return true` or the real check). -/
   exit : Option (String × Nat) := none
+  /-- Values recorded by probes, in the order they ran. -/
+  probes : Array (String × Val) := #[]
 
 namespace HState
 
@@ -182,6 +187,8 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
       (.panic .modelStuck, { s with stuck := s.stuck <|> some site })
     | .panic k => (.panic k, s)
     | .outOfFuel => (.outOfFuel, s)
+  | .probe label v :: rest, env, s =>
+    execInstrs or h rest env { s with probes := s.probes.push (label, env[v]!) }
   | .havoc dst site :: rest, env, s =>
     let (v, s) := s.take h site
     execInstrs or h rest (env.set! dst v) s
