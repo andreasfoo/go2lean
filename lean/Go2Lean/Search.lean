@@ -700,8 +700,11 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     let k := (smallInts w extra).length
     (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
   | .sliceOf _ elem maxLen' =>
+    -- At depth 0 only the empty slice is built; the element is not sized,
+    -- since a recursive element type would never bottom out.
+    if depth == 0 then 1 else
     let k := genSize extra maxLen pool table (depth - 1) allowNil elem
-    (List.range (if depth == 0 then 1 else min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
+    (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
   | .structv _ fields => structSize extra maxLen pool table depth allowNil fields
   | .ptr _ pointee => (if depth > 0 && !allowNil then 0 else 1) + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .link _ pointee => 1 + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)

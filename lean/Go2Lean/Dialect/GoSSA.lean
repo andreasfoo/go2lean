@@ -213,6 +213,10 @@ def shiftCount (countSigned : Bool) : Val → Res Nat
 compare equal (an over-approximation of identity; M3 filters the fallout). -/
 def eqVal : Val → Val → Option Bool
   | .int w a, .int w' b => if h : w' = w then some (a = (h ▸ b)) else none
+  -- Arrays and structs compare element by element (the frontend only
+  -- lowers == on those whose elements compare without the heap).
+  | .arr as, .arr bs => eqVals as bs
+  | .structv as, .structv bs => eqVals as bs
   | .bool a, .bool b => some (a == b)
   | .err a, .err b => some (a == b)
   | .ptr r p, .ptr r' p' => some (r == r' && p == p')
@@ -224,6 +228,14 @@ def eqVal : Val → Val → Option Bool
   | .slice r .., .slice r' .. => some ((r == 0) == (r' == 0))
   | .unit, .unit => none -- opaque values: the frontend havocs these comparisons
   | _, _ => none
+where
+  eqVals : List Val → List Val → Option Bool
+    | [], [] => some true
+    | a :: as, b :: bs => match eqVal a b, eqVals as bs with
+      | some false, _ => some false
+      | some true, r => r
+      | none, _ => none
+    | _, _ => some false
 
 
 

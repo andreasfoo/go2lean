@@ -98,6 +98,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 	}
 	sprog, spkgs := build(pkgs, ssa.InstantiateGenerics)
 	sprog.Build()
+	zeros := zeroGlobals(sprog, spkgs, opts.Deps)
 
 	modPath := ""
 	if pkgs[0].Module != nil {
@@ -155,7 +156,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 	}
 	var progs []*ir.Prog
 	for _, u := range units {
-		p, err := translatePackage(u.path, u.fns, xrefs)
+		p, err := translatePackage(u.path, u.fns, xrefs, zeros)
 		if err != nil {
 			return nil, "", err
 		}
@@ -228,6 +229,49 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 	return out
 }
 
+// zeroGlobals returns the package-level variables that keep their zero
+// value: no initializer and no use but a load anywhere in the program. With
+// bodies for every package (deps) that covers every variable; otherwise only
+// the unexported ones of the compiled packages, which no other package can
+// reach.
+func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.Global]bool {
+	touched := map[*ssa.Global]bool{}
+	for f := range ssautil.AllFunctions(sprog) {
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				if u, ok := in.(*ssa.UnOp); ok && u.Op == token.MUL {
+					continue
+				}
+				for _, op := range in.Operands(nil) {
+					if g, ok := (*op).(*ssa.Global); ok {
+						touched[g] = true
+					}
+				}
+			}
+		}
+	}
+	compiled := map[*ssa.Package]bool{}
+	for _, p := range spkgs {
+		if p != nil {
+			compiled[p] = true
+		}
+	}
+	out := map[*ssa.Global]bool{}
+	for _, p := range sprog.AllPackages() {
+		if !deps && !compiled[p] {
+			continue
+		}
+		for _, m := range p.Members {
+			g, ok := m.(*ssa.Global)
+			if !ok || touched[g] || (!deps && g.Object() != nil && g.Object().Exported()) {
+				continue
+			}
+			out[g] = true
+		}
+	}
+	return out
+}
+
 // isStdlib says whether an import path belongs to the standard library
 // (no dot in its first element).
 func isStdlib(path string) bool {
@@ -264,9 +308,9 @@ func candidates(spkg *ssa.Package) []*ssa.Function {
 	return fns
 }
 
-func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall) (*ir.Prog, error) {
+func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]bool) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
-	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs}
+	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros}
 
 	// Pass 1: assign FuncIds so calls can be resolved.
 	byName := map[string]*ssa.Function{}
@@ -370,6 +414,9 @@ type progState struct {
 	ids     map[*ssa.Function]int
 	xrefs   map[string]contract.XCall // functions of sibling packages, by name
 	specFor func(*ssa.Function) string
+	// zeros holds the package-level variables nothing writes: a load of
+	// one is its zero value.
+	zeros map[*ssa.Global]bool
 }
 
 func (s *progState) newHavoc(width int, site, reason, goHint string) int {
@@ -646,7 +693,7 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		// nil, or arithmetic on floats: the model does not look inside
 		// them, so the outcome is havoc (a bool, or an opaque number).
 		return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
-	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()) || isSlice(x.X.Type()))) {
+	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()) || isSlice(x.X.Type()) || flatComparable(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
 	a, err := t.val(x.X)
@@ -659,6 +706,38 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 	}
 	t.emit(ir.Instr{Dst: t.def(x), Op: op, Args: []ir.Var{a, c}})
 	return nil
+}
+
+// flatComparable says whether t is an array or struct whose elements, all
+// the way down, are integers, bools or pointers: == on it compares element
+// by element without the heap.
+func flatComparable(t types.Type) bool {
+	var leaf func(t types.Type) bool
+	leaf = func(t types.Type) bool {
+		if _, _, ok := intWidth(t); ok {
+			return true
+		}
+		if isBool(t) || isPointer(t) {
+			return true
+		}
+		switch u := t.Underlying().(type) {
+		case *types.Array:
+			return leaf(u.Elem())
+		case *types.Struct:
+			for i := 0; i < u.NumFields(); i++ {
+				if !leaf(u.Field(i).Type()) {
+					return false
+				}
+			}
+			return true
+		}
+		return false
+	}
+	switch t.Underlying().(type) {
+	case *types.Array, *types.Struct:
+		return leaf(t)
+	}
+	return false
 }
 
 func pick(signed bool, s, u string) ir.Op {
@@ -1195,7 +1274,13 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
-		if _, isGlobal := x.X.(*ssa.Global); isGlobal {
+		if g, isGlobal := x.X.(*ssa.Global); isGlobal {
+			if t.prog.zeros[g] {
+				if zero, ok := zeroVal(x.Type()); ok {
+					t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: zero}})
+					return nil
+				}
+			}
 			return t.havoc(x, "load "+x.X.Name(), "unmodeled-load", "")
 		}
 		p, err := t.val(x.X)
