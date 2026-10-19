@@ -35,7 +35,7 @@ type harnessData struct {
 	Pre      string // Go expression or ""
 	// Setup are statements run before the call inside the panic guard
 	// (a constructor-built receiver).
-	Setup []string
+	Setup    []string
 	SpecCall string // e.g. SpecSum(xs, ret) or ""
 }
 
