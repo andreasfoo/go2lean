@@ -387,6 +387,9 @@ partial def renderObj (heap : Heap Val) (signed : Bool) : Val → Json
   | .ptr 0 _ => Json.null
   | .ptr ref path =>
     match heap[ref]? >>= (getPath · path) with
+    -- A non-nil pointer to an opaque object: not null, so M3 builds a
+    -- pointer to the pointee's zero value instead of passing nil.
+    | some .unit | some .opaqueNil | some (.boxed ..) => Json.str "opaque"
     | some v => renderObj heap signed v
     | none => Json.str "?"
   | .slice 0 _ _ _ => Json.null

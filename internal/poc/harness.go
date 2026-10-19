@@ -431,6 +431,11 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
 		}
+		if p.Pointee.Kind == contract.ABIOpaque {
+			// A pointer to a value the model never looked into: a pointer
+			// to its zero value.
+			return "new(" + p.Pointee.GoType + ")", nil
+		}
 		inner, err := literal(abi, *p.Pointee, v)
 		if err != nil {
 			return "", err
