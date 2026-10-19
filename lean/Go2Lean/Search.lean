@@ -309,7 +309,7 @@ def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
 -- Checking -------------------------------------------------------------------
 
 def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
-    (fuel : Nat) (heap : Heap Val := #[]) : Outcome × HState Val × Option Val :=
+    (fuel : Nat) (heap : Heap Val := #[]) (alts : List (Havoc Val) := []) : Outcome × HState Val × Option Val :=
   match prop with
   | .noPanic f =>
     match run p or h f args fuel heap with
@@ -324,10 +324,17 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
       let before := s.log.size
       match runFunc p or h spec (args ++ results) s fuel with
       -- A verdict that read a havoc value (the spec compared opaque values,
-      -- or called something unmodelled) is neither a refutation nor support.
-      | (.ok (.bool b), s) =>
-        if s.log.size > before then (.specUnknown, s, some v)
-        else if b then (.holds, s, some v) else (.violated, s, some v)
+      -- or called something unmodelled) is neither a refutation nor support,
+      -- unless the spec gives the same verdict when rerun from the same
+      -- state under each of the other havoc assignments `alts`: then the
+      -- havoc it read did not decide it (the trial stays havoc-dependent).
+      | (.ok (.bool b), s') =>
+        let decided := !alts.isEmpty && alts.all fun h' =>
+          match runFunc p or h' spec (args ++ results) s fuel with
+          | (.ok (.bool b'), _) => b' == b
+          | _ => false
+        if s'.log.size > before && !decided then (.specUnknown, s', some v)
+        else if b then (.holds, s', some v) else (.violated, s', some v)
       | (.ok _, s) => (.specPanicked .modelStuck, s, some v)
       | (.panic k, s) => (.specPanicked k, s, some v)
       | (.outOfFuel, s) => (.outOfFuel, s, some v)
@@ -479,7 +486,7 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
 its end (the trial reached the oracle and the oracle finished). -/
 def specExit (prop : Property) (o : Outcome) (s : HState Val) : Option String :=
   match prop, o with
-  | .postcondition .., .holds | .postcondition .., .violated | .postcondition .., .specUnknown =>
+  | .postcondition .., .holds | .postcondition .., .violated =>
     s.exit.map fun (_, b) => toString b
   | _, _ => none
 
@@ -516,7 +523,8 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       -- no report behind.
       IO.eprintln (Json.mkObj [("trial", trial), ("objects", Json.mkObj (objectsOf heap gens args)),
         ("inputs", Json.mkObj ((gens.zip args).flatMap fun (g, v) => flatten g v))]).compress
-    let (o, s, ret) := check p or h prop args fuel heap
+    let alts := [havocOf (tseed + 7919) p.havocWidths, havocOf (tseed + 104729) p.havocWidths]
+    let (o, s, ret) := check p or h prop args fuel heap alts
     if trace then IO.eprintln s!"done trial {trial}: {repr o}"
     if o.refutes prop then
       -- Report the initial heap: what the inputs looked like before the run.
@@ -740,7 +748,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       IO.println (Json.mkObj [("found", false), ("exhaustive", false), ("reason", "budget"),
         ("domain", n), ("limit", limit), ("checked", (i : Nat))]).compress
       return
-    let (o, s, ret) := check p or h prop args fuel heap
+    let (o, s, ret) := check p or h prop args fuel heap [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
     if o.refutes prop then
       let j := report or heap gens args i 0 o s ret
       if s.log.size == 0 then

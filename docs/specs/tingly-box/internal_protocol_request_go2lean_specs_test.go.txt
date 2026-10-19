@@ -312,28 +312,11 @@ func betaConversation(req *anthropic.BetaMessageNewParams) (system, user, assist
 	return
 }
 
-// plainBetaRequest: roles user and assistant only, blocks of text, tool_use
-// and tool_result only (tool results holding text only), tool ids within
-// the limit.
+// plainBetaRequest: roles user and assistant only, tool_use in assistant
+// and tool_result in user messages, tool ids within the limit. Other block
+// kinds (images, thinking, ...) may occur; the comparison ignores them.
 func plainBetaRequest(req *anthropic.BetaMessageNewParams) bool {
-	if !wellFormedToolTurns(req) {
-		return false
-	}
-	for _, m := range req.Messages {
-		for _, b := range m.Content {
-			if b.OfText == nil && b.OfToolUse == nil && b.OfToolResult == nil {
-				return false
-			}
-			if b.OfToolResult != nil {
-				for _, c := range b.OfToolResult.Content {
-					if c.OfText == nil {
-						return false
-					}
-				}
-			}
-		}
-	}
-	return true
+	return wellFormedToolTurns(req)
 }
 
 func sameStrings(a, b []string) bool {
@@ -406,19 +389,14 @@ func openAIConversation(req *openai.ChatCompletionNewParams) (system, user, assi
 	return
 }
 
-// plainOpenAIRequest: system, user, assistant and tool messages only, user
-// and tool parts of text only, tool call ids non-empty and within the limit.
+// plainOpenAIRequest: system, user, assistant and tool messages only
+// (developer and function messages change role on the way), tool call ids
+// non-empty and within the limit. Non-text parts may occur; the
+// comparison ignores them.
 func plainOpenAIRequest(req *openai.ChatCompletionNewParams) bool {
 	for _, m := range req.Messages {
 		if m.OfSystem == nil && m.OfUser == nil && m.OfAssistant == nil && m.OfTool == nil {
 			return false
-		}
-		if m.OfUser != nil {
-			for _, p := range m.OfUser.Content.OfArrayOfContentParts {
-				if p.OfText == nil {
-					return false
-				}
-			}
 		}
 		if m.OfAssistant != nil {
 			for _, tc := range m.OfAssistant.ToolCalls {
@@ -427,15 +405,8 @@ func plainOpenAIRequest(req *openai.ChatCompletionNewParams) bool {
 				}
 			}
 		}
-		if m.OfTool != nil {
-			if len(m.OfTool.ToolCallID) == 0 || len(m.OfTool.ToolCallID) > openAIToolCallIDLimit {
-				return false
-			}
-			for _, p := range m.OfTool.Content.OfArrayOfContentParts {
-				if p.OfText == nil {
-					return false
-				}
-			}
+		if m.OfTool != nil && (len(m.OfTool.ToolCallID) == 0 || len(m.OfTool.ToolCallID) > openAIToolCallIDLimit) {
+			return false
 		}
 	}
 	return true
