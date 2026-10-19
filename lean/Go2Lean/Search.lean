@@ -1,4 +1,5 @@
 import Lean.Data.Json
+import Std.Data.HashSet
 import Go2Lean.Dialect.GoSSA
 
 /-!
@@ -613,8 +614,16 @@ letter, one digit, the boundary numbers, and every pool literal with its
 neighbours and number suffixes. -/
 def smallStrs (extra : List Nat) (pool : List (List Nat)) : List (List Nat) :=
   let numbers := numberStrs extra
-  ([[], [32], [97], [48]] ++ numbers ++
-    pool.flatMap fun (b : List Nat) => [b, b.dropLast, b ++ [120]] ++ numbers.map (b ++ ·)).eraseDups
+  dedup ([[], [32], [97], [48]] ++ numbers ++
+    pool.flatMap fun (b : List Nat) => [b, b.dropLast, b ++ [120]] ++ numbers.map (b ++ ·))
+where
+  /-- `eraseDups` in linear time: a literal pool of thousands of strings
+  (`-deps`) made the quadratic one stall the exhaustive engine before its
+  budget check. -/
+  dedup (xs : List (List Nat)) : List (List Nat) :=
+    let (_, out) := xs.foldl (init := ((∅ : Std.HashSet (List Nat)), (#[] : Array (List Nat))))
+      fun (seen, out) x => if seen.contains x then (seen, out) else (seen.insert x, out.push x)
+    out.toList
 
 /-- Enumerate one parameter as a heap-building function: each candidate
 takes the heap so far and returns the value and the extended heap. -/
