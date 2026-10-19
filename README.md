@@ -164,12 +164,14 @@ dereferences of fields a caller is expected to set. The agent on
 `internal/typ` wrote 63 specs and found `pickWithinTier` indexing an
 empty slice.
 
-Issue-guided hunting is written up in [docs/hunting-tingly-box.md](docs/hunting-tingly-box.md):
-a hand-written postcondition on `ConvertAnthropicBetaToOpenAIRequest` is
-refuted and the counterexample is confirmed by M3: tool_use ids of 43 to 51
-characters reach the assistant `tool_calls[].id` untruncated while the
-tool-result side is truncated to 40. Open issue #1924 describes a mismatch of
-tool-call ids between the two sides; the PoC is under `docs/poc-issue-1924/`.
+The tingly-box case study (hand-written specs, the rounds of hunting,
+PoCs, full-pass history and one page per finding) lives in its own
+repository, [andreasfoo/go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box).
+Its first finding: a hand-written postcondition on
+`ConvertAnthropicBetaToOpenAIRequest` is refuted and confirmed by M3:
+tool_use ids of 43 to 51 characters reach the assistant `tool_calls[].id`
+untruncated while the tool-result side is truncated to 40 (tingly-box
+issue #1924).
 
 ## Supported Go subset
 

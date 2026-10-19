@@ -1,8 +1,0 @@
-package request
-
-// No spec-in-Go functions could be written for the modelled targets in
-// this package: the relevant parameter types (anthropic.BetaContentBlockParamUnion,
-// *anthropic.ImageBlockParam) are external-package structs whose fields are
-// themselves external-package structs or pointers, which falls outside the
-// modelled subset. Keeping any equality-style assertion against those fields
-// would only return a vacuous true and never catch a real bug.
