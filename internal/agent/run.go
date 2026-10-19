@@ -14,7 +14,8 @@ import (
 	"github.com/andreasfoo/go2lean/internal/pipeline"
 )
 
-// SpecFile is the file the agent owns inside the target package.
+// SpecFile is the file the agent owns inside the target package, unless
+// Options.SpecFile names another (to sit next to hand-written specs).
 const SpecFile = "go2lean_specs_test.go"
 
 // Options tune a run.
@@ -25,6 +26,9 @@ type Options struct {
 	// Guidance is extra text for the proposal round: known bug classes,
 	// invariants from the issue tracker, functions to focus on.
 	Guidance string
+	// SpecFile overrides the name of the file the agent writes (default
+	// SpecFile); it must end in _test.go.
+	SpecFile string
 }
 
 // Run drives the agent on one package: propose specs, repair until they
@@ -33,6 +37,13 @@ type Options struct {
 func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern string, llm LLM, opts Options, out io.Writer) error {
 	if opts.MaxRepairs == 0 {
 		opts.MaxRepairs = 2
+	}
+	specFile := SpecFile
+	if opts.SpecFile != "" {
+		if !strings.HasSuffix(opts.SpecFile, "_test.go") {
+			return fmt.Errorf("agent: spec file %s must end in _test.go", opts.SpecFile)
+		}
+		specFile = opts.SpecFile
 	}
 	moduleDir := env.Module
 	if moduleDir == "" {
@@ -77,7 +88,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 	install := func(spec string) (string, *contract.ModelReport, error) {
 		for repair := 0; ; repair++ {
 			spec = normalizeSpec(spec, pkgName)
-			if err := os.WriteFile(filepath.Join(pkgDir, SpecFile), []byte(spec), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(pkgDir, specFile), []byte(spec), 0o644); err != nil {
 				return "", nil, err
 			}
 			fmt.Fprintf(out, "== M1 compile (specs, attempt %d)\n", repair+1)
@@ -90,14 +101,14 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 				issues = specIssues(report)
 			}
 			if len(issues) == 0 {
-				_ = os.WriteFile(filepath.Join(logDir, SpecFile), []byte(spec), 0o644)
+				_ = os.WriteFile(filepath.Join(logDir, specFile), []byte(spec), 0o644)
 				return spec, report, nil
 			}
 			if repair >= opts.MaxRepairs {
 				if err != nil {
 					return "", nil, fmt.Errorf("specs still do not compile after %d repairs: %w", repair, err)
 				}
-				_ = os.WriteFile(filepath.Join(logDir, SpecFile), []byte(spec), 0o644)
+				_ = os.WriteFile(filepath.Join(logDir, specFile), []byte(spec), 0o644)
 				return spec, report, nil // rejected specs are reported, not fatal
 			}
 			resp, err := ask(systemPrompt, repairPrompt(issues, spec))

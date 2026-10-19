@@ -19,6 +19,8 @@ func cmdAgent(args []string) error {
 	repairs := fs.Int("repairs", 2, "rounds spent repairing specs the frontend rejected")
 	report := fs.Bool("report", true, "ask the agent for a report (and possibly revised specs) after the verdicts")
 	guidance := fs.String("guidance", "", "file with guidance for the proposal round (bug classes, invariants, functions to target)")
+	specFile := fs.String("spec-file", "", "name of the spec file the agent writes in the package (default go2lean_specs_test.go)")
+	deps := fs.Bool("deps", false, "also model the functions of dependency packages the package calls")
 	opts := searchFlags(fs)
 	fs.Parse(args)
 	guidanceText := ""
@@ -36,11 +38,12 @@ func cmdAgent(args []string) error {
 	if err != nil {
 		return err
 	}
+	env.Deps = *deps
 	llm, err := agent.New(*llmSpec, agent.ClaudeConfig{Model: *model, BaseURL: *baseURL, Thinking: *thinking})
 	if err != nil {
 		return err
 	}
 	return agent.Run(context.Background(), w, env, fs.Arg(0), llm, agent.Options{
-		Search: opts.get(), MaxRepairs: *repairs, ReportRound: *report, Guidance: guidanceText,
+		Search: opts.get(), MaxRepairs: *repairs, ReportRound: *report, Guidance: guidanceText, SpecFile: *specFile,
 	}, os.Stdout)
 }
