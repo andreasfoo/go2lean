@@ -128,7 +128,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 		roots = append(roots, fns...)
 	}
 	if opts.Deps {
-		deps := depClosure(roots, mainPaths)
+		deps := depClosure(roots, mainPaths, zeros)
 		var paths []string
 		for path := range deps {
 			paths = append(paths, path)
@@ -173,9 +173,12 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 
 // depClosure walks the static calls of roots into packages outside the
 // compile and the standard library, up to depDepth calls deep and depLimit
-// functions, and returns the functions reached by package path. Generic
-// functions, wrappers and closures are left out (they stay unmodelled).
-func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*ssa.Function {
+// functions, and returns the functions reached by package path. Besides
+// static calls it follows functions used as values, the function a
+// package-level variable holds from its initializer (zeros), and the bodies
+// of closures (added to their package by withAnon). Generic functions and
+// wrappers are left out (they stay unmodelled).
+func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa.Global]ssa.Value) map[string][]*ssa.Function {
 	out := map[string][]*ssa.Function{}
 	seen := map[*ssa.Function]bool{}
 	count := 0
@@ -186,48 +189,60 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 		}
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
-				call, ok := in.(ssa.CallInstruction)
-				if !ok {
-					continue
+				for _, op := range in.Operands(nil) {
+					var callee *ssa.Function
+					switch v := (*op).(type) {
+					case *ssa.Function:
+						callee = v
+					case *ssa.Global:
+						callee, _ = zeros[v].(*ssa.Function)
+					}
+					if callee == nil {
+						continue
+					}
+					if callee.Parent() != nil {
+						// A closure: walk its body as part of its parent's.
+						if !seen[callee] {
+							seen[callee] = true
+							visit(callee, depth)
+						}
+						continue
+					}
+					// Instances of generic functions (SystemMessage[string]) have
+					// bodies with concrete types under InstantiateGenerics; their
+					// package is that of the generic origin.
+					instance := len(callee.TypeArgs()) > 0 && callee.Origin() != nil
+					if seen[callee] || (callee.Synthetic != "" && !instance) ||
+						callee.Parent() != nil || (callee.TypeParams().Len() > 0 && !instance) ||
+						isInit(callee.Name()) || len(callee.Blocks) == 0 {
+						continue
+					}
+					pkg := callee.Pkg
+					if instance {
+						pkg = callee.Origin().Pkg
+					}
+					if pkg == nil {
+						continue
+					}
+					path := pkg.Pkg.Path()
+					// A compiled package's own functions are modelled already,
+					// except instances of its generic functions.
+					// The generic helpers of package slices (ContainsFunc,
+					// IndexFunc) are plain loops over func values: modelled.
+					if (mainPaths[path] && !instance) || (isStdlib(path) && !(instance && path == "slices")) {
+						continue
+					}
+					if _, std := ir.StdlibOps[callee.String()]; std {
+						continue
+					}
+					if count >= depLimit {
+						return
+					}
+					seen[callee] = true
+					count++
+					out[path] = append(out[path], callee)
+					visit(callee, depth+1)
 				}
-				callee := call.Common().StaticCallee()
-				if callee == nil {
-					continue
-				}
-				// Instances of generic functions (SystemMessage[string]) have
-				// bodies with concrete types under InstantiateGenerics; their
-				// package is that of the generic origin.
-				instance := len(callee.TypeArgs()) > 0 && callee.Origin() != nil
-				if seen[callee] || (callee.Synthetic != "" && !instance) ||
-					callee.Parent() != nil || (callee.TypeParams().Len() > 0 && !instance) ||
-					isInit(callee.Name()) || len(callee.Blocks) == 0 {
-					continue
-				}
-				pkg := callee.Pkg
-				if instance {
-					pkg = callee.Origin().Pkg
-				}
-				if pkg == nil {
-					continue
-				}
-				path := pkg.Pkg.Path()
-				// A compiled package's own functions are modelled already,
-				// except instances of its generic functions.
-				// The generic helpers of package slices (ContainsFunc,
-				// IndexFunc) are plain loops over func values: modelled.
-				if (mainPaths[path] && !instance) || (isStdlib(path) && !(instance && path == "slices")) {
-					continue
-				}
-				if _, std := ir.StdlibOps[callee.String()]; std {
-					continue
-				}
-				if count >= depLimit {
-					return
-				}
-				seen[callee] = true
-				count++
-				out[path] = append(out[path], callee)
-				visit(callee, depth+1)
 			}
 		}
 	}
@@ -763,6 +778,9 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()) || isSlice(x.X.Type()) || flatComparable(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
 	}
+	if eqOp && flatComparable(x.X.Type()) {
+		op = pick(x.Op == token.EQL, "eqDeep", "neDeep")
+	}
 	a, err := t.val(x.X)
 	if err != nil {
 		return err
@@ -776,15 +794,15 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 }
 
 // flatComparable says whether t is an array or struct whose elements, all
-// the way down, are integers, bools or pointers: == on it compares element
-// by element without the heap.
+// the way down, are integers, bools, pointers or strings: == on it compares
+// element by element (eqDeep: strings by their bytes).
 func flatComparable(t types.Type) bool {
 	var leaf func(t types.Type) bool
 	leaf = func(t types.Type) bool {
 		if _, _, ok := intWidth(t); ok {
 			return true
 		}
-		if isBool(t) || isPointer(t) {
+		if isBool(t) || isPointer(t) || isString(t) {
 			return true
 		}
 		switch u := t.Underlying().(type) {

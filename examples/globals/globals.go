@@ -26,3 +26,12 @@ func SetGenForTest(f func() int) { gen = f }
 // Slot returns the slot the generator picks. Bug: the generator yields 7,
 // past the four slots.
 func Slot(slots [4]int) int { return slots[gen()] }
+
+// Key is a comparable struct holding a string.
+type Key struct {
+	Name string
+	N    int
+}
+
+// Same reports whether two keys are equal (== on a struct with a string).
+func Same(a, b Key) bool { return a == b }

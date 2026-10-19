@@ -27,12 +27,22 @@ def f1 : GoSSA.Func := {
     -- 0: entry
     { params := [],
       instrs := #[.op 1 (.const (.arr (List.replicate 4 (.int 8 0#8)))) [],
-                 .op 2 .eq [0, 1]],
+                 .op 2 .eqDeep [0, 1]],
+      term := .ret 2 }
+  ] }
+
+/-- func(a github.com/andreasfoo/go2lean/examples/globals.Key, b github.com/andreasfoo/go2lean/examples/globals.Key) bool (status: complete) -/
+def f2 : GoSSA.Func := {
+  name := "Same", params := [0, 1], nvals := 3, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 .eqDeep [0, 1]],
       term := .ret 2 }
   ] }
 
 /-- func(f func() int) (status: partial) -/
-def f2 : GoSSA.Func := {
+def f3 : GoSSA.Func := {
   name := "SetGenForTest", params := [0], nvals := 2, entry := 0,
   blocks := #[
     -- 0: entry
@@ -42,14 +52,14 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func(slots [4]int) int (status: complete) -/
-def f3 : GoSSA.Func := {
+def f4 : GoSSA.Func := {
   name := "Slot", params := [0], nvals := 7, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[.op 1 (.alloc (.arr (List.replicate 4 (.int 64 0#64)))) [],
                  .op 2 .storePath [1, 0],
-                 .op 3 (.funcRef 5) []],
+                 .op 3 (.funcRef 7) []],
       term := .callv 3 [] 4 1 [] 2 },
     -- 1: entry.after-call
     { params := [],
@@ -63,7 +73,7 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func(id [4]byte, ret bool) bool (status: complete) -/
-def f4 : GoSSA.Func := {
+def f5 : GoSSA.Func := {
   name := "SpecBlankIsZero", params := [0, 1], nvals := 29, entry := 0,
   blocks := #[
     -- 0: entry
@@ -109,8 +119,39 @@ def f4 : GoSSA.Func := {
       term := .br 27 3 [] 2 [28] }
   ] }
 
+/-- func(a github.com/andreasfoo/go2lean/examples/globals.Key, b github.com/andreasfoo/go2lean/examples/globals.Key, ret bool) bool (status: complete) -/
+def f6 : GoSSA.Func := {
+  name := "SpecSameFieldwise", params := [0, 1, 2], nvals := 20, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 4 (.alloc (.structv [(.str 0 0#64 0#64), (.int 64 0#64)])) [],
+                 .op 5 .storePath [4, 0],
+                 .op 6 (.alloc (.structv [(.str 0 0#64 0#64), (.int 64 0#64)])) [],
+                 .op 7 .storePath [6, 1],
+                 .op 8 (.fieldAddr 0) [4],
+                 .op 9 .loadPath [8],
+                 .op 10 (.fieldAddr 0) [6],
+                 .op 11 .loadPath [10],
+                 .op 12 .eq [9, 11],
+                 .op 13 (.const (.bool false)) []],
+      term := .br 12 1 [] 2 [13] },
+    -- 1: binop.rhs
+    { params := [],
+      instrs := #[.op 14 (.fieldAddr 1) [4],
+                 .op 15 .loadPath [14],
+                 .op 16 (.fieldAddr 1) [6],
+                 .op 17 .loadPath [16],
+                 .op 18 .eq [15, 17]],
+      term := .jump 2 [18] },
+    -- 2: binop.done
+    { params := [3],
+      instrs := #[.op 19 .eq [2, 3]],
+      term := .ret 19 }
+  ] }
+
 /-- func() int (status: complete) -/
-def f5 : GoSSA.Func := {
+def f7 : GoSSA.Func := {
   name := "defaultGen", params := [], nvals := 1, entry := 0,
   blocks := #[
     -- 0: entry
@@ -119,6 +160,6 @@ def f5 : GoSSA.Func := {
       term := .ret 0 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5], havocWidths := #[64] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7], havocWidths := #[64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_globals

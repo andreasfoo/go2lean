@@ -140,6 +140,9 @@ inductive Op where
   | strAtoi
   /-- `strconv.Itoa`. -/
   | strItoa
+  /-- `==` / `!=` on arrays and structs that hold strings: strings compare
+  by their bytes, the rest as `eq`. -/
+  | eqDeep | neDeep
   /-- `hex.EncodeToString(b)`: two lowercase hex digits per byte. -/
   | hexEncode
   /-- An array of `n` bytes distinct from every other `freshArr` value of
@@ -385,6 +388,24 @@ def sliceElems (heap : Heap Val) : Val → Option (List Val)
     | some (.arr es) => some ((es.drop off.toNat).take len.toNat)
     | _ => none
   | _ => none
+
+/-- Equality of arrays and structs whose strings live on the heap. -/
+def eqDeep (heap : Heap Val) : Val → Val → Option Bool
+  | .str r o l, .str r' o' l' =>
+    match strBytes heap (.str r o l), strBytes heap (.str r' o' l') with
+    | some x, some y => some (x == y)
+    | _, _ => none
+  | .arr as, .arr bs => eqDeeps heap as bs
+  | .structv as, .structv bs => eqDeeps heap as bs
+  | a, b => eqVal a b
+where
+  eqDeeps (heap : Heap Val) : List Val → List Val → Option Bool
+    | [], [] => some true
+    | a :: as, b :: bs => match eqDeep heap a b, eqDeeps heap as bs with
+      | some false, _ => some false
+      | some true, r => r
+      | none, _ => none
+    | _, _ => some false
 
 /-- Key equality for maps: strings by their bytes, the rest by `eqVal`. -/
 def keyEq (heap : Heap Val) (a b : Val) : Bool :=
@@ -791,6 +812,10 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     match strBytes heap a, strBytes heap b with
     | some x, some y => .ok (strAlloc heap (x ++ y))
     | _, _ => .panic .modelStuck
+  | .eqDeep, [a, b] => match eqDeep heap a b with
+    | some r => .ok (.bool r, heap) | none => .panic .modelStuck
+  | .neDeep, [a, b] => match eqDeep heap a b with
+    | some r => .ok (.bool !r, heap) | none => .panic .modelStuck
   | .hexEncode, [.slice ref off len _] =>
     match strBytes heap (.str ref off len) with
     | some x =>
