@@ -432,6 +432,8 @@ type ModelReport struct {
 	LeanFile   string      `json:"lean_file"`   // relative to the repo root
 	Funcs      []ModelFunc `json:"funcs"`
 	Havoc      []ABIHavoc  `json:"havoc,omitempty"` // program-wide havoc sites
+	// Dependency marks a package modelled only for its callers (-deps).
+	Dependency bool `json:"dependency,omitempty"`
 }
 
 // GoIntType describes a Go integer type name as the model sees it.

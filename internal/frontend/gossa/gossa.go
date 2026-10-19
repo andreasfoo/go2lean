@@ -184,6 +184,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 		if err != nil {
 			return nil, "", err
 		}
+		p.Dependency = !mainPaths[u.path]
 		progs = append(progs, p)
 	}
 	return progs, modPath, nil

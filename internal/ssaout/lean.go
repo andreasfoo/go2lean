@@ -187,6 +187,7 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		LeanModule: module,
 		LeanFile:   rel,
 		Havoc:      p.Havoc,
+		Dependency: p.Dependency,
 	}
 	for i, f := range p.Funcs {
 		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Closure: f.Closure, Consts: f.Consts, StrConsts: f.StrConsts, Calls: f.Calls, XCalls: f.XCalls, Exits: f.Exits}

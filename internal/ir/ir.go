@@ -411,8 +411,11 @@ type Func struct {
 
 // Prog is one package's worth of functions. Func indices are the Lean FuncIds.
 type Prog struct {
-	Package     string
-	Frontend    string
+	Package  string
+	Frontend string
+	// Dependency marks a package modelled only because the compiled ones
+	// call into it (-deps).
+	Dependency  bool
 	Funcs       []*Func
 	HavocWidths []int
 	Havoc       []contract.ABIHavoc

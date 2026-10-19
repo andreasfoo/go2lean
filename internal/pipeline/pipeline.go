@@ -39,9 +39,16 @@ func (e Env) module() string {
 
 // Compile runs M1 on one package and prints a summary to out.
 func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*contract.ModelReport, error) {
-	reports, err := CompileAll(w, env, out, pattern)
+	all, err := CompileAll(w, env, out, pattern)
 	if err != nil {
 		return nil, err
+	}
+	// The dependencies -deps models come along; the pattern names one.
+	var reports []*contract.ModelReport
+	for _, r := range all {
+		if !r.Dependency {
+			reports = append(reports, r)
+		}
 	}
 	if len(reports) != 1 {
 		return nil, fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(reports))
@@ -255,6 +262,10 @@ func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io
 	}
 	var results []*Result
 	for _, report := range reports {
+		if report.Dependency {
+			// Modelled for its callers (-deps); not a target of the run.
+			continue
+		}
 		modelled := false
 		for _, f := range report.Funcs {
 			if f.Status != contract.ModelRejected {
