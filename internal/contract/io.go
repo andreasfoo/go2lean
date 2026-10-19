@@ -101,6 +101,36 @@ func (w Workspace) ABI(t *Target, frontend string) (*ABI, error) {
 	return &a, a.Validate()
 }
 
+// HuntRecord says that a property was searched and what came of it, so a
+// resumed run can skip it.
+type HuntRecord struct {
+	Property       string `json:"property"`
+	Summary        string `json:"summary"`
+	Counterexample string `json:"counterexample,omitempty"`
+}
+
+func (w Workspace) WriteHuntRecord(r *HuntRecord) error {
+	return writeJSON(w.path("hunts", r.Property), r)
+}
+
+// HuntRecord returns the record of a property's search, or nil.
+func (w Workspace) HuntRecord(propID string) *HuntRecord {
+	var r HuntRecord
+	if readJSON(w.path("hunts", propID), &r) != nil {
+		return nil
+	}
+	return &r
+}
+
+// Verdict returns the verdict of a counterexample, or nil.
+func (w Workspace) Verdict(cxID string) *Verdict {
+	var v Verdict
+	if readJSON(w.path("verdicts", cxID), &v) != nil {
+		return nil
+	}
+	return &v
+}
+
 func (w Workspace) WriteVerdict(v *Verdict) error {
 	return writeJSON(w.path("verdicts", v.Counterexample), v)
 }

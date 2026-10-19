@@ -25,6 +25,9 @@ type Env struct {
 	// Deps models the dependency functions the compiled packages call
 	// (see gossa.Options.Deps).
 	Deps bool
+	// Resume skips properties whose search is recorded in the workspace and
+	// counterexamples that already have a verdict.
+	Resume bool
 }
 
 func (e Env) module() string {
@@ -90,9 +93,25 @@ func Propose(w contract.Workspace, report *contract.ModelReport, out io.Writer) 
 
 // Hunt runs the engines on one property and prints the outcome.
 func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.SearchOptions, out io.Writer) (*contract.Counterexample, error) {
+	if env.Resume {
+		if r := w.HuntRecord(p.ID); r != nil {
+			fmt.Fprintf(out, "  %-28s (resumed) %s\n", p.ID, r.Summary)
+			if r.Counterexample == "" {
+				return nil, nil
+			}
+			return w.Counterexample(r.Counterexample)
+		}
+	}
 	cx, summary, err := constraint.Hunt(w, env.Root, p, opts)
 	if err != nil {
 		return nil, fmt.Errorf("hunt %s: %w", p.ID, err)
+	}
+	rec := &contract.HuntRecord{Property: p.ID, Summary: summary}
+	if cx != nil {
+		rec.Counterexample = cx.ID
+	}
+	if err := w.WriteHuntRecord(rec); err != nil {
+		return nil, err
 	}
 	if cx == nil {
 		fmt.Fprintf(out, "  %-28s %s\n", p.ID, summary)
@@ -159,10 +178,27 @@ func Verify(w contract.Workspace, env Env, id string, out io.Writer) (*contract.
 
 // VerifyAll runs M3 on several counterexamples (one go test per package).
 func VerifyAll(w contract.Workspace, env Env, ids []string, out io.Writer) ([]*contract.Verdict, error) {
-	vs, err := poc.VerifyAll(w, env.module(), ids)
-	if err != nil {
-		return nil, fmt.Errorf("poc: %w", err)
+	var done []*contract.Verdict
+	if env.Resume {
+		var todo []string
+		for _, id := range ids {
+			if v := w.Verdict(id); v != nil {
+				done = append(done, v)
+			} else {
+				todo = append(todo, id)
+			}
+		}
+		ids = todo
 	}
+	var vs []*contract.Verdict
+	if len(ids) > 0 {
+		var err error
+		vs, err = poc.VerifyAll(w, env.module(), ids)
+		if err != nil {
+			return nil, fmt.Errorf("poc: %w", err)
+		}
+	}
+	vs = append(done, vs...)
 	for _, v := range vs {
 		printVerdict(v, out)
 	}
