@@ -428,6 +428,12 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			if emptyComposite(e) {
+				// An empty composite literal is the zero value: leave it out
+				// (an anonymous struct with a foreign unexported field, like
+				// the SDKs' JSON metadata, cannot be spelled here at all).
+				continue
+			}
 			parts = append(parts, f.Go+": "+e)
 		}
 		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
@@ -648,4 +654,26 @@ func needsErrors(abi *contract.ABI, p contract.ABIParam, raw json.RawMessage) bo
 		return false
 	}
 	return walk(p, v)
+}
+
+// emptyComposite says whether e is a composite literal with no elements:
+// T{} where T may itself contain braces (struct{A int}{}).
+func emptyComposite(e string) bool {
+	if !strings.HasSuffix(e, "{}") {
+		return false
+	}
+	typ := strings.TrimSuffix(e, "{}")
+	depth := 0
+	for _, r := range typ {
+		switch r {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+		if depth < 0 {
+			return false
+		}
+	}
+	return depth == 0
 }

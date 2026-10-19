@@ -124,3 +124,18 @@ func TestCompileErrWithoutColumn(t *testing.T) {
 		t.Fatal("a compile error without a column is not recognised")
 	}
 }
+
+func TestEmptyComposite(t *testing.T) {
+	for e, want := range map[string]bool{
+		"T{}":                         true,
+		"struct{A int; raw string}{}": true,
+		"T{A: 1}":                     false,
+		"[]int{1}":                    false,
+		"struct{A int}{A: 1}":         false,
+		"nil":                         false,
+	} {
+		if got := emptyComposite(e); got != want {
+			t.Errorf("emptyComposite(%q) = %v, want %v", e, got, want)
+		}
+	}
+}
