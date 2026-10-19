@@ -51,3 +51,27 @@ func Count(n int, name string) int {
 	}
 	return q.Ints()
 }
+
+// Unwrap returns the int inside v. Bug: a nil v fails the assertion.
+func Unwrap(v any) int {
+	return v.(int)
+}
+
+// Hooks are optional callbacks.
+type Hooks struct {
+	Filter func(string) bool
+}
+
+// Pipe keeps the strings its filter accepts.
+type Pipe struct {
+	hooks *Hooks
+	kept  []string
+}
+
+// Keep appends s unless a filter is set and rejects it.
+func (p *Pipe) Keep(s string) {
+	if p.hooks != nil && p.hooks.Filter != nil && !p.hooks.Filter(s) {
+		return
+	}
+	p.kept = append(p.kept, s)
+}

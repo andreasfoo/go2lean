@@ -26,7 +26,12 @@ partial def genOfJson (j : Json) : Except String Gen := do
   | "str" => return .str name (← j.getObjValAs? Nat "maxLen")
   | "nilptr" => return .nilptr name
   | "ref" => return .ref name (← j.getObjValAs? Nat "ty")
-  | "opaque" => return .opaque name
+  | "opaque" =>
+    let v := match (j.getObjValAs? String "v").toOption with
+      | some "nil" => .opaqueNil
+      | some "nonnil" => .boxed 0 .unit
+      | _ => .unit
+    return .opaque name v
   | "arrOf" => return .arrOf name (← genOfJson (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "n")
   | other => throw s!"unknown generator kind {other}"
 

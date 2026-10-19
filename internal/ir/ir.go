@@ -78,9 +78,22 @@ func allEqual(ss []string) bool {
 }
 
 // Opaque is a value the model does not look into (interfaces, maps, funcs).
+// Opaque is a value the model knows nothing about (a float, the result of
+// an unmodelled call of func, map, channel or interface type).
 type Opaque struct{}
 
 func (Opaque) Lean() string { return ".unit" }
+
+// OpaqueNil is a nil func, map, channel or interface value.
+type OpaqueNil struct{}
+
+func (OpaqueNil) Lean() string { return ".opaqueNil" }
+
+// OpaqueNonNil is a func, map or channel value the program built itself
+// (a closure, make(map), make(chan)): never nil.
+type OpaqueNonNil struct{}
+
+func (OpaqueNonNil) Lean() string { return "(.boxed 0 .unit)" }
 
 // EmptyStr is the empty string value.
 type EmptyStr struct{}

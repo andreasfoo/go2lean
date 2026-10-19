@@ -19,3 +19,13 @@ func SpecQueuePushLast(q *Queue, v int) bool {
 func SpecCountOne(n int, name string, ret int) bool {
 	return ret == 1
 }
+
+// go2lean:spec Pipe.Keep
+// SpecPipeKeepUnfiltered: without a filter, Keep appends s.
+func SpecPipeKeepUnfiltered(p *Pipe, s string) bool {
+	if p == nil || (p.hooks != nil && p.hooks.Filter != nil) {
+		return true
+	}
+	n := len(p.kept)
+	return n > 0 && p.kept[n-1] == s
+}

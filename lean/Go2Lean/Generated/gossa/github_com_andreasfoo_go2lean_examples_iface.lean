@@ -15,15 +15,15 @@ def f0 : GoSSA.Func := {
     -- 0: entry
     { params := [],
       instrs := #[.op 2 (.alloc (.structv [(.slice 0 0#64 0#64 0#64)])) []],
-      term := .call 3 [2, 0] 3 3 [] 4 },
+      term := .call 4 [2, 0] 3 3 [] 4 },
     -- 1: if.then
     { params := [],
       instrs := #[],
-      term := .call 4 [2, 1] 6 5 [] 6 },
+      term := .call 5 [2, 1] 6 5 [] 6 },
     -- 2: if.done
     { params := [],
       instrs := #[],
-      term := .call 2 [2] 7 7 [] 8 },
+      term := .call 3 [2] 7 7 [] 8 },
     -- 3: entry.after-call
     { params := [],
       instrs := #[.op 4 (.strConst []) [],
@@ -58,15 +58,15 @@ def f1 : GoSSA.Func := {
     -- 0: entry
     { params := [],
       instrs := #[.op 2 (.alloc (.structv [(.slice 0 0#64 0#64 0#64)])) []],
-      term := .call 3 [2, 0] 3 3 [] 4 },
+      term := .call 4 [2, 0] 3 3 [] 4 },
     -- 1: if.then
     { params := [],
       instrs := #[],
-      term := .call 4 [2, 1] 6 5 [] 6 },
+      term := .call 5 [2, 1] 6 5 [] 6 },
     -- 2: if.done
     { params := [],
       instrs := #[],
-      term := .call 5 [2] 7 7 [] 8 },
+      term := .call 6 [2] 7 7 [] 8 },
     -- 3: entry.after-call
     { params := [],
       instrs := #[.op 4 (.strConst []) [],
@@ -94,8 +94,70 @@ def f1 : GoSSA.Func := {
       term := .jump 7 [] }
   ] }
 
-/-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Ints() int (status: partial) -/
+/-- func (p *github.com/andreasfoo/go2lean/examples/iface.Pipe) Keep(s string) (status: partial) -/
 def f2 : GoSSA.Func := {
+  name := "Pipe.Keep", params := [0, 1], nvals := 32, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.fieldAddr 0) [0],
+                 .op 3 .loadPath [2],
+                 .op 4 (.const (.ptr 0 [])) [],
+                 .op 5 .ne [3, 4]],
+      term := .br 5 4 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 6 (.const .unit) []],
+      term := .ret 6 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 7 (.fieldAddr 1) [0],
+                 .op 8 .loadPath [7],
+                 .op 9 (.alloc (.arr [(.str 0 0#64 0#64)])) [],
+                 .op 10 (.const (.int 64 0#64)) [],
+                 .op 11 .indexAddr [9, 10],
+                 .op 12 .storePath [11, 1],
+                 .op 13 (.const (.int 64 0#64)) [],
+                 .op 14 .strLen [9],
+                 .op 15 .reslice [9, 13, 14],
+                 .op 16 (.appendSlice (.str 0 0#64 0#64)) [8, 15],
+                 .op 17 (.fieldAddr 1) [0],
+                 .op 18 .storePath [17, 16],
+                 .op 19 (.const .unit) []],
+      term := .ret 19 },
+    -- 3: cond.true
+    { params := [],
+      instrs := #[.op 20 (.fieldAddr 0) [0],
+                 .op 21 .loadPath [20],
+                 .op 22 (.fieldAddr 0) [21],
+                 .op 23 .loadPath [22],
+                 .havoc 24 2],
+      term := .br 24 2 [] 1 [] },
+    -- 4: cond.true
+    { params := [],
+      instrs := #[.op 25 (.fieldAddr 0) [0],
+                 .op 26 .loadPath [25],
+                 .op 27 (.fieldAddr 0) [26],
+                 .op 28 .loadPath [27],
+                 .op 30 .nilKnown [28]],
+      term := .br 30 5 [] 6 [] },
+    -- 5: cond.true.nil-known
+    { params := [],
+      instrs := #[.op 31 .isNilOpaque [28],
+                 .op 29 .not [31]],
+      term := .jump 7 [] },
+    -- 6: cond.true.nil-unknown
+    { params := [],
+      instrs := #[.havoc 29 3],
+      term := .jump 7 [] },
+    -- 7: cond.true.nil-join
+    { params := [],
+      instrs := #[],
+      term := .br 29 3 [] 2 [] }
+  ] }
+
+/-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Ints() int (status: partial) -/
+def f3 : GoSSA.Func := {
   name := "Queue.Ints", params := [0], nvals := 21, entry := 0,
   blocks := #[
     -- 0: entry
@@ -116,7 +178,7 @@ def f2 : GoSSA.Func := {
     { params := [],
       instrs := #[.op 11 .indexAddr [4, 9],
                  .op 12 .loadPath [11],
-                 .op 14 .isBoxed [12]],
+                 .op 14 .nilKnown [12]],
       term := .br 14 5 [] 6 [] },
     -- 3: rangeindex.done
     { params := [],
@@ -133,8 +195,8 @@ def f2 : GoSSA.Func := {
       term := .jump 7 [] },
     -- 6: rangeindex.body.assert-unknown
     { params := [],
-      instrs := #[.havoc 15 2,
-                 .havoc 16 3,
+      instrs := #[.havoc 15 4,
+                 .havoc 16 5,
                  .op 13 .mkTuple [15, 16]],
       term := .jump 7 [] },
     -- 7: rangeindex.body.assert-join
@@ -145,14 +207,14 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Push(v int) (status: complete) -/
-def f3 : GoSSA.Func := {
+def f4 : GoSSA.Func := {
   name := "Queue.Push", params := [0, 1], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[.op 2 (.fieldAddr 0) [0],
                  .op 3 .loadPath [2],
-                 .op 4 (.alloc (.arr [.unit])) [],
+                 .op 4 (.alloc (.arr [.opaqueNil])) [],
                  .op 5 (.const (.int 64 0#64)) [],
                  .op 6 .indexAddr [4, 5],
                  .op 7 (.box 2515107422) [1],
@@ -160,7 +222,7 @@ def f3 : GoSSA.Func := {
                  .op 9 (.const (.int 64 0#64)) [],
                  .op 10 .strLen [4],
                  .op 11 .reslice [4, 9, 10],
-                 .op 12 (.appendSlice .unit) [3, 11],
+                 .op 12 (.appendSlice .opaqueNil) [3, 11],
                  .op 13 (.fieldAddr 0) [0],
                  .op 14 .storePath [13, 12],
                  .op 15 (.const .unit) []],
@@ -168,14 +230,14 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) PushName(s string) (status: complete) -/
-def f4 : GoSSA.Func := {
+def f5 : GoSSA.Func := {
   name := "Queue.PushName", params := [0, 1], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[.op 2 (.fieldAddr 0) [0],
                  .op 3 .loadPath [2],
-                 .op 4 (.alloc (.arr [.unit])) [],
+                 .op 4 (.alloc (.arr [.opaqueNil])) [],
                  .op 5 (.const (.int 64 0#64)) [],
                  .op 6 .indexAddr [4, 5],
                  .op 7 (.box 398550328) [1],
@@ -183,7 +245,7 @@ def f4 : GoSSA.Func := {
                  .op 9 (.const (.int 64 0#64)) [],
                  .op 10 .strLen [4],
                  .op 11 .reslice [4, 9, 10],
-                 .op 12 (.appendSlice .unit) [3, 11],
+                 .op 12 (.appendSlice .opaqueNil) [3, 11],
                  .op 13 (.fieldAddr 0) [0],
                  .op 14 .storePath [13, 12],
                  .op 15 (.const .unit) []],
@@ -191,7 +253,7 @@ def f4 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Sum() int (status: partial) -/
-def f5 : GoSSA.Func := {
+def f6 : GoSSA.Func := {
   name := "Queue.Sum", params := [0], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
@@ -212,7 +274,7 @@ def f5 : GoSSA.Func := {
     { params := [],
       instrs := #[.op 11 .indexAddr [4, 9],
                  .op 12 .loadPath [11],
-                 .op 14 .isBoxed [12]],
+                 .op 14 .nilKnown [12]],
       term := .br 14 4 [] 5 [] },
     -- 3: rangeindex.done
     { params := [],
@@ -224,7 +286,7 @@ def f5 : GoSSA.Func := {
       term := .jump 6 [] },
     -- 5: rangeindex.body.assert-unknown
     { params := [],
-      instrs := #[.havoc 13 4],
+      instrs := #[.havoc 13 6],
       term := .jump 6 [] },
     -- 6: rangeindex.body.assert-join
     { params := [],
@@ -233,7 +295,7 @@ def f5 : GoSSA.Func := {
   ] }
 
 /-- func(n int, name string, ret int) bool (status: complete) -/
-def f6 : GoSSA.Func := {
+def f7 : GoSSA.Func := {
   name := "SpecCountOne", params := [0, 1, 2], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -243,8 +305,74 @@ def f6 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
+/-- func(p *github.com/andreasfoo/go2lean/examples/iface.Pipe, s string) bool (status: partial) -/
+def f8 : GoSSA.Func := {
+  name := "SpecPipeKeepUnfiltered", params := [0, 1], nvals := 30, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 3 (.const (.ptr 0 [])) [],
+                 .op 4 .eq [0, 3]],
+      term := .br 4 1 [] 3 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const (.bool true)) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 6 (.fieldAddr 1) [0],
+                 .op 7 .loadPath [6],
+                 .op 8 .len [7],
+                 .op 9 (.const (.int 64 0#64)) [],
+                 .op 10 .sgt [8, 9],
+                 .op 11 (.const (.bool false)) []],
+      term := .br 10 5 [] 6 [11] },
+    -- 3: cond.false
+    { params := [],
+      instrs := #[.op 12 (.fieldAddr 0) [0],
+                 .op 13 .loadPath [12],
+                 .op 14 (.const (.ptr 0 [])) [],
+                 .op 15 .ne [13, 14]],
+      term := .br 15 4 [] 2 [] },
+    -- 4: cond.true
+    { params := [],
+      instrs := #[.op 16 (.fieldAddr 0) [0],
+                 .op 17 .loadPath [16],
+                 .op 18 (.fieldAddr 0) [17],
+                 .op 19 .loadPath [18],
+                 .op 21 .nilKnown [19]],
+      term := .br 21 7 [] 8 [] },
+    -- 5: binop.rhs
+    { params := [],
+      instrs := #[.op 23 (.fieldAddr 1) [0],
+                 .op 24 .loadPath [23],
+                 .op 25 (.const (.int 64 1#64)) [],
+                 .op 26 .sub [8, 25],
+                 .op 27 .indexAddr [24, 26],
+                 .op 28 .loadPath [27],
+                 .op 29 .eq [28, 1]],
+      term := .jump 6 [29] },
+    -- 6: binop.done
+    { params := [2],
+      instrs := #[],
+      term := .ret 2 },
+    -- 7: cond.true.nil-known
+    { params := [],
+      instrs := #[.op 22 .isNilOpaque [19],
+                 .op 20 .not [22]],
+      term := .jump 9 [] },
+    -- 8: cond.true.nil-unknown
+    { params := [],
+      instrs := #[.havoc 20 7],
+      term := .jump 9 [] },
+    -- 9: cond.true.nil-join
+    { params := [],
+      instrs := #[],
+      term := .br 20 1 [] 2 [] }
+  ] }
+
 /-- func(q *github.com/andreasfoo/go2lean/examples/iface.Queue, v int) bool (status: partial) -/
-def f7 : GoSSA.Func := {
+def f9 : GoSSA.Func := {
   name := "SpecQueuePushLast", params := [0, 1], nvals := 26, entry := 0,
   blocks := #[
     -- 0: entry
@@ -276,7 +404,7 @@ def f7 : GoSSA.Func := {
                  .op 15 .sub [8, 14],
                  .op 16 .indexAddr [13, 15],
                  .op 17 .loadPath [16],
-                 .op 19 .isBoxed [17]],
+                 .op 19 .nilKnown [17]],
       term := .br 19 7 [] 8 [] },
     -- 5: binop.rhs
     { params := [],
@@ -292,8 +420,8 @@ def f7 : GoSSA.Func := {
       term := .jump 9 [] },
     -- 8: if.done.assert-unknown
     { params := [],
-      instrs := #[.havoc 20 5,
-                 .havoc 21 6,
+      instrs := #[.havoc 20 8,
+                 .havoc 21 9,
                  .op 18 .mkTuple [20, 21]],
       term := .jump 9 [] },
     -- 9: if.done.assert-join
@@ -304,6 +432,28 @@ def f7 : GoSSA.Func := {
       term := .br 23 5 [] 6 [24] }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7], havocWidths := #[64, 64, 64, 1, 64, 64, 1] }
+/-- func(v any) int (status: partial) -/
+def f10 : GoSSA.Func := {
+  name := "Unwrap", params := [0], nvals := 3, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 .nilKnown [0]],
+      term := .br 2 1 [] 2 [] },
+    -- 1: entry.assert-boxed
+    { params := [],
+      instrs := #[.op 1 (.unbox 2515107422 false (.int 64 0#64)) [0]],
+      term := .jump 3 [] },
+    -- 2: entry.assert-unknown
+    { params := [],
+      instrs := #[.havoc 1 10],
+      term := .jump 3 [] },
+    -- 3: entry.assert-join
+    { params := [],
+      instrs := #[],
+      term := .ret 1 }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10], havocWidths := #[64, 64, 1, 1, 64, 1, 64, 1, 64, 1, 64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_iface

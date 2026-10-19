@@ -144,7 +144,11 @@ func typeTable(abi *contract.ABI, maxLen int) ([][]map[string]any, error) {
 // gen describes the Search.Gen for one parameter as JSON; the shape is
 // decoded by `genOfJson` in lean/Go2Lean/Driver.lean.
 func gen(abi *contract.ABI, p contract.ABIParam, maxLen int) (map[string]any, error) {
-	return genIn(abi, p, maxLen, nil)
+	g, err := genIn(abi, p, maxLen, nil)
+	if err == nil && p.Kind == contract.ABIOpaque && p.GoType == "context.Context" {
+		g["v"] = "nonnil" // M3 passes context.Background() for a context parameter
+	}
+	return g, err
 }
 
 // genIn is gen along a path of the struct types under construction: a
@@ -194,7 +198,15 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 		}
 		return map[string]any{"k": "str", "name": p.Go, "maxLen": maxLen}, nil
 	case contract.ABIOpaque:
-		return map[string]any{"k": "opaque", "name": p.Go}, nil
+		// M3 passes the zero value: nil for a func, map, channel or
+		// interface (its ABI zero literal is "nil"), so the model may treat
+		// the input as nil; other opaque values (floats, opaque structs)
+		// stay unknown.
+		v := "unknown"
+		if p.Zero == "nil" {
+			v = "nil"
+		}
+		return map[string]any{"k": "opaque", "name": p.Go, "v": v}, nil
 	case contract.ABIArray:
 		e, err := genIn(abi, p.ElemAsParam(), maxLen, open)
 		if err != nil {

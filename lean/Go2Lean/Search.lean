@@ -44,9 +44,11 @@ inductive Gen where
   /-- A struct of the named type `tyIdx` in the type table: the way a
   recursive type refers to itself. Generation stops at the depth budget. -/
   | ref (name : String) (tyIdx : Nat)
-  /-- A value the model does not look into (interface, map, func, chan):
-  always `.unit`. M3 passes the zero value. -/
-  | opaque (name : String)
+  /-- A value the model does not look into (interface, map, func, chan,
+  float): always `v`, which is `.opaqueNil` when M3 passes nil (the zero
+  value of a func, map, channel or interface), a non-nil marker for a
+  context (M3 passes `context.Background()`), else `.unit`. -/
+  | opaque (name : String) (v : Val)
   /-- A fixed-size array of `n` elements from `elem`. -/
   | arrOf (name : String) (elem : Gen) (n : Nat)
 
@@ -222,7 +224,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
       (.structv vs, g, heap)
     | none => (.unit, g, heap)
   | .nilptr _ => (.ptr 0 [], g, heap)
-  | .opaque _ => (.unit, g, heap)
+  | .opaque _ v => (v, g, heap)
   | .arrOf _ elem n =>
     -- Below the budget an array holds zero values of its element kind:
     -- the generator for the element at depth zero yields nil pointers and
@@ -368,7 +370,7 @@ def flatten : Gen → Val → List (String × Json)
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
-    | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n => n | .arrOf n .. => n | .link n _ => n
+    | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n _ => n | .arrOf n .. => n | .link n _ => n
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -422,7 +424,7 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.nilptr name, v) => some (name, renderObj heap true v)
     | (.ref name _, v) => some (name, renderObj heap true v)
     | (.sliceOf name _ _, v) => some (name, renderObj heap true v)
-    | (.opaque name, _) => some (name, Json.null)
+    | (.opaque name _, _) => some (name, Json.null)
     | (.arrOf name _ _, v) => some (name, renderObj heap true v)
     | _ => none
 
@@ -439,6 +441,7 @@ partial def renderVal : Val → Json
   | .structv fs => Json.arr (fs.map renderVal).toArray
   | .arr es => Json.arr (es.map renderVal).toArray
   | .boxed t v => Json.mkObj [("type", (t : Json)), ("value", renderVal v)]
+  | .opaqueNil => Json.str "nil"
   | .unit => Json.str "unit"
 
 def modelOutput : Outcome → Option Val → Json
@@ -594,7 +597,7 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
   | .str _ maxLen' =>
     (if maxLen' == 0 then [[]] else smallStrs extra pool).map fun bs heap => strAlloc heap bs
   | .nilptr _ => [fun heap => (.ptr 0 [], heap)]
-  | .opaque _ => [fun heap => (.unit, heap)]
+  | .opaque _ v => [fun heap => (v, heap)]
   | .arrOf _ elem n =>
     (enumList extra maxLen pool table (depth - 1) allowNil (List.replicate n elem)).map fun build heap =>
       let (vs, heap) := build heap
@@ -655,7 +658,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     | some fields => structSize extra maxLen pool table depth allowNil fields
     | none => 1
   | .str _ maxLen' => if maxLen' == 0 then 1 else (smallStrs extra pool).length
-  | .opaque _ => 1
+  | .opaque .. => 1
   | .arrOf _ elem n => (genSize extra maxLen pool table (depth - 1) allowNil elem) ^ n
   | .nilptr _ => 1
 where

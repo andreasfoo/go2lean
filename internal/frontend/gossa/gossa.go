@@ -366,10 +366,11 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 	}
 	switch x.(type) {
 	case *ssa.Function, *ssa.Builtin:
-		// A function used as a value: opaque, like any func-typed value.
+		// A function used as a value: opaque, like any func-typed value,
+		// and never nil.
 		v := t.fresh()
 		t.vars[x] = v
-		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.Opaque{}}})
+		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return v, nil
 	}
 	c, ok := x.(*ssa.Const)
@@ -405,6 +406,8 @@ func constVal(c *ssa.Const) (ir.Val, error) {
 			return ir.NilPtr{}, nil
 		case isSlice(c.Type()):
 			return ir.NilSlice{}, nil
+		case isNilable(c.Type()):
+			return ir.OpaqueNil{}, nil
 		case isOpaqueType(c.Type()):
 			return ir.Opaque{}, nil
 		}
@@ -503,9 +506,14 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 			return fmt.Errorf("string operator %s not supported", x.Op)
 		}
 	} else if isOpaqueType(x.X.Type()) {
-		// Comparing interfaces, maps, funcs or channels, or arithmetic on
-		// floats: the model does not look inside them, so the outcome is
-		// havoc (a bool, or an opaque number).
+		if eqOp && isNilable(x.X.Type()) {
+			if v, ok := nilOperand(x); ok {
+				return t.nilCompare(x, v)
+			}
+		}
+		// Comparing interfaces, maps, funcs or channels with anything but
+		// nil, or arithmetic on floats: the model does not look inside
+		// them, so the outcome is havoc (a bool, or an opaque number).
 		return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
 	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()) || isSlice(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
@@ -554,14 +562,29 @@ func havocKind(t types.Type) (int, bool) {
 // funcs. The function is marked partial with the assumption spelled out;
 // this is an under-approximation M3 may expose as spurious results.
 func assumedValue(t types.Type) (ir.Val, bool) {
+	if isNilable(t) {
+		return ir.Opaque{}, true // unknown, not the nil zero value
+	}
 	if z, ok := zeroVal(t); ok {
 		return z, true
 	}
-	switch t.Underlying().(type) {
-	case *types.Interface, *types.Map, *types.Signature, *types.Chan:
-		return ir.Opaque{}, true
-	}
 	return nil, false
+}
+
+// isNilable says whether t is a func, map, channel, interface (other than
+// error, modelled on its own) or unsafe.Pointer type: an opaque type whose
+// values the model tells apart only as nil, non-nil or unknown.
+func isNilable(t types.Type) bool {
+	if isError(t) {
+		return false
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Interface, *types.Map, *types.Signature, *types.Chan:
+		return true
+	case *types.Basic:
+		return u.Kind() == types.UnsafePointer
+	}
+	return false
 }
 
 func (t *fnState) havoc(x ssa.Value, site, reason, goHint string) error {
@@ -674,21 +697,21 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			return nil
 		}
 		t.issue("interface value %s is opaque (not modelled)", x.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MakeMap:
 		t.issue("map %s is opaque (not modelled)", x.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MakeClosure:
 		// A closure is a func value: opaque, and a call through it is an
 		// unmodelled call (havoc results, effects ignored).
 		t.issue("closure %s is opaque (not modelled)", x.Fn.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MakeChan:
 		t.issue("channel %s is opaque (not modelled)", x.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MapUpdate:
 		t.issue("map update %s[%s] ignored (maps are opaque)", x.Map.Name(), x.Key.Name())
@@ -755,8 +778,13 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: parts})
 		return nil
 	case *ssa.ChangeInterface:
-		t.issue("interface value %s is opaque (not modelled)", x.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		// Converting between interface types keeps the value: nil stays
+		// nil, a boxed value keeps its dynamic type.
+		v, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		t.vars[x] = v
 		return nil
 	case *ssa.TypeAssert:
 		if zero, ok := zeroVal(x.AssertedType); ok && !types.IsInterface(x.AssertedType) {
@@ -1200,8 +1228,9 @@ func typeTag(t types.Type) uint32 {
 }
 
 // typeAssert lowers x.(T) for a concrete T. A value the model boxed itself
-// is unboxed (a mismatch gives the zero value and false, or panics); any
-// other interface value (an input, a havoc) gives a havoc result as before.
+// is unboxed, a nil interface fails; a failure gives the zero value and
+// false, or panics. An interface value the model knows nothing about (the
+// result of an unmodelled call) gives a havoc result.
 func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	v, err := t.val(x.X)
 	if err != nil {
@@ -1209,7 +1238,7 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	}
 	dst := t.def(x)
 	isBoxed := t.fresh()
-	t.emit(ir.Instr{Dst: isBoxed, Op: ir.Simple("isBoxed"), Args: []ir.Var{v}})
+	t.emit(ir.Instr{Dst: isBoxed, Op: ir.Simple("nilKnown"), Args: []ir.Var{v}})
 	boxed := len(t.out.Blocks)
 	other, join := boxed+1, boxed+2
 	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isBoxed, T: boxed, F: other}
@@ -1226,6 +1255,55 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	if err := t.havocResult(dst, x, "type assertion", "opaque-assert"); err != nil {
 		return err
 	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
+}
+
+// nilOperand returns the operand compared with a nil constant in x, if
+// one side of x is that constant.
+func nilOperand(x *ssa.BinOp) (ssa.Value, bool) {
+	if c, ok := x.Y.(*ssa.Const); ok && c.Value == nil {
+		return x.X, true
+	}
+	if c, ok := x.X.(*ssa.Const); ok && c.Value == nil {
+		return x.Y, true
+	}
+	return nil, false
+}
+
+// nilCompare lowers v == nil or v != nil for a func, map, channel or
+// interface value: decided when the model knows the value's nil-ness (nil
+// inputs, values the program built), havoc otherwise.
+func (t *fnState) nilCompare(x *ssa.BinOp, v ssa.Value) error {
+	val, err := t.val(v)
+	if err != nil {
+		return err
+	}
+	dst := t.def(x)
+	known := t.fresh()
+	t.emit(ir.Instr{Dst: known, Op: ir.Simple("nilKnown"), Args: []ir.Var{val}})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: known, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".nil-known"},
+		ir.Block{Name: name + ".nil-unknown"},
+		ir.Block{Name: name + ".nil-join"})
+	t.cur = &t.out.Blocks[yes]
+	if x.Op == token.EQL {
+		t.emit(ir.Instr{Dst: dst, Op: ir.Simple("isNilOpaque"), Args: []ir.Var{val}})
+	} else {
+		isNil := t.fresh()
+		t.emit(ir.Instr{Dst: isNil, Op: ir.Simple("isNilOpaque"), Args: []ir.Var{val}})
+		t.emit(ir.Instr{Dst: dst, Op: ir.Simple("not"), Args: []ir.Var{isNil}})
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	t.issue("nil comparison %s on a value of unknown nil-ness is havoc", x.Name())
+	idx := t.prog.newHavoc(ir.HavocBool, t.f.Name()+": nil comparison", "opaque-op", "")
+	t.emit(ir.Instr{Dst: dst, HavocSite: idx})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]
 	return nil
@@ -1501,6 +1579,9 @@ func zeroVal(t types.Type) (ir.Val, bool) {
 	}
 	if isString(t) {
 		return ir.EmptyStr{}, true
+	}
+	if isNilable(t) {
+		return ir.OpaqueNil{}, true
 	}
 	if isOpaqueType(t) {
 		return ir.Opaque{}, true

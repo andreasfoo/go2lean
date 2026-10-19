@@ -63,9 +63,9 @@ def f0 : GoSSA.Func := {
       term := .ret 13 }
   ] }
 
-/-- func(s string) (int, error) (status: partial) -/
+/-- func(s string) (int, error) (status: complete) -/
 def f1 : GoSSA.Func := {
-  name := "Parse", params := [0], nvals := 31, entry := 0,
+  name := "Parse", params := [0], nvals := 30, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -90,28 +90,27 @@ def f1 : GoSSA.Func := {
       term := .br 12 3 [] 4 [] },
     -- 3: if.then
     { params := [],
-      instrs := #[.op 13 (.alloc (.arr (List.replicate 2 .unit))) [],
+      instrs := #[.op 13 (.alloc (.arr (List.replicate 2 .opaqueNil))) [],
                  .op 14 (.const (.int 64 0#64)) [],
                  .op 15 .indexAddr [13, 14],
                  .op 16 (.box 398550328) [0],
                  .op 17 .storePath [15, 16],
                  .op 18 (.const (.int 64 1#64)) [],
                  .op 19 .indexAddr [13, 18],
-                 .op 20 (.const .unit) [],
-                 .op 21 .storePath [19, 20],
-                 .op 22 (.const (.int 64 0#64)) [],
-                 .op 23 .strLen [13],
-                 .op 24 .reslice [13, 22, 23],
-                 .op 25 (.strConst [98, 97, 100, 32, 110, 117, 109, 98, 101, 114, 32, 37, 113, 58, 32, 37, 119]) [],
-                 .op 26 .errNew [25, 24],
-                 .op 27 (.const (.int 64 0#64)) [],
-                 .op 28 .mkTuple [27, 26]],
-      term := .ret 28 },
+                 .op 20 .storePath [19, 10],
+                 .op 21 (.const (.int 64 0#64)) [],
+                 .op 22 .strLen [13],
+                 .op 23 .reslice [13, 21, 22],
+                 .op 24 (.strConst [98, 97, 100, 32, 110, 117, 109, 98, 101, 114, 32, 37, 113, 58, 32, 37, 119]) [],
+                 .op 25 .errNew [24, 23],
+                 .op 26 (.const (.int 64 0#64)) [],
+                 .op 27 .mkTuple [26, 25]],
+      term := .ret 27 },
     -- 4: if.done
     { params := [],
-      instrs := #[.op 29 (.const (.err false)) [],
-                 .op 30 .mkTuple [9, 29]],
-      term := .ret 30 }
+      instrs := #[.op 28 (.const (.err false)) [],
+                 .op 29 .mkTuple [9, 28]],
+      term := .ret 29 }
   ] }
 
 /-- func(s string, ret0 int, ret1 error) bool (status: complete) -/

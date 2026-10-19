@@ -38,6 +38,10 @@ inductive Val where
   (a hash of the Go type's name, the same in every package). Interface
   values the model did not build itself (inputs, havoc) are `unit`. -/
   | boxed (tag : Nat) (v : Val)
+  /-- A nil func, map, channel or interface value. A non-nil one the
+  program built itself is `boxed` (tag 0 for funcs, maps and channels);
+  `unit` is one the model knows nothing about. -/
+  | opaqueNil
   | unit
   deriving Repr
 
@@ -165,6 +169,10 @@ inductive Op where
   `commaOk` the result is `(v, ok)` and a mismatch gives `(zero, false)`,
   without it a mismatch panics. -/
   | unbox (tag : Nat) (commaOk : Bool) (zero : Val)
+  /-- Is it known whether this func/map/channel/interface value is nil? -/
+  | nilKnown
+  /-- Is this func/map/channel/interface value nil? (Only on known values.) -/
+  | isNilOpaque
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -199,6 +207,9 @@ def eqVal : Val → Val → Option Bool
   | .err a, .err b => some (a == b)
   | .ptr r p, .ptr r' p' => some (r == r' && p == p')
   | .boxed t v, .boxed t' v' => if t == t' then eqVal v v' else some false
+  | .opaqueNil, .opaqueNil => some true
+  | .opaqueNil, .boxed .. => some false
+  | .boxed .., .opaqueNil => some false
   -- Go only compares slices against nil: equal when both are nil.
   | .slice r .., .slice r' .. => some ((r == 0) == (r' == 0))
   | .unit, .unit => none -- opaque values: the frontend havocs these comparisons
@@ -400,6 +411,10 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     if t == tag then .ok (if commaOk then .tuple [v, .bool true] else v)
     else if commaOk then .ok (.tuple [zero, .bool false])
     else .panic .typeAssertion
+  | .unbox _ commaOk zero, [.opaqueNil] =>
+    if commaOk then .ok (.tuple [zero, .bool false]) else .panic .typeAssertion
+  | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
+  | .isNilOpaque, [x] => .ok (.bool (match x with | .opaqueNil => true | _ => false))
   | .add, args => binInt (· + ·) args
   | .sub, args => binInt (· - ·) args
   | .mul, args => binInt (· * ·) args

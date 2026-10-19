@@ -24,28 +24,40 @@ def f0 : GoSSA.Func := {
 
 /-- func(v any, m map[string]int) string (status: partial) -/
 def f1 : GoSSA.Func := {
-  name := "Describe", params := [0, 1], nvals := 10, entry := 0,
+  name := "Describe", params := [0, 1], nvals := 11, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
-      instrs := #[.havoc 2 0],
-      term := .br 2 3 [] 2 [] },
+      instrs := #[.op 3 .nilKnown [0]],
+      term := .br 3 4 [] 5 [] },
     -- 1: if.then
     { params := [],
-      instrs := #[.op 3 (.strConst [101, 109, 112, 116, 121]) []],
-      term := .ret 3 },
+      instrs := #[.op 4 (.strConst [101, 109, 112, 116, 121]) []],
+      term := .ret 4 },
     -- 2: if.done
     { params := [],
-      instrs := #[.op 4 (.strConst [115, 101, 116]) []],
-      term := .ret 4 },
+      instrs := #[.op 5 (.strConst [115, 101, 116]) []],
+      term := .ret 5 },
     -- 3: cond.true
     { params := [],
-      instrs := #[.havoc 5 1,
-                 .op 6 (.const (.int 64 16#64)) [],
-                 .op 7 .urem [5, 6],
-                 .op 8 (.const (.int 64 0#64)) [],
-                 .op 9 .eq [7, 8]],
-      term := .br 9 1 [] 2 [] }
+      instrs := #[.havoc 6 1,
+                 .op 7 (.const (.int 64 16#64)) [],
+                 .op 8 .urem [6, 7],
+                 .op 9 (.const (.int 64 0#64)) [],
+                 .op 10 .eq [8, 9]],
+      term := .br 10 1 [] 2 [] },
+    -- 4: entry.nil-known
+    { params := [],
+      instrs := #[.op 2 .isNilOpaque [0]],
+      term := .jump 6 [] },
+    -- 5: entry.nil-unknown
+    { params := [],
+      instrs := #[.havoc 2 0],
+      term := .jump 6 [] },
+    -- 6: entry.nil-join
+    { params := [],
+      instrs := #[],
+      term := .br 2 3 [] 2 [] }
   ] }
 
 /-- func(ctx context.Context, m map[string]int, keys []string) int (status: partial) -/
