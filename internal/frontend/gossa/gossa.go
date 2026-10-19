@@ -1346,6 +1346,32 @@ func (t *fnState) recordExit(x *ssa.Return) {
 	t.out.Exits = append(t.out.Exits, contract.ExitSite{Block: block, Line: line, ConstTrue: constTrue})
 }
 
+// stringEnum returns the string constants declared with type t in t's
+// package, for a named string type (at most 64, sorted); nil otherwise.
+func stringEnum(t types.Type) []string {
+	n, ok := t.(*types.Named)
+	if !ok || n.Obj().Pkg() == nil {
+		return nil
+	}
+	scope := n.Obj().Pkg().Scope()
+	var out []string
+	for _, name := range scope.Names() {
+		c, ok := scope.Lookup(name).(*types.Const)
+		if !ok || !types.Identical(c.Type(), t) || c.Val().Kind() != constant.String {
+			continue
+		}
+		v := constant.StringVal(c.Val())
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
+}
+
 // typeTag names a dynamic type in boxed interface values: a hash of the
 // type's fully qualified name, so every package of a linked model agrees.
 func typeTag(t types.Type) uint32 {
@@ -1935,7 +1961,7 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 	case isError(t):
 		return contract.ABIParam{Go: name, GoType: "error", Model: []string{name}, Kind: contract.ABIError}, nil
 	case isString(t):
-		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIString}, nil
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIString, Enum: stringEnum(t)}, nil
 	}
 	if w, signed, ok := intWidth(t); ok {
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Width: w, Signed: signed, Model: []string{name}, Kind: contract.ABIInt}, nil

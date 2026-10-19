@@ -198,7 +198,11 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 		if p.MaxLen < 0 {
 			return map[string]any{"k": "str", "name": p.Go, "maxLen": 0}, nil
 		}
-		return map[string]any{"k": "str", "name": p.Go, "maxLen": maxLen}, nil
+		g := map[string]any{"k": "str", "name": p.Go, "maxLen": maxLen}
+		if len(p.Enum) > 0 {
+			g["enum"] = p.Enum
+		}
+		return g, nil
 	case contract.ABIOpaque:
 		// M3 passes the zero value: nil for a func, map, channel or
 		// interface (its ABI zero literal is "nil"), so the model may treat
@@ -391,7 +395,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			cx, err := writeCx(ws, prop, res, "exhaustive", opts)
 			return cx, fmt.Sprintf("exhaustive: found at input %d", res.Trial), err
 		case res.Exhaustive:
-			domain := fmt.Sprintf("%.0f inputs: boundary values, mined literals and |v|<=8, slices up to length %d", res.Domain, res.MaxLen)
+			domain := fmt.Sprintf("%.0f inputs: boundary values, mined literals and |v|<=8, slices up to length %d, strings of a named type limited to its constants, \"\" and \"a\"", res.Domain, res.MaxLen)
 			if prop.Kind == contract.KindPostcondition {
 				_, checked := exitCounts(specExits, res.SpecExits)
 				domain += fmt.Sprintf("; %d of them got past the spec's guards", checked)

@@ -36,8 +36,9 @@ inductive Gen where
   occur. The Go side tells the two apart from the ABI path. -/
   | link (name : String) (pointee : Gen)
   /-- A string of up to `maxLen` bytes, drawn from the literal pool or a
-  small alphabet. -/
-  | str (name : String) (maxLen : Nat)
+  small alphabet; for a named string type, mostly one of the constants
+  `enum` declared for it. -/
+  | str (name : String) (maxLen : Nat) (enum : List (List Nat))
   /-- A pointer that is always nil (kept for ABI records that have no type
   table). -/
   | nilptr (name : String)
@@ -231,15 +232,20 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     -- empty slices, so the recursion ends there.
     let (elems, g, heap) := genList pf extra g heap pool table (depth - 1) allowNil (List.replicate n elem)
     (.arr elems, g, heap)
-  | .str _ maxLen =>
-    -- Half the time a pool literal or a neighbour of one (a byte dropped or
-    -- added, a mined integer appended: "port:" ++ "65536"), else random bytes,
-    -- which are plain digits one time in four. A bound of zero pins the
-    -- string to empty (a strings.Builder parameter).
+  | .str _ maxLen enum =>
+    -- A named string type: one of its constants three times in four.
+    -- Otherwise half the time a pool literal or a neighbour of one (a byte
+    -- dropped or added, a mined integer appended: "port:" ++ "65536"), else
+    -- random bytes, which are plain digits one time in four. A bound of
+    -- zero pins the string to empty (a strings.Builder parameter).
     let numbers := numberStrs extra
     let (pick, g) := randNat g 0 3
+    let (fromEnum, g) := randNat g 0 3
     let (bs, g) :=
       if maxLen == 0 then ([], g)
+      else if fromEnum < 3 && !enum.isEmpty then
+        let (i, g) := randNat g 0 (enum.length - 1)
+        (enum[i]!, g)
       else if pick < 2 && !pool.isEmpty then
         let (i, g) := randNat g 0 (pool.length - 1)
         let base := pool[i]!
@@ -426,7 +432,7 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.structv name _, v) => some (name, renderObj heap true v)
     | (.ptr name _, v) => some (name, renderObj heap true v)
     | (.link name _, v) => some (name, renderObj heap true v)
-    | (.str name _, v) => some (name, renderObj heap true v)
+    | (.str name .., v) => some (name, renderObj heap true v)
     | (.nilptr name, v) => some (name, renderObj heap true v)
     | (.ref name _, v) => some (name, renderObj heap true v)
     | (.sliceOf name _ _, v) => some (name, renderObj heap true v)
@@ -611,8 +617,12 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
           let (vs, heap) := build heap
           (.structv vs, heap)
     | none => [fun heap => (.unit, heap)]
-  | .str _ maxLen' =>
-    (if maxLen' == 0 then [[]] else smallStrs extra pool).map fun bs heap => strAlloc heap bs
+  | .str _ maxLen' enum =>
+    -- A named string type: its constants, the empty string and one other.
+    let strs := if maxLen' == 0 then [[]]
+      else if !enum.isEmpty then (enum ++ [[], [97]]).eraseDups
+      else smallStrs extra pool
+    strs.map fun bs heap => strAlloc heap bs
   | .nilptr _ => [fun heap => (.ptr 0 [], heap)]
   | .opaque _ v => [fun heap => (v, heap)]
   | .arrOf _ elem n =>
@@ -674,7 +684,9 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     match table[tyIdx]? with
     | some fields => structSize extra maxLen pool table depth allowNil fields
     | none => 1
-  | .str _ maxLen' => if maxLen' == 0 then 1 else (smallStrs extra pool).length
+  | .str _ maxLen' enum =>
+    if maxLen' == 0 then 1 else if !enum.isEmpty then (enum ++ [[], [97]]).eraseDups.length
+    else (smallStrs extra pool).length
   | .opaque .. => 1
   | .arrOf _ elem n => (genSize extra maxLen pool table (depth - 1) allowNil elem) ^ n
   | .nilptr _ => 1

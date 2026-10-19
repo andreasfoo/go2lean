@@ -284,6 +284,10 @@ type ABIParam struct {
 	// MaxLen, when negative, pins a string parameter to the empty string
 	// (strings.Builder: the test can only pass an empty one).
 	MaxLen int `json:"max_len,omitempty"`
+	// Enum lists the constants declared for a named string type in its
+	// package (anthropic.MessageParamRoleUser, ...): the generator draws
+	// mostly from them.
+	Enum []string `json:"enum,omitempty"`
 	// ExtraPkgs are the other import paths the Go type's spelling needs
 	// (a func or map type naming types of several packages).
 	ExtraPkgs []string `json:"extra_pkgs,omitempty"`
