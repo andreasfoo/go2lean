@@ -174,12 +174,26 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 					continue
 				}
 				callee := call.Common().StaticCallee()
-				if callee == nil || seen[callee] || callee.Pkg == nil || callee.Synthetic != "" ||
-					callee.Parent() != nil || callee.TypeParams().Len() > 0 || len(callee.TypeArgs()) > 0 ||
+				if callee == nil {
+					continue
+				}
+				// Instances of generic functions (SystemMessage[string]) have
+				// bodies with concrete types under InstantiateGenerics; their
+				// package is that of the generic origin.
+				instance := len(callee.TypeArgs()) > 0 && callee.Origin() != nil
+				if seen[callee] || (callee.Synthetic != "" && !instance) ||
+					callee.Parent() != nil || callee.TypeParams().Len() > 0 ||
 					isInit(callee.Name()) || len(callee.Blocks) == 0 {
 					continue
 				}
-				path := callee.Pkg.Pkg.Path()
+				pkg := callee.Pkg
+				if instance {
+					pkg = callee.Origin().Pkg
+				}
+				if pkg == nil {
+					continue
+				}
+				path := pkg.Pkg.Path()
 				if mainPaths[path] || isStdlib(path) {
 					continue
 				}
@@ -723,6 +737,8 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 		t.emit(ir.Instr{Dst: dst, HavocSite: idx})
 		return nil
 	}
+	// Every assumption below is logged when it runs: a marker havoc read.
+	t.emit(ir.Instr{Dst: t.fresh(), HavocSite: t.prog.newHavoc(ir.HavocAssumption, site+" (assumed)", "assumed", goHint)})
 	switch u := ty.Underlying().(type) {
 	case *types.Pointer:
 		if zero, ok := zeroVal(u.Elem()); ok {

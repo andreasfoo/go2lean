@@ -249,6 +249,10 @@ const (
 	HavocError  = 0
 	HavocBool   = 1
 	HavocString = 2
+	// HavocAssumption marks a value the model assumed (the zero value of an
+	// unmodelled call's result): reading it logs the assumption, so a spec
+	// verdict that depended on one is not taken as decided.
+	HavocAssumption = 3
 )
 
 // Instr is `Dst := Op(Args)`, or a havoc when Op is nil.

@@ -3,6 +3,7 @@ package stream
 import (
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/tingly-dev/tingly-box/internal/protocol/nonstream"
 	"github.com/tingly-dev/tingly-box/internal/protocol/wire"
 )
 
@@ -164,4 +165,157 @@ func SpecAnthropicToOpenAIConverterProcessEventParallelToolCallIndexes(c *anthro
 		return true // a hook suppressed one of them
 	}
 	return firstIdx != secondIdx
+}
+
+// Streaming and non-streaming consistency: an OpenAI Chat client that asks
+// for a stream should receive what a non-streaming client receives for
+// the same upstream message. The specs replay the message carried by the
+// random event as an Anthropic event stream through a fresh converter and
+// compare with nonstream.ConvertAnthropicBetaToOpenAIChat on the same
+// message. Blocks other than text, thinking and tool_use are skipped on
+// both sides.
+
+// replayed is what the stream converter emitted for one message.
+type replayed struct {
+	text, reasoning, finish string
+	calls                   []string
+}
+
+// replayMessage feeds bm to a fresh converter as message_start, one
+// start/delta/stop triple per block, message_delta with bm's stop reason
+// and message_stop, and collects the chunks.
+func replayMessage(bm anthropic.BetaMessage) replayed {
+	c := newAnthropicToOpenAIConverter(nil, "m", true, nil)
+	start := anthropic.BetaRawMessageStreamEventUnion{Type: "message_start"}
+	start.Message = bm
+	c.processEvent(&start)
+	for i, b := range bm.Content {
+		if b.Type != "text" && b.Type != "thinking" && b.Type != "tool_use" {
+			continue
+		}
+		cbs := anthropic.BetaRawMessageStreamEventUnion{Type: "content_block_start"}
+		cbs.Index = int64(i)
+		cbs.ContentBlock.Type = b.Type
+		cbs.ContentBlock.ID = b.ID
+		cbs.ContentBlock.Name = b.Name
+		c.processEvent(&cbs)
+		delta := anthropic.BetaRawMessageStreamEventUnion{Type: "content_block_delta"}
+		delta.Index = int64(i)
+		if b.Type == "text" {
+			delta.Delta.Type = "text_delta"
+			delta.Delta.Text = b.Text
+			c.processEvent(&delta)
+		}
+		if b.Type == "thinking" {
+			delta.Delta.Type = "thinking_delta"
+			delta.Delta.Thinking = b.Thinking
+			c.processEvent(&delta)
+		}
+		cbstop := anthropic.BetaRawMessageStreamEventUnion{Type: "content_block_stop"}
+		cbstop.Index = int64(i)
+		c.processEvent(&cbstop)
+	}
+	md := anthropic.BetaRawMessageStreamEventUnion{Type: "message_delta"}
+	md.Delta.StopReason = bm.StopReason
+	c.processEvent(&md)
+	stop := anthropic.BetaRawMessageStreamEventUnion{Type: "message_stop"}
+	c.processEvent(&stop)
+	var r replayed
+	for _, p := range c.pending {
+		chunk, isChunk := p.(wire.ChatStreamChunk)
+		if !isChunk || len(chunk.Choices) == 0 {
+			continue
+		}
+		ch := chunk.Choices[0]
+		r.text += ch.Delta.Content
+		r.reasoning += ch.Delta.ReasoningContent
+		for _, tc := range ch.Delta.ToolCalls {
+			if tc.ID != "" {
+				r.calls = append(r.calls, tc.ID+"/"+tc.Function.Name)
+			}
+		}
+		if ch.FinishReason != nil {
+			r.finish = *ch.FinishReason
+		}
+	}
+	return r
+}
+
+// nonStreamed is what the non-streaming converter returns for bm.
+func nonStreamed(bm anthropic.BetaMessage) (text, reasoning, finish string, calls []string, ok bool) {
+	ns := nonstream.ConvertAnthropicBetaToOpenAIChat(&bm, "m")
+	if len(ns.Choices) != 1 {
+		return "", "", "", nil, false
+	}
+	msg := ns.Choices[0].Message
+	for _, tc := range msg.ToolCalls {
+		calls = append(calls, tc.ID+"/"+tc.Function.Name)
+	}
+	return msg.Content, msg.ReasoningContent, ns.Choices[0].FinishReason, calls, true
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventStreamTextMatches: the
+// streamed content equals the non-streamed message content.
+func SpecAnthropicToOpenAIConverterProcessEventStreamTextMatches(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if event == nil {
+		return true
+	}
+	text, _, _, _, ok := nonStreamed(event.Message)
+	if !ok {
+		return true
+	}
+	return replayMessage(event.Message).text == text
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventStreamReasoningMatches: the
+// streamed reasoning_content equals the non-streamed one.
+func SpecAnthropicToOpenAIConverterProcessEventStreamReasoningMatches(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if event == nil {
+		return true
+	}
+	_, reasoning, _, _, ok := nonStreamed(event.Message)
+	if !ok {
+		return true
+	}
+	return replayMessage(event.Message).reasoning == reasoning
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventStreamToolCallsMatch: the
+// streamed tool calls (id and name, in order) equal the non-streamed ones.
+func SpecAnthropicToOpenAIConverterProcessEventStreamToolCallsMatch(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if event == nil {
+		return true
+	}
+	_, _, _, calls, ok := nonStreamed(event.Message)
+	if !ok {
+		return true
+	}
+	got := replayMessage(event.Message).calls
+	if len(got) != len(calls) {
+		return false
+	}
+	for i := range got {
+		if got[i] != calls[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventStreamFinishMatches: the
+// streamed finish_reason equals the non-streamed one (max_tokens excluded:
+// already confirmed by MaxTokensIsLength).
+func SpecAnthropicToOpenAIConverterProcessEventStreamFinishMatches(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if event == nil || event.Message.StopReason == "max_tokens" {
+		return true
+	}
+	_, _, finish, _, ok := nonStreamed(event.Message)
+	if !ok {
+		return true
+	}
+	return replayMessage(event.Message).finish == finish
 }

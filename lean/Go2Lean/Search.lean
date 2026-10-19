@@ -302,6 +302,7 @@ def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
   if w == 0 then .err (randBool g).1
   else if w == 1 then .bool (randBool g).1
   else if w == 2 then .str 0 0#64 0#64
+  else if w == 3 then .unit -- an assumption marker: the value is not used
   else
     let (v, _) := genBits .mixed [] g w
     .int w v
@@ -333,7 +334,11 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
           match runFunc p or h' spec (args ++ results) s fuel with
           | (.ok (.bool b'), _) => b' == b
           | _ => false
-        if s'.log.size > before && !decided then (.specUnknown, s', some v)
+        -- An assumed value (an unmodelled result taken as zero) is the same
+        -- under every havoc assignment, so agreement says nothing about it.
+        let assumed := (s'.log.toList.drop before).any fun (site, _, _) =>
+          p.havocWidths[site]? == some 3
+        if s'.log.size > before && (assumed || !decided) then (.specUnknown, s', some v)
         else if b then (.holds, s', some v) else (.violated, s', some v)
       | (.ok _, s) => (.specPanicked .modelStuck, s, some v)
       | (.panic k, s) => (.specPanicked k, s, some v)
