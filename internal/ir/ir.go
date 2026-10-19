@@ -153,6 +153,21 @@ type Extract struct{ I int }
 func (e Extract) Lean() string { return fmt.Sprintf("(.extract %d)", e.I) }
 
 // Alloc allocates a heap object initialised to Zero and yields a pointer.
+// FuncRef is a func value naming function ID of the program; the args are
+// the values a closure captures.
+type FuncRef struct{ ID int }
+
+func (f FuncRef) Lean() string { return fmt.Sprintf("(.funcRef %d)", f.ID) }
+
+// XFuncRef is a func value naming function ID of the model registered as
+// Key; the driver links it into a FuncRef.
+type XFuncRef struct {
+	Key string
+	ID  int
+}
+
+func (f XFuncRef) Lean() string { return fmt.Sprintf("(.xfuncRef %q %d)", f.Key, f.ID) }
+
 // Box stores a concrete value in an interface; Tag names its dynamic type.
 type Box struct{ Tag uint32 }
 
@@ -258,7 +273,17 @@ var StdlibOps = map[string]Op{
 	"strings.Fields":                 Simple("strFields"),
 	"strings.Join":                   Simple("strJoin"),
 	"strings.Repeat":                 Simple("strRepeat"),
+	"encoding/hex.EncodeToString":    Simple("hexEncode"),
+	// A random UUID: a fresh value, distinct from every other one a run
+	// draws (the real values collide with negligible probability).
+	"github.com/google/uuid.New": FreshArr{N: 16},
 }
+
+// FreshArr is an array of N bytes distinct from every other FreshArr value
+// of the run.
+type FreshArr struct{ N int }
+
+func (f FreshArr) Lean() string { return fmt.Sprintf("(.freshArr %d)", f.N) }
 
 // Havoc site kinds, encoded in Prog.HavocWidths: 0 is an opaque error, 1 a
 // bool, 2 a string, any other value the width of an integer.
@@ -297,6 +322,10 @@ const (
 	// TermXCall calls a function of another package of the same compile;
 	// the driver links it to a FuncId when it merges the models.
 	TermXCall
+	// TermCallV calls through the func value in FV: the function it names,
+	// its captured values first; a nil func panics, an unknown one takes
+	// the fallback.
+	TermCallV
 )
 
 // Term is a block terminator. Which fields are meaningful depends on Kind.
@@ -314,6 +343,7 @@ type Term struct {
 	// Callee is then an index into that package's program.
 	Callee    int
 	CalleePkg string
+	FV        Var
 	CArgs     []Var
 	Dst       Var
 	Next      int
@@ -341,6 +371,7 @@ type Func struct {
 	Status    contract.ModelStatus
 	Issues    []string
 	SpecFor   string
+	Closure   bool
 	Consts    []string         // integer literals, see contract.ModelFunc.Consts
 	StrConsts []string         // string literals
 	Calls     []int            // callees within the program, by function id
@@ -412,7 +443,7 @@ func (p *Prog) Validate() error {
 				if err := checkBlock(t.F, where+" br"); err != nil {
 					return err
 				}
-			case TermCall, TermXCall:
+			case TermCall, TermXCall, TermCallV:
 				if t.Kind == TermCall && (t.Callee < 0 || t.Callee >= len(p.Funcs)) {
 					return fmt.Errorf("%s: %s calls function %d of %d", f.Name, where, t.Callee, len(p.Funcs))
 				}

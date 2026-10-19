@@ -122,6 +122,9 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 
 ## Ground truth
 
+`go2lean run -deps -workspace out-reg ./examples/...` runs every row
+(`-deps` models the generic helpers of package `slices` the examples call).
+
 | package | planted bug | result |
 |---|---|---|
 | `examples/overflow` | `Sum` wraps on large inputs | `SpecSum` violated; confirmed with `ret = MinInt64` |
@@ -139,7 +142,8 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/xpkg` | `Share` guards negative totals, then calls `money.Pct` in another package, which divides by a zero total | confirmed through the linked model of both packages; `Bounded` (via `money.Clamp`) certified |
 | `examples/iface` | `Mixed` puts a string into a `[]any` queue whose `Sum` asserts every item to `int`; `Unwrap` asserts a nil `any` | all confirmed as `interface conversion` (`Sum` also on a queue holding nil items); `Count` (comma-ok assertions), a spec on `Push` and a spec on `Pipe.Keep` with a nil filter hook certified |
 | `examples/maps` | `Pick` indexes `names[pos[want]-1]` with the position of a missing or first name; `Registry.Put` writes to the nil map of a registry not made by `NewRegistry` | both confirmed (`index out of range [-1]`, `assignment to entry in nil map`); `Distinct` (`len` of a built map) and `Sum` (`delete`, `range`) certified |
-| `examples/globals` | `At` indexes a package-level slice nothing fills | confirmed (`index out of range`): a package-level variable with no initializer and no write anywhere in the program loads as its zero value; `Blank` (`==` on `[4]byte` against such a variable) certified |
+| `examples/globals` | `At` indexes a package-level slice nothing fills; `Slot` indexes four slots with a generator the package initializer sets to one that yields 7 (only a `...ForTest` helper replaces it) | both confirmed (`index out of range`): a package-level variable nothing writes loads as its zero value, one only the initializer sets to a constant or function loads as that; `Blank` (`==` on `[4]byte` against such a variable) certified |
+| `examples/closures` | `Last` returns the last element a closure appended, and indexes `-1` when it never ran | confirmed (`index out of range [-1]`); `HasNeg` (a function passed as a value), `HasAbove` (a closure through `slices.ContainsFunc`) and `Total` (a closure updating a captured variable) certified; `anyOf` with a nil func confirmed as `nil_opaque_input` |
 
 ## On a real module
 

@@ -72,6 +72,14 @@ abbrev FuncId := Nat
 /-- The heap: objects by reference. Index 0 is reserved for `nil`. -/
 abbrev Heap (Val : Type) := Array Val
 
+/-- What a call through a func value runs: a function of the program with
+the values its closure captured, a nil func (Go panics), or a value the
+model knows nothing about (the call is unmodelled). -/
+inductive Callee (Val : Type) where
+  | known (f : FuncId) (bound : List Val)
+  | nil
+  | unknown
+
 /-- What a dialect must provide. `Val` is the universe of runtime values,
 `Op` the instruction set, `denote` the meaning of one instruction applied to
 its operands. `Oracle` is read-only ambient state the dialect may consult
@@ -81,6 +89,8 @@ class Dialect (Op : Type) (Val Oracle : outParam Type) where
   /-- One instruction: reads the oracle, may read and write the heap. -/
   denote : Oracle → Heap Val → Op → List Val → Res (Val × Heap Val)
   toBool : Val → Option Bool
+  /-- The function a func value calls. -/
+  callee : Val → Callee Val := fun _ => .unknown
 
 inductive Instr (Op : Type) where
   /-- `dst := op args` -/
@@ -107,6 +117,10 @@ inductive Term where
   links it into a `call` when it merges the models, so the interpreter only
   sees one when a package was not compiled alongside. -/
   | xcall (pkg : String) (f : FuncId) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var) (fb : BlockId)
+  /-- A call through the func value in `fv`: the function it names, with
+  its captured values before `args`; a nil func panics, and a func value
+  the model knows nothing about takes the fallback. -/
+  | callv (fv : Var) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var) (fb : BlockId)
   deriving Repr
 
 structure Block (Op : Type) where
@@ -239,6 +253,20 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
               runBlock p or h fn fb (enter fn fb env []) { s' with heap := s.heap, stuck := s.stuck } fuel
             else (.panic k, s')
           | (.outOfFuel, s') => (.outOfFuel, s')
+        | .callv fv args dst next nargs fb =>
+          match Dialect.callee (Op := Op) env[fv]! with
+          | .nil => (.panic .nilDereference, s)
+          | .unknown => runBlock p or h fn fb (enter fn fb env []) s fuel
+          | .known f bound =>
+            match runFunc p or h f (bound ++ args.map (env[·]!)) s fuel with
+            | (.ok v, s') =>
+              let env := env.set! dst v
+              runBlock p or h fn next (enter fn next env nargs) s' fuel
+            | (.panic k, s') =>
+              if k.isStuck then
+                runBlock p or h fn fb (enter fn fb env []) { s' with heap := s.heap, stuck := s.stuck } fuel
+              else (.panic k, s')
+            | (.outOfFuel, s') => (.outOfFuel, s')
         | .xcall _ _ _ _ _ _ fb =>
           -- Not linked (the package was not compiled alongside): unmodelled.
           runBlock p or h fn fb (enter fn fb env []) s fuel

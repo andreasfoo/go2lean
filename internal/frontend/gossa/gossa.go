@@ -27,6 +27,7 @@ import (
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/ir"
+	"github.com/andreasfoo/go2lean/internal/ssaout"
 )
 
 const Frontend = "gossa"
@@ -149,6 +150,11 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 			units = append(units, unit{path, fns})
 		}
 	}
+	// Anonymous functions after the rest, so calls through closures can
+	// follow them; their FuncIds come last and move nothing.
+	for k := range units {
+		units[k].fns = withAnon(units[k].fns)
+	}
 	for _, u := range units {
 		for id, f := range u.fns {
 			xrefs[f.String()] = contract.XCall{Package: u.path, ID: id}
@@ -207,7 +213,9 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 				path := pkg.Pkg.Path()
 				// A compiled package's own functions are modelled already,
 				// except instances of its generic functions.
-				if (mainPaths[path] && !instance) || isStdlib(path) {
+				// The generic helpers of package slices (ContainsFunc,
+				// IndexFunc) are plain loops over func values: modelled.
+				if (mainPaths[path] && !instance) || (isStdlib(path) && !(instance && path == "slices")) {
 					continue
 				}
 				if _, std := ir.StdlibOps[callee.String()]; std {
@@ -229,18 +237,38 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*
 	return out
 }
 
-// zeroGlobals returns the package-level variables that keep their zero
-// value: no initializer and no use but a load anywhere in the program. With
-// bodies for every package (deps) that covers every variable; otherwise only
-// the unexported ones of the compiled packages, which no other package can
+// zeroGlobals returns the package-level variables whose value a load can
+// know: a variable no code writes holds its zero value (nil in the map), one
+// the package initializer sets to a constant or a function and nothing else
+// writes holds that value. Writes from test helpers (functions named
+// ...ForTest or ...ForTesting, and their closures) do not count. With bodies
+// for every package (deps) that covers every variable; otherwise only the
+// unexported ones of the compiled packages, which no other package can
 // reach.
-func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.Global]bool {
+func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.Global]ssa.Value {
 	touched := map[*ssa.Global]bool{}
+	inits := map[*ssa.Global]ssa.Value{}
 	for f := range ssautil.AllFunctions(sprog) {
+		if testHelper(f) {
+			continue
+		}
+		pkgInit := f.Name() == "init" && f.Synthetic != ""
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
 				if u, ok := in.(*ssa.UnOp); ok && u.Op == token.MUL {
 					continue
+				}
+				if st, ok := in.(*ssa.Store); ok && pkgInit {
+					if g, ok := st.Addr.(*ssa.Global); ok && g.Pkg == f.Pkg {
+						switch st.Val.(type) {
+						case *ssa.Const, *ssa.Function:
+							if _, twice := inits[g]; twice {
+								touched[g] = true
+							}
+							inits[g] = st.Val
+							continue
+						}
+					}
 				}
 				for _, op := range in.Operands(nil) {
 					if g, ok := (*op).(*ssa.Global); ok {
@@ -256,7 +284,7 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 			compiled[p] = true
 		}
 	}
-	out := map[*ssa.Global]bool{}
+	out := map[*ssa.Global]ssa.Value{}
 	for _, p := range sprog.AllPackages() {
 		if !deps && !compiled[p] {
 			continue
@@ -266,7 +294,35 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 			if !ok || touched[g] || (!deps && g.Object() != nil && g.Object().Exported()) {
 				continue
 			}
-			out[g] = true
+			out[g] = inits[g]
+		}
+	}
+	return out
+}
+
+// testHelper says whether f exists for tests only: named ...ForTest or
+// ...ForTesting, or a closure inside one.
+func testHelper(f *ssa.Function) bool {
+	for f.Parent() != nil {
+		f = f.Parent()
+	}
+	return strings.HasSuffix(f.Name(), "ForTest") || strings.HasSuffix(f.Name(), "ForTesting")
+}
+
+// withAnon appends the anonymous functions of fns (and theirs, nested)
+// that are not in fns yet.
+func withAnon(fns []*ssa.Function) []*ssa.Function {
+	seen := map[*ssa.Function]bool{}
+	for _, f := range fns {
+		seen[f] = true
+	}
+	out := append([]*ssa.Function(nil), fns...)
+	for i := 0; i < len(out); i++ {
+		for _, a := range out[i].AnonFuncs {
+			if !seen[a] {
+				seen[a] = true
+				out = append(out, a)
+			}
 		}
 	}
 	return out
@@ -308,7 +364,7 @@ func candidates(spkg *ssa.Package) []*ssa.Function {
 	return fns
 }
 
-func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]bool) (*ir.Prog, error) {
+func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]ssa.Value) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros}
 
@@ -416,7 +472,7 @@ type progState struct {
 	specFor func(*ssa.Function) string
 	// zeros holds the package-level variables nothing writes: a load of
 	// one is its zero value.
-	zeros map[*ssa.Global]bool
+	zeros map[*ssa.Global]ssa.Value
 }
 
 func (s *progState) newHavoc(width int, site, reason, goHint string) int {
@@ -477,6 +533,14 @@ func (t *fnState) translate() error {
 	t.out.SpecFor = t.prog.specFor(f)
 	if f.Blocks == nil {
 		return fmt.Errorf("no body")
+	}
+	// A closure receives its captured values before its parameters, as
+	// funcRef stores them.
+	t.out.Closure = f.Parent() != nil
+	for _, fv := range f.FreeVars {
+		v := t.fresh()
+		t.vars[fv] = v
+		t.out.Params = append(t.out.Params, v)
 	}
 	for _, p := range f.Params {
 		v := t.fresh()
@@ -542,12 +606,15 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 	if v, ok := t.vars[x]; ok {
 		return v, nil
 	}
-	switch x.(type) {
-	case *ssa.Function, *ssa.Builtin:
-		// A function used as a value: opaque, like any func-typed value,
-		// and never nil.
+	switch fn := x.(type) {
+	case *ssa.Function:
+		// A function used as a value: a reference a call through it follows
+		// when the function is modelled. Not cached, like a constant: the
+		// block that first used it need not dominate the next use.
 		v := t.fresh()
-		t.vars[x] = v
+		return v, t.funcValue(v, fn, nil)
+	case *ssa.Builtin:
+		v := t.fresh()
 		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return v, nil
 	}
@@ -985,11 +1052,14 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("makeMap")})
 		return nil
 	case *ssa.MakeClosure:
-		// A closure is a func value: opaque, and a call through it is an
-		// unmodelled call (havoc results, effects ignored).
-		t.issue("closure %s is opaque (not modelled)", x.Fn.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
-		return nil
+		// A closure is a func value holding the function and the values it
+		// captured (free variables are pointers to the shared cells).
+		fn, _ := x.Fn.(*ssa.Function)
+		if fn == nil {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			return nil
+		}
+		return t.funcValue(t.def(x), fn, x.Bindings)
 	case *ssa.MakeChan:
 		t.issue("channel %s is opaque (not modelled)", x.Name())
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
@@ -1020,7 +1090,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		// A deferred call to a function in the model would need the defer
 		// stack; one the model does not look into (mutex unlocks, closes,
 		// closures) is an effect it does not model anyway.
-		if callee := x.Call.StaticCallee(); callee != nil {
+		if callee := x.Call.StaticCallee(); callee != nil && callee.Parent() == nil {
 			if _, modelled := t.prog.ids[callee]; modelled {
 				return fmt.Errorf("deferred call to %s (defer of a modelled function)", callee.Name())
 			}
@@ -1275,7 +1345,15 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
 		if g, isGlobal := x.X.(*ssa.Global); isGlobal {
-			if t.prog.zeros[g] {
+			if init, known := t.prog.zeros[g]; known {
+				if init != nil {
+					v, err := t.val(init)
+					if err != nil {
+						return err
+					}
+					t.vars[x] = v
+					return nil
+				}
 				if zero, ok := zeroVal(x.Type()); ok {
 					t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: zero}})
 					return nil
@@ -1570,6 +1648,15 @@ func (t *fnState) call(x *ssa.Call) error {
 		}
 		return t.emitCall(x, ir.Term{Kind: ir.TermCall, Callee: id}, callee.String())
 	}
+	if callee == nil && !x.Call.IsInvoke() {
+		// A call through a func value: the model follows the function it
+		// names, if it knows it.
+		fv, err := t.val(x.Call.Value)
+		if err != nil {
+			return err
+		}
+		return t.emitCall(x, ir.Term{Kind: ir.TermCallV, FV: fv}, x.Call.Value.Name())
+	}
 	if callee == nil {
 		// fall through to the unmodelled cases below
 	} else if xr, ok := t.prog.xrefs[callee.String()]; ok && xr.Package != t.prog.prog.Package {
@@ -1788,7 +1875,12 @@ func (t *fnState) nilCompare(x *ssa.BinOp, v ssa.Value) error {
 // the heap are modelled too.
 func (t *fnState) emitCall(x *ssa.Call, term ir.Term, name string) error {
 	var args []ir.Var
-	for _, a := range x.Call.Args {
+	callArgs := x.Call.Args
+	if mc, ok := x.Call.Value.(*ssa.MakeClosure); ok && term.Kind != ir.TermCallV {
+		// A closure called directly: its captured values come first.
+		callArgs = append(append([]ssa.Value(nil), mc.Bindings...), callArgs...)
+	}
+	for _, a := range callArgs {
 		v, err := t.val(a)
 		if err != nil {
 			return err
@@ -1814,6 +1906,37 @@ func (t *fnState) emitCall(x *ssa.Call, term ir.Term, name string) error {
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: next}
 	t.cur = &t.out.Blocks[next]
+	return nil
+}
+
+// funcValue binds dst to the func value of fn capturing bindings: a
+// reference into the model when fn is modelled, here or in a sibling
+// package, else a func value the model knows nothing about (non-nil).
+func (t *fnState) funcValue(dst ir.Var, fn *ssa.Function, bindings []ssa.Value) error {
+	var args []ir.Var
+	for _, b := range bindings {
+		v, err := t.val(b)
+		if err != nil {
+			return err
+		}
+		args = append(args, v)
+	}
+	if id, ok := t.prog.ids[fn]; ok {
+		if !slices.Contains(t.out.Calls, id) {
+			t.out.Calls = append(t.out.Calls, id)
+		}
+		t.emit(ir.Instr{Dst: dst, Op: ir.FuncRef{ID: id}, Args: args})
+		return nil
+	}
+	if xr, ok := t.prog.xrefs[fn.String()]; ok && xr.Package != t.prog.prog.Package {
+		if !slices.Contains(t.out.XCalls, xr) {
+			t.out.XCalls = append(t.out.XCalls, xr)
+		}
+		t.emit(ir.Instr{Dst: dst, Op: ir.XFuncRef{Key: ssaout.RegistryKey(Frontend, xr.Package), ID: xr.ID}, Args: args})
+		return nil
+	}
+	t.issue("func value %s is opaque (not modelled)", fn.Name())
+	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: ir.OpaqueNonNil{}}})
 	return nil
 }
 

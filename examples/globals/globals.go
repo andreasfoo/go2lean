@@ -14,3 +14,15 @@ func Blank(id [4]byte) bool { return id == none }
 // At returns entry i of the table. Bug: the table is never filled, so
 // every index is out of range.
 func At(i int) int { return table[i] }
+
+// gen is set by the package initializer; only a test helper replaces it.
+var gen = defaultGen
+
+func defaultGen() int { return 7 }
+
+// SetGenForTest swaps the generator in tests.
+func SetGenForTest(f func() int) { gen = f }
+
+// Slot returns the slot the generator picks. Bug: the generator yields 7,
+// past the four slots.
+func Slot(slots [4]int) int { return slots[gen()] }

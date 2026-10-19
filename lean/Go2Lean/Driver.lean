@@ -91,6 +91,10 @@ def runSpec (p : GoSSA.Prog) (s : Spec) : IO UInt32 := do
 def xrefs (p : GoSSA.Prog) : List String :=
   p.funcs.foldl (init := []) fun acc fn =>
     fn.blocks.foldl (init := acc) fun acc blk =>
+      let acc := blk.instrs.foldl (init := acc) fun acc i =>
+        match i with
+        | .op _ (.xfuncRef pkg _) _ => if acc.contains pkg then acc else pkg :: acc
+        | _ => acc
       match blk.term with
       | .xcall pkg .. => if acc.contains pkg then acc else pkg :: acc
       | _ => acc
@@ -105,6 +109,11 @@ def shiftFuncs (p : GoSSA.Prog) (fbase hbase : Nat) (base : String → Option Na
       { blk with
         instrs := blk.instrs.map fun
           | .havoc dst site => .havoc dst (site + hbase)
+          | .op dst (.funcRef f) args => .op dst (.funcRef (f + fbase)) args
+          | .op dst (.xfuncRef pkg f) args =>
+            match base pkg with
+            | some b => .op dst (.funcRef (f + b)) args
+            | none => .op dst (.xfuncRef pkg f) args
           | i => i
         term := match blk.term with
           | .call f args dst next nargs fb => .call (f + fbase) args dst next nargs fb

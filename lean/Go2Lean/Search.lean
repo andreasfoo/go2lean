@@ -129,34 +129,56 @@ def alphabet : Array Nat := #[97, 98, 99, 65, 66, 48, 49, 57, 32, 45, 95, 46, 47
 /-- The depth budget a top-level argument starts with. -/
 def topDepth : Nat := 4
 
-/-- The SDKs of OpenAI and Anthropic spell a union as a struct whose
-pointer fields are all named `Of<Variant>`: exactly one is set. -/
-def Gen.isVariant : Gen → Bool
-  | .ptr name _ => name.startsWith "Of"
-  | _ => false
+/-- The field name a generator stands for. -/
+def Gen.name : Gen → String
+  | .int n .. | .bool n | .err n | .slice n .. | .sliceOf n .. | .structv n _ | .ptr n _
+  | .link n _ | .str n .. | .nilptr n | .ref n _ | .opaque n _ | .arrOf n .. => n
 
-/-- The number of `Of<Variant>` pointer fields; two or more make a union. -/
+/-- The SDKs of OpenAI and Anthropic spell a union as a struct whose
+fields are all named `Of<Variant>` (pointers, slices, `param.Opt` values):
+exactly one is set. -/
+def Gen.isVariant (g : Gen) : Bool :=
+  let n := g.name
+  n.startsWith "Of" && ((n.drop 2).front.isUpper)
+
+/-- The number of `Of<Variant>` fields; two or more make a union. -/
 def variantCount (fields : List Gen) : Nat := (fields.filter Gen.isVariant).length
 
+/-- A generator of the zero value of `g`'s type: nil pointers and slices,
+zero numbers, empty strings, structs of zero fields. -/
+partial def zeroGen (table : TypeTable) : Gen → Gen
+  | .ptr n _ | .link n _ => .nilptr n
+  | .slice n .. | .sliceOf n .. => .opaque n (.slice 0 0#64 0#64 0#64)
+  | .int n w _ => .opaque n (.int w 0)
+  | .bool n => .opaque n (.bool false)
+  | .err n => .opaque n (.err false)
+  | .str n .. => .str n 0 []
+  | .structv n fs => .structv n (fs.map (zeroGen table))
+  | .ref n idx =>
+    match table[idx]? with
+    | some fs => .structv n (fs.map (zeroGen table))
+    | none => .ref n idx
+  | g => g
+
 /-- The fields of a union with only its `k`-th variant live: the other
-variant pointers become nil. -/
-def selectVariant (fields : List Gen) (k : Nat) : List Gen :=
+variants take their zero values. -/
+def selectVariant (table : TypeTable) (fields : List Gen) (k : Nat) : List Gen :=
   let rec go (fs : List Gen) (i : Nat) : List Gen :=
     match fs with
     | [] => []
     | f :: rest =>
       if f.isVariant then
-        (if i == k then f else match f with | .ptr name _ => .nilptr name | g => g) :: go rest (i + 1)
+        (if i == k then f else zeroGen table f) :: go rest (i + 1)
       else f :: go rest i
   go fields 0
 
 /-- The field generators of a struct, with one union variant chosen at
 random when the struct is a union. -/
-def chooseFields (g : StdGen) (fields : List Gen) : List Gen × StdGen :=
+def chooseFields (table : TypeTable) (g : StdGen) (fields : List Gen) : List Gen × StdGen :=
   let n := variantCount fields
   if n ≥ 2 then
     let (k, g) := randNat g 0 (n - 1)
-    (selectVariant fields k, g)
+    (selectVariant table fields k, g)
   else (fields, g)
 
 /-- Generate one value. Slices and pointees are materialised on the heap,
@@ -196,7 +218,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 len) (BitVec.ofNat 64 (len + extraCap)), g, heap)
     | _ => (.unit, g, heap)
   | .structv _ fields =>
-    let (fields, g) := chooseFields g fields
+    let (fields, g) := chooseFields table g fields
     let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
     (.structv vs, g, heap)
   | .ptr _ pointee =>
@@ -220,7 +242,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
   | .ref _ tyIdx =>
     match table[tyIdx]? with
     | some fields =>
-      let (fields, g) := chooseFields g fields
+      let (fields, g) := chooseFields table g fields
       let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
       (.structv vs, g, heap)
     | none => (.unit, g, heap)
@@ -659,7 +681,7 @@ where
   fields as they are. -/
   enumVariants (fields : List Gen) : List (List Gen) :=
     let n := variantCount fields
-    if n ≥ 2 then (List.range n).map (selectVariant fields) else [fields]
+    if n ≥ 2 then (List.range n).map (selectVariant table fields) else [fields]
   enumList (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat)
       (allowNil : Bool) : List Gen → List (Heap Val → List Val × Heap Val)
     | [] => [fun heap => ([], heap)]
@@ -723,7 +745,7 @@ where
       (allowNil : Bool) (fields : List Gen) : Nat :=
     let product (fs : List Gen) := fs.foldl (fun acc f => acc * genSize extra maxLen pool table depth allowNil f) 1
     let n := variantCount fields
-    if n ≥ 2 then ((List.range n).map fun k => product (selectVariant fields k)).sum else product fields
+    if n ≥ 2 then ((List.range n).map fun k => product (selectVariant table fields k)).sum else product fields
 
 def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)
     (table : TypeTable := #[]) (allowNil : Bool := true) : Nat :=

@@ -140,6 +140,12 @@ inductive Op where
   | strAtoi
   /-- `strconv.Itoa`. -/
   | strItoa
+  /-- `hex.EncodeToString(b)`: two lowercase hex digits per byte. -/
+  | hexEncode
+  /-- An array of `n` bytes distinct from every other `freshArr` value of
+  the run (a random UUID): the bytes spell the heap size, which the op
+  grows by one. -/
+  | freshArr (n : Nat)
   | strIndexByte | strLastIndex | strCount | strEqualFold
   | strTrim | strTrimLeft | strTrimRight
   | strToLower | strToUpper | strReplaceAll
@@ -163,6 +169,12 @@ inductive Op where
   -- interfaces
   /-- Store a concrete value of dynamic type `tag` in an interface. -/
   | box (tag : Nat)
+  /-- A func value naming function `f` of the program, capturing the
+  arguments (a closure's free variables). -/
+  | funcRef (f : Nat)
+  /-- A func value naming function `f` of the model registered as `pkg`;
+  the driver links it into a `funcRef`, else it is an unknown non-nil func. -/
+  | xfuncRef (pkg : String) (f : Nat)
   /-- Did the model build this interface value (so its dynamic type is known)? -/
   | isBoxed
   /-- `x.(T)` for a concrete `T` of tag `tag` on a boxed value; with
@@ -444,6 +456,8 @@ def asIndex : Val → Option (BitVec 64)
 /-- Pure instructions: no heap access. -/
 def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .const v, [] => .ok v
+  | .funcRef f, bound => .ok (.boxed 0 (.tuple (.int 64 (BitVec.ofNat 64 f) :: bound)))
+  | .xfuncRef .., _ => .ok (.boxed 0 .unit)
   | .box tag, [v] => .ok (.boxed tag v)
   | .isBoxed, [x] => .ok (.bool (match x with | .boxed .. => true | _ => false))
   | .unbox tag commaOk zero, [.boxed t v] =>
@@ -777,6 +791,16 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     match strBytes heap a, strBytes heap b with
     | some x, some y => .ok (strAlloc heap (x ++ y))
     | _, _ => .panic .modelStuck
+  | .hexEncode, [.slice ref off len _] =>
+    match strBytes heap (.str ref off len) with
+    | some x =>
+      let digit (d : Nat) := if d < 10 then 48 + d else 87 + d
+      .ok (strAlloc heap (x.flatMap fun b => [digit (b / 16), digit (b % 16)]))
+    | none => .panic .modelStuck
+  | .freshArr n, [] =>
+    let k := heap.size
+    let (_, heap) := heapAlloc heap .unit
+    .ok (.arr ((List.range n).map fun i => .int 8 (BitVec.ofNat 8 (k / 256 ^ (n - 1 - i)))), heap)
   | .bytesToStr, [.slice ref off len _] =>
     match strBytes heap (.str ref off len) with
     | some x => .ok (strAlloc heap x)
@@ -969,6 +993,10 @@ instance : Dialect Op Val Oracle where
   toBool
     | .bool b => some b
     | _ => none
+  callee
+    | .boxed 0 (.tuple (.int _ f :: bound)) => .known f.toNat bound
+    | .opaqueNil => .nil
+    | _ => .unknown
 
 abbrev Prog := SSA.Prog Op
 abbrev Func := SSA.Func Op

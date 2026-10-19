@@ -130,9 +130,8 @@ def f2 : GoSSA.Func := {
       instrs := #[.op 20 (.fieldAddr 0) [0],
                  .op 21 .loadPath [20],
                  .op 22 (.fieldAddr 0) [21],
-                 .op 23 .loadPath [22],
-                 .havoc 24 2],
-      term := .br 24 2 [] 1 [] },
+                 .op 23 .loadPath [22]],
+      term := .callv 23 [1] 24 5 [] 6 },
     -- 4: cond.true
     { params := [],
       instrs := #[.op 25 (.fieldAddr 0) [0],
@@ -140,17 +139,25 @@ def f2 : GoSSA.Func := {
                  .op 27 (.fieldAddr 0) [26],
                  .op 28 .loadPath [27],
                  .op 30 .nilKnown [28]],
-      term := .br 30 5 [] 6 [] },
-    -- 5: cond.true.nil-known
+      term := .br 30 7 [] 8 [] },
+    -- 5: cond.true.after-call
+    { params := [],
+      instrs := #[],
+      term := .br 24 2 [] 1 [] },
+    -- 6: cond.true.call-fallback
+    { params := [],
+      instrs := #[.havoc 24 2],
+      term := .jump 5 [] },
+    -- 7: cond.true.nil-known
     { params := [],
       instrs := #[.op 31 .isNilOpaque [28],
                  .op 29 .not [31]],
-      term := .jump 7 [] },
-    -- 6: cond.true.nil-unknown
+      term := .jump 9 [] },
+    -- 8: cond.true.nil-unknown
     { params := [],
       instrs := #[.havoc 29 3],
-      term := .jump 7 [] },
-    -- 7: cond.true.nil-join
+      term := .jump 9 [] },
+    -- 9: cond.true.nil-join
     { params := [],
       instrs := #[],
       term := .br 29 3 [] 2 [] }

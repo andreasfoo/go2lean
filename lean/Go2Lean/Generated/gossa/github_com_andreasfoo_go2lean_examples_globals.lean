@@ -31,8 +31,39 @@ def f1 : GoSSA.Func := {
       term := .ret 2 }
   ] }
 
-/-- func(id [4]byte, ret bool) bool (status: complete) -/
+/-- func(f func() int) (status: partial) -/
 def f2 : GoSSA.Func := {
+  name := "SetGenForTest", params := [0], nvals := 2, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.const .unit) []],
+      term := .ret 1 }
+  ] }
+
+/-- func(slots [4]int) int (status: complete) -/
+def f3 : GoSSA.Func := {
+  name := "Slot", params := [0], nvals := 7, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.alloc (.arr (List.replicate 4 (.int 64 0#64)))) [],
+                 .op 2 .storePath [1, 0],
+                 .op 3 (.funcRef 5) []],
+      term := .callv 3 [] 4 1 [] 2 },
+    -- 1: entry.after-call
+    { params := [],
+      instrs := #[.op 5 .indexAddr [1, 4],
+                 .op 6 .loadPath [5]],
+      term := .ret 6 },
+    -- 2: entry.call-fallback
+    { params := [],
+      instrs := #[.havoc 4 0],
+      term := .jump 1 [] }
+  ] }
+
+/-- func(id [4]byte, ret bool) bool (status: complete) -/
+def f4 : GoSSA.Func := {
   name := "SpecBlankIsZero", params := [0, 1], nvals := 29, entry := 0,
   blocks := #[
     -- 0: entry
@@ -78,6 +109,16 @@ def f2 : GoSSA.Func := {
       term := .br 27 3 [] 2 [28] }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2], havocWidths := #[] }
+/-- func() int (status: complete) -/
+def f5 : GoSSA.Func := {
+  name := "defaultGen", params := [], nvals := 1, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 0 (.const (.int 64 7#64)) []],
+      term := .ret 0 }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5], havocWidths := #[64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_globals

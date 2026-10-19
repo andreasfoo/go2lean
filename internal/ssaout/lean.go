@@ -51,6 +51,8 @@ func term(frontend string, t ir.Term) string {
 		return ".panic ." + panicCtor(t.Panic)
 	case ir.TermCall:
 		return fmt.Sprintf(".call %d %s %d %d %s %d", t.Callee, vars(t.CArgs), t.Dst, t.Next, vars(t.NArgs), t.Fallback)
+	case ir.TermCallV:
+		return fmt.Sprintf(".callv %d %s %d %d %s %d", t.FV, vars(t.CArgs), t.Dst, t.Next, vars(t.NArgs), t.Fallback)
 	case ir.TermXCall:
 		return fmt.Sprintf(".xcall %q %d %s %d %d %s %d", RegistryKey(frontend, t.CalleePkg), t.Callee, vars(t.CArgs), t.Dst, t.Next, vars(t.NArgs), t.Fallback)
 	}
@@ -187,7 +189,7 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		Havoc:      p.Havoc,
 	}
 	for i, f := range p.Funcs {
-		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Consts: f.Consts, StrConsts: f.StrConsts, Calls: f.Calls, XCalls: f.XCalls, Exits: f.Exits}
+		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Closure: f.Closure, Consts: f.Consts, StrConsts: f.StrConsts, Calls: f.Calls, XCalls: f.XCalls, Exits: f.Exits}
 		if f.Status != contract.ModelRejected {
 			abi := f.ABI
 			abiRel, err := ws.WriteABI(&abi, p.Package, f.Name)

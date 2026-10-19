@@ -380,6 +380,9 @@ type ModelFunc struct {
 	Issues []string    `json:"issues,omitempty"`
 	// SpecFor names the function this one is a `go2lean:spec` for.
 	SpecFor string `json:"spec_for,omitempty"`
+	// Closure marks an anonymous function: modelled so calls through func
+	// values can follow it, never a target (its free variables come first).
+	Closure bool `json:"closure,omitempty"`
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`
