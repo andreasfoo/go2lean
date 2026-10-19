@@ -320,6 +320,13 @@ def strBytes (heap : Heap Val) : Val → Option (List Nat)
     | _ => none
   | _ => none
 
+/-- The longest string concatenation, a Builder or Join/ReplaceAll may
+build (bytes): longer ones get the model stuck. Strings are lists of
+bytes and every intermediate string stays on the heap, so a loop
+appending to a string would otherwise use memory quadratic in its
+length (one search of the sixth full pass was killed at 9 GB). -/
+def strLimit : Nat := 65536
+
 /-- Allocate a string with these bytes. -/
 def strAlloc (heap : Heap Val) (bs : List Nat) : Val × Heap Val :=
   if bs.isEmpty then (.str 0 0#64 0#64, heap)
@@ -862,7 +869,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
   | .strConst bs, [] => .ok (strAlloc heap bs)
   | .strConcat, [a, b] =>
     match strBytes heap a, strBytes heap b with
-    | some x, some y => .ok (strAlloc heap (x ++ y))
+    | some x, some y => if x.length + y.length > strLimit then .panic .modelStuck else .ok (strAlloc heap (x ++ y))
     | _, _ => .panic .modelStuck
   | .eqDeep, [a, b] => match eqDeep heap a b with
     | some r => .ok (.bool r, heap) | none => .panic .modelStuck
@@ -932,7 +939,9 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | none => .panic .modelStuck
   | .strReplaceAll, [s, o, n] =>
     match strBytes heap s, strBytes heap o, strBytes heap n with
-    | some x, some old, some new => .ok (strAlloc heap (replaceBytes x old new))
+    | some x, some old, some new =>
+      let r := replaceBytes x old new
+      if r.length > strLimit then .panic .modelStuck else .ok (strAlloc heap r)
     | _, _, _ => .panic .modelStuck
   | .errNew, _ => .ok (.err true, heap)
   | .sbString, [p] =>
@@ -956,6 +965,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     match heapLoad heap p, strBytes heap s with
     | .ok cur, some bs =>
       let old := match strBytes heap cur with | some x => x | none => []
+      if old.length + bs.length > strLimit then .panic .modelStuck else
       let (v, heap) := strAlloc heap (old ++ bs)
       match heapStore heap p v with
       | .ok heap => .ok (.tuple [.int 64 (BitVec.ofNat 64 bs.length), .err false], heap)
@@ -967,6 +977,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     match heapLoad heap p with
     | .ok cur =>
       let old := match strBytes heap cur with | some x => x | none => []
+      if old.length ≥ strLimit then .panic .modelStuck else
       let (v, heap) := strAlloc heap (old ++ [c.toNat % 256])
       match heapStore heap p v with
       | .ok heap => .ok (.err false, heap)
@@ -979,6 +990,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | .ok cur =>
       let old := match strBytes heap cur with | some x => x | none => []
       let enc := encodeRune r.toNat
+      if old.length + enc.length > strLimit then .panic .modelStuck else
       let (v, heap) := strAlloc heap (old ++ enc)
       match heapStore heap p v with
       | .ok heap => .ok (.tuple [.int 64 (BitVec.ofNat 64 enc.length), .err false], heap)
@@ -1004,7 +1016,9 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | none => .panic .modelStuck
   | .strJoin, [elems, sep] =>
     match strSliceBytes heap elems, strBytes heap sep with
-    | some xs, some y => .ok (strAlloc heap (xs.intersperse y).flatten)
+    | some xs, some y =>
+      let r := (xs.intersperse y).flatten
+      if r.length > strLimit then .panic .modelStuck else .ok (strAlloc heap r)
     | _, _ => .panic .modelStuck
   | .appendSlice zero, [s, t] =>
     match sliceElems heap t with
