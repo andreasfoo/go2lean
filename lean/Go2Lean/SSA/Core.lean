@@ -29,6 +29,8 @@ inductive PanicKind where
   | makeSliceLen
   /-- A failed single-result type assertion ("interface conversion"). -/
   | typeAssertion
+  /-- A write to a nil map ("assignment to entry in nil map"). -/
+  | nilMapWrite
   | explicit
   | other
   /-- Not a Go panic: the model got stuck (ill-typed operands, missing block).
@@ -50,6 +52,7 @@ def PanicKind.tag : PanicKind → String
   | .sliceBounds => "slice_bounds"
   | .makeSliceLen => "make_slice_len"
   | .typeAssertion => "type_assertion"
+  | .nilMapWrite => "nil_map_write"
   | .explicit => "explicit"
   | .other => "other"
   | .modelStuck => "model_stuck"

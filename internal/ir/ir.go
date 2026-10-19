@@ -169,6 +169,23 @@ func (u Unbox) Lean() string {
 	return fmt.Sprintf("(.unbox %d %t %s)", u.Tag, u.CommaOk, u.Zero.Lean())
 }
 
+// MapLookup is m[k] (with CommaOk, (v, ok)); Zero for a missing key.
+type MapLookup struct {
+	CommaOk bool
+	Zero    Val
+}
+
+func (m MapLookup) Lean() string {
+	return fmt.Sprintf("(.mapLookup %t %s)", m.CommaOk, m.Zero.Lean())
+}
+
+// MapNext advances a map iterator; ZeroK and ZeroV fill a finished step.
+type MapNext struct{ ZeroK, ZeroV Val }
+
+func (m MapNext) Lean() string {
+	return fmt.Sprintf("(.mapNext %s %s)", m.ZeroK.Lean(), m.ZeroV.Lean())
+}
+
 type Alloc struct{ Zero Val }
 
 func (a Alloc) Lean() string { return "(.alloc " + a.Zero.Lean() + ")" }

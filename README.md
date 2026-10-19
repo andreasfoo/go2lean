@@ -138,6 +138,7 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/builder` | `Join` builds a string with `strings.Builder` and indexes an empty result at -1 | confirmed; `Parse`'s `fmt.Errorf` paths and `Tag`'s builder growth are certified |
 | `examples/xpkg` | `Share` guards negative totals, then calls `money.Pct` in another package, which divides by a zero total | confirmed through the linked model of both packages; `Bounded` (via `money.Clamp`) certified |
 | `examples/iface` | `Mixed` puts a string into a `[]any` queue whose `Sum` asserts every item to `int`; `Unwrap` asserts a nil `any` | all confirmed as `interface conversion` (`Sum` also on a queue holding nil items); `Count` (comma-ok assertions), a spec on `Push` and a spec on `Pipe.Keep` with a nil filter hook certified |
+| `examples/maps` | `Pick` indexes `names[pos[want]-1]` with the position of a missing or first name; `Registry.Put` writes to the nil map of a registry not made by `NewRegistry` | both confirmed (`index out of range [-1]`, `assignment to entry in nil map`); `Distinct` (`len` of a built map) and `Sum` (`delete`, `range`) certified |
 
 ## On a real module
 

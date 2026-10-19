@@ -78,6 +78,7 @@ const (
 	PanicSliceBounds     PanicKind = "slice_bounds"
 	PanicMakeSliceLen    PanicKind = "make_slice_len"
 	PanicTypeAssertion   PanicKind = "type_assertion"
+	PanicNilMapWrite     PanicKind = "nil_map_write"
 	PanicExplicit        PanicKind = "explicit"
 	PanicOther           PanicKind = "other"
 )

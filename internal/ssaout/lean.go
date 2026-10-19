@@ -73,6 +73,8 @@ func panicCtor(k contract.PanicKind) string {
 		return "makeSliceLen"
 	case contract.PanicTypeAssertion:
 		return "typeAssertion"
+	case contract.PanicNilMapWrite:
+		return "nilMapWrite"
 	case contract.PanicExplicit:
 		return "explicit"
 	}

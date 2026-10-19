@@ -902,8 +902,8 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MakeMap:
-		t.issue("map %s is opaque (not modelled)", x.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+		// A map the program builds: a list of key/value pairs on the heap.
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("makeMap")})
 		return nil
 	case *ssa.MakeClosure:
 		// A closure is a func value: opaque, and a call through it is an
@@ -916,8 +916,27 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MapUpdate:
-		t.issue("map update %s[%s] ignored (maps are opaque)", x.Map.Name(), x.Key.Name())
-		return nil
+		m, err := t.val(x.Map)
+		if err != nil {
+			return err
+		}
+		k, err := t.val(x.Key)
+		if err != nil {
+			return err
+		}
+		v, err := t.val(x.Value)
+		if err != nil {
+			return err
+		}
+		// A map the model knows nothing about (an input field, a havoc
+		// value): the update is ignored, as before.
+		return t.onKnown(m, func() error {
+			t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapUpdate"), Args: []ir.Var{m, k, v}})
+			return nil
+		}, func() error {
+			t.issue("map update %s[%s] on a map the model knows nothing about ignored", x.Map.Name(), x.Key.Name())
+			return nil
+		})
 	case *ssa.Defer:
 		// A deferred call to a function in the model would need the defer
 		// stack; one the model does not look into (mutex unlocks, closes,
@@ -948,8 +967,14 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			return nil
 		}
 		if _, isMap := x.X.Type().Underlying().(*types.Map); isMap {
-			t.issue("range over map %s assumed empty (maps are opaque)", x.X.Name())
-			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+			// Insertion order; a map the model knows nothing about has no
+			// entries.
+			t.issue("range over map %s: in insertion order; a map the model knows nothing about has no entries", x.X.Name())
+			m, err := t.val(x.X)
+			if err != nil {
+				return err
+			}
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mapRange"), Args: []ir.Var{m}})
 			return nil
 		}
 		return fmt.Errorf("range over %s not supported", x.X.Type())
@@ -962,22 +987,24 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strNext"), Args: []ir.Var{it}})
 			return nil
 		}
-		// An opaque map: no iterations (recorded at the Range).
+		// A map iterator: (ok, key, value), zeros when done.
 		tu := x.Type().(*types.Tuple)
-		var parts []ir.Var
-		for i := 0; i < tu.Len(); i++ {
-			v := t.fresh()
-			var zero ir.Val = ir.BoolVal(false)
-			if i > 0 {
-				var ok bool
-				if zero, ok = assumedValue(tu.At(i).Type()); !ok {
-					zero = ir.Opaque{} // an unused component has the invalid type
+		zeros := make([]ir.Val, 2)
+		for i := 1; i < tu.Len() && i < 3; i++ {
+			z, ok := zeroVal(tu.At(i).Type())
+			if !ok {
+				if z, ok = assumedValue(tu.At(i).Type()); !ok {
+					z = ir.Opaque{} // an unused component has the invalid type
 				}
 			}
-			t.emit(ir.Instr{Dst: v, Op: ir.Const{V: zero}})
-			parts = append(parts, v)
+			zeros[i-1] = z
 		}
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: parts})
+		for i := range zeros {
+			if zeros[i] == nil {
+				zeros[i] = ir.Opaque{}
+			}
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.MapNext{ZeroK: zeros[0], ZeroV: zeros[1]}, Args: []ir.Var{it}})
 		return nil
 	case *ssa.ChangeInterface:
 		// Converting between interface types keeps the value: nil stays
@@ -1044,8 +1071,30 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.MakeSlice{Zero: zero}, Args: []ir.Var{l, c}})
 		return nil
 	case *ssa.Lookup:
-		if _, isMap := x.X.Type().Underlying().(*types.Map); isMap {
-			return t.havoc(x, "map lookup", "opaque-map", "")
+		if mt, isMap := x.X.Type().Underlying().(*types.Map); isMap {
+			zero, ok := zeroVal(mt.Elem())
+			if !ok {
+				zero, ok = assumedValue(mt.Elem())
+			}
+			if !ok {
+				return t.havoc(x, "map lookup", "opaque-map", "")
+			}
+			m, err := t.val(x.X)
+			if err != nil {
+				return err
+			}
+			k, err := t.val(x.Index)
+			if err != nil {
+				return err
+			}
+			dst := t.def(x)
+			return t.onKnown(m, func() error {
+				t.emit(ir.Instr{Dst: dst, Op: ir.MapLookup{CommaOk: x.CommaOk, Zero: zero}, Args: []ir.Var{m, k}})
+				return nil
+			}, func() error {
+				t.issue("lookup in map %s the model knows nothing about is havoc", x.X.Name())
+				return t.havocResult(dst, x, "map lookup", "opaque-map")
+			})
 		}
 		if !isString(x.X.Type()) || x.CommaOk {
 			return fmt.Errorf("lookup on %s not supported", x.X.Type())
@@ -1307,6 +1356,20 @@ func (t *fnState) call(x *ssa.Call) error {
 	if bi, ok := x.Call.Value.(*ssa.Builtin); ok {
 		switch bi.Name() {
 		case "len", "cap":
+			if _, isMap := x.Call.Args[0].Type().Underlying().(*types.Map); isMap && bi.Name() == "len" {
+				m, err := t.val(x.Call.Args[0])
+				if err != nil {
+					return err
+				}
+				dst := t.def(x)
+				return t.onKnown(m, func() error {
+					t.emit(ir.Instr{Dst: dst, Op: ir.Simple("mapLen"), Args: []ir.Var{m}})
+					return nil
+				}, func() error {
+					t.opaqueLen(dst, bi.Name(), x.Call.Args[0].Type())
+					return nil
+				})
+			}
 			if isSlice(x.Call.Args[0].Type()) {
 				a, err := t.val(x.Call.Args[0])
 				if err != nil {
@@ -1330,6 +1393,22 @@ func (t *fnState) call(x *ssa.Call) error {
 				}
 				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("strLen"), Args: []ir.Var{a}})
 				return nil
+			}
+		case "delete":
+			if _, isMap := x.Call.Args[0].Type().Underlying().(*types.Map); isMap {
+				m, err := t.val(x.Call.Args[0])
+				if err != nil {
+					return err
+				}
+				k, err := t.val(x.Call.Args[1])
+				if err != nil {
+					return err
+				}
+				t.def(x)
+				return t.onKnown(m, func() error {
+					t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapDelete"), Args: []ir.Var{m, k}})
+					return nil
+				}, func() error { return nil })
 			}
 		case "append", "copy":
 			// append(s, t...) and copy(dst, src) on slices of modelled
@@ -1364,16 +1443,7 @@ func (t *fnState) call(x *ssa.Call) error {
 		}
 		if hasResult {
 			if bi.Name() == "len" || bi.Name() == "cap" {
-				// The length of a map or channel the model does not look
-				// into: havoc, but kept below 16 so that `make([]T, 0, len(m))`
-				// stays something the model materialises. Recorded as an
-				// assumption.
-				t.issue("%s of %s assumed below 16 (not modelled)", bi.Name(), x.Call.Args[0].Type())
-				raw := t.fresh()
-				t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, fmt.Sprintf("%s: %s", t.f.Name(), bi.Name()), "unmodeled-call", "")})
-				sixteen := t.fresh()
-				t.emit(ir.Instr{Dst: sixteen, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "16"}}})
-				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("urem"), Args: []ir.Var{raw, sixteen}})
+				t.opaqueLen(t.def(x), bi.Name(), x.Call.Args[0].Type())
 				return nil
 			}
 			return t.havoc(x, "builtin "+bi.Name(), "unmodeled-call", "")
@@ -1529,6 +1599,46 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	t.cur = &t.out.Blocks[other]
 	t.issue("type assertion %s on an interface value the model did not build is havoc", x.Name())
 	if err := t.havocResult(dst, x, "type assertion", "opaque-assert"); err != nil {
+		return err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
+}
+
+// opaqueLen binds dst to the length of a map or channel the model does
+// not look into: havoc, but kept below 16 so that `make([]T, 0, len(m))`
+// stays something the model materialises. Recorded as an assumption.
+func (t *fnState) opaqueLen(dst ir.Var, name string, ty types.Type) {
+	t.issue("%s of %s assumed below 16 (not modelled)", name, ty)
+	raw := t.fresh()
+	t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, fmt.Sprintf("%s: %s", t.f.Name(), name), "unmodeled-call", "")})
+	sixteen := t.fresh()
+	t.emit(ir.Instr{Dst: sixteen, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "16"}}})
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("urem"), Args: []ir.Var{raw, sixteen}})
+}
+
+// onKnown runs known in a block taken when the func, map, channel or
+// interface value v is one the model knows (nil, or built by the program)
+// and unknown otherwise; both continue in a join block.
+func (t *fnState) onKnown(v ir.Var, known, unknown func() error) error {
+	isKnown := t.fresh()
+	t.emit(ir.Instr{Dst: isKnown, Op: ir.Simple("nilKnown"), Args: []ir.Var{v}})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isKnown, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".known"},
+		ir.Block{Name: name + ".unknown"},
+		ir.Block{Name: name + ".known-join"})
+	t.cur = &t.out.Blocks[yes]
+	if err := known(); err != nil {
+		return err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	if err := unknown(); err != nil {
 		return err
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}

@@ -24,7 +24,7 @@ def f0 : GoSSA.Func := {
 
 /-- func(v any, m map[string]int) string (status: partial) -/
 def f1 : GoSSA.Func := {
-  name := "Describe", params := [0, 1], nvals := 11, entry := 0,
+  name := "Describe", params := [0, 1], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -40,12 +40,8 @@ def f1 : GoSSA.Func := {
       term := .ret 5 },
     -- 3: cond.true
     { params := [],
-      instrs := #[.havoc 6 1,
-                 .op 7 (.const (.int 64 16#64)) [],
-                 .op 8 .urem [6, 7],
-                 .op 9 (.const (.int 64 0#64)) [],
-                 .op 10 .eq [8, 9]],
-      term := .br 10 1 [] 2 [] },
+      instrs := #[.op 7 .nilKnown [1]],
+      term := .br 7 7 [] 8 [] },
     -- 4: entry.nil-known
     { params := [],
       instrs := #[.op 2 .isNilOpaque [0]],
@@ -57,12 +53,27 @@ def f1 : GoSSA.Func := {
     -- 6: entry.nil-join
     { params := [],
       instrs := #[],
-      term := .br 2 3 [] 2 [] }
+      term := .br 2 3 [] 2 [] },
+    -- 7: cond.true.known
+    { params := [],
+      instrs := #[.op 6 .mapLen [1]],
+      term := .jump 9 [] },
+    -- 8: cond.true.unknown
+    { params := [],
+      instrs := #[.havoc 8 1,
+                 .op 9 (.const (.int 64 16#64)) [],
+                 .op 6 .urem [8, 9]],
+      term := .jump 9 [] },
+    -- 9: cond.true.known-join
+    { params := [],
+      instrs := #[.op 10 (.const (.int 64 0#64)) [],
+                 .op 11 .eq [6, 10]],
+      term := .br 11 1 [] 2 [] }
   ] }
 
 /-- func(ctx context.Context, m map[string]int, keys []string) int (status: partial) -/
 def f2 : GoSSA.Func := {
-  name := "Lookup", params := [0, 1, 2], nvals := 11, entry := 0,
+  name := "Lookup", params := [0, 1, 2], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -79,7 +90,19 @@ def f2 : GoSSA.Func := {
       instrs := #[.op 7 (.const (.int 64 0#64)) [],
                  .op 8 .indexAddr [2, 7],
                  .op 9 .loadPath [8],
-                 .havoc 10 3],
+                 .op 11 .nilKnown [1]],
+      term := .br 11 3 [] 4 [] },
+    -- 3: if.done.known
+    { params := [],
+      instrs := #[.op 10 (.mapLookup false (.int 64 0#64)) [1, 9]],
+      term := .jump 5 [] },
+    -- 4: if.done.unknown
+    { params := [],
+      instrs := #[.havoc 10 3],
+      term := .jump 5 [] },
+    -- 5: if.done.known-join
+    { params := [],
+      instrs := #[],
       term := .ret 10 }
   ] }
 

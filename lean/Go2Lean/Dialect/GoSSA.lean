@@ -173,6 +173,16 @@ inductive Op where
   | nilKnown
   /-- Is this func/map/channel/interface value nil? (Only on known values.) -/
   | isNilOpaque
+  -- maps the program builds: `.boxed 1 p`, `p` pointing at an `.arr` of
+  -- `.tuple [key, value]` in insertion order
+  | makeMap
+  /-- `m[k]` (with `commaOk`, `(v, ok)`); `zero` for a missing key. -/
+  | mapLookup (commaOk : Bool) (zero : Val)
+  | mapUpdate | mapDelete | mapLen
+  /-- An iterator over a map: a heap cell holding `(map, next index)`. -/
+  | mapRange
+  /-- Advance a map iterator: `(ok, key, value)`, zeros when done. -/
+  | mapNext (zeroK zeroV : Val)
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -351,6 +361,23 @@ def sliceElems (heap : Heap Val) : Val → Option (List Val)
     | some (.arr es) => some ((es.drop off.toNat).take len.toNat)
     | _ => none
   | _ => none
+
+/-- Key equality for maps: strings by their bytes, the rest by `eqVal`. -/
+def keyEq (heap : Heap Val) (a b : Val) : Bool :=
+  match a, b with
+  | .str .., .str .. => strBytes heap a == strBytes heap b
+  | _, _ => eqVal a b == some true
+
+/-- The entries of the map object `m` (`.boxed 1 p`). -/
+def mapEntries (heap : Heap Val) : Val → Option (Val × List (Val × Val))
+  | .boxed 1 p =>
+    match heapLoad heap p with
+    | .ok (.arr es) => some (p, es.filterMap fun | .tuple [k, v] => some (k, v) | _ => none)
+    | _ => none
+  | _ => none
+
+def mapObj (entries : List (Val × Val)) : Val :=
+  .arr (entries.map fun (k, v) => .tuple [k, v])
 
 /-- Overwrite `es` from index `i` with `vs`. -/
 def writeAt (es : List Val) (i : Nat) (vs : List Val) : List Val :=
@@ -665,6 +692,64 @@ def allocStrSlice (heap : Heap Val) (parts : List (List Nat)) : Val × Heap Val 
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
+  | .makeMap, [] =>
+    let (p, heap) := heapAlloc heap (.arr [])
+    .ok (.boxed 1 p, heap)
+  | .mapLookup commaOk zero, [m, k] =>
+    let found : Option Val := match m with
+      | .opaqueNil => some zero
+      | _ => (mapEntries heap m).map fun (_, es) =>
+        ((es.find? fun (k', _) => keyEq heap k k').map (·.2)).getD zero
+    let hit : Bool := match mapEntries heap m with
+      | some (_, es) => es.any fun (k', _) => keyEq heap k k'
+      | none => false
+    match found with
+    | some v => .ok (if commaOk then .tuple [v, .bool hit] else v, heap)
+    | none => .panic .modelStuck
+  | .mapUpdate, [.opaqueNil, _, _] => .panic .nilMapWrite
+  | .mapUpdate, [m, k, v] =>
+    match mapEntries heap m with
+    | some (p, es) =>
+      let es := if es.any (fun (k', _) => keyEq heap k k') then
+          es.map fun (k', v') => if keyEq heap k k' then (k', v) else (k', v')
+        else es ++ [(k, v)]
+      match heapStore heap p (mapObj es) with
+      | .ok heap => .ok (.unit, heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | none => .panic .modelStuck
+  | .mapDelete, [.opaqueNil, _] => .ok (.unit, heap)
+  | .mapDelete, [m, k] =>
+    match mapEntries heap m with
+    | some (p, es) =>
+      match heapStore heap p (mapObj (es.filter fun (k', _) => !keyEq heap k k')) with
+      | .ok heap => .ok (.unit, heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | none => .panic .modelStuck
+  | .mapLen, [.opaqueNil] => .ok (.int 64 0#64, heap)
+  | .mapLen, [m] =>
+    match mapEntries heap m with
+    | some (_, es) => .ok (.int 64 (BitVec.ofNat 64 es.length), heap)
+    | none => .panic .modelStuck
+  | .mapRange, [m] =>
+    let (p, heap) := heapAlloc heap (.tuple [m, .int 64 0#64])
+    .ok (p, heap)
+  | .mapNext zk zv, [it] =>
+    match heapLoad heap it with
+    | .ok (.tuple [m, .int 64 i]) =>
+      match mapEntries heap m with
+      | some (_, es) =>
+        match es[i.toNat]? with
+        | some (k, v) =>
+          match heapStore heap it (.tuple [m, .int 64 (i + 1)]) with
+          | .ok heap => .ok (.tuple [.bool true, k, v], heap)
+          | .panic k => .panic k
+          | .outOfFuel => .outOfFuel
+        | none => .ok (.tuple [.bool false, zk, zv], heap)
+      -- A nil map, or one the model knows nothing about: no entries.
+      | none => .ok (.tuple [.bool false, zk, zv], heap)
+    | _ => .panic .modelStuck
   | .loadPath, [p] =>
     match heapLoad heap p with
     | .ok v => .ok (v, heap)

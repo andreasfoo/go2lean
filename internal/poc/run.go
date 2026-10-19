@@ -356,6 +356,8 @@ func ClassifyPanic(msg string) contract.PanicKind {
 		return contract.PanicMakeSliceLen
 	case strings.Contains(msg, "interface conversion"):
 		return contract.PanicTypeAssertion
+	case strings.Contains(msg, "assignment to entry in nil map"):
+		return contract.PanicNilMapWrite
 	case strings.HasPrefix(msg, "runtime error:"):
 		return contract.PanicOther
 	}
