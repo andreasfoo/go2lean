@@ -1,5 +1,11 @@
 package stream
 
+import (
+	"github.com/anthropics/anthropic-sdk-go"
+
+	"github.com/tingly-dev/tingly-box/internal/protocol/wire"
+)
+
 // Hand-written go2lean specs for the stream helpers behind issue #1924
 // (tool-call id truncation) and #1923 (tool-call indexes).
 
@@ -28,4 +34,134 @@ func SpecAnthropicStopReasonToIncompleteNonEmpty(stopReason string, ret0 bool, r
 		return ret0 && ret1 != ""
 	}
 	return true
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventToolCallStartIndex: the chunk
+// that opens a tool call carries the index of that tool call among the
+// tool calls of the message (issue #1923: a second parallel tool call must
+// not reuse index 0).
+func SpecAnthropicToOpenAIConverterProcessEventToolCallStartIndex(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if c == nil || event == nil {
+		return true
+	}
+	if event.Type != "content_block_start" || event.ContentBlock.Type != "tool_use" {
+		return true
+	}
+	n := len(c.pending)
+	if n == 0 {
+		return true
+	}
+	last, isChunk := c.pending[n-1].(wire.ChatStreamChunk)
+	if !isChunk {
+		return true
+	}
+	if len(last.Choices) == 0 || len(last.Choices[0].Delta.ToolCalls) == 0 {
+		return true
+	}
+	tc := last.Choices[0].Delta.ToolCalls[0]
+	if tc.ID != event.ContentBlock.ID {
+		return true
+	}
+	return tc.Index == len(c.pendingToolCalls)
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventToolCallDeltaIndex: an argument
+// delta chunk carries the index of the tool call it belongs to.
+func SpecAnthropicToOpenAIConverterProcessEventToolCallDeltaIndex(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if c == nil || event == nil {
+		return true
+	}
+	if event.Type != "content_block_delta" || event.Delta.Type != "input_json_delta" || event.Delta.PartialJSON == "" {
+		return true
+	}
+	if c.toolCallID == "" {
+		return true
+	}
+	n := len(c.pending)
+	if n == 0 {
+		return true
+	}
+	last, isChunk := c.pending[n-1].(wire.ChatStreamChunk)
+	if !isChunk {
+		return true
+	}
+	if len(last.Choices) == 0 || len(last.Choices[0].Delta.ToolCalls) == 0 {
+		return true
+	}
+	tc := last.Choices[0].Delta.ToolCalls[0]
+	if tc.Function.Arguments == nil || *tc.Function.Arguments != event.Delta.PartialJSON {
+		return true
+	}
+	return tc.Index == len(c.pendingToolCalls)
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventMaxTokensIsLength: whatever
+// state the converter is in, a message_delta whose stop reason is
+// max_tokens followed by message_stop ends the stream with finish_reason
+// "length", as the non-streaming converter does (issue #1923, second part).
+func SpecAnthropicToOpenAIConverterProcessEventMaxTokensIsLength(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if c == nil || c.done {
+		return true
+	}
+	delta := anthropic.BetaRawMessageStreamEventUnion{Type: "message_delta"}
+	delta.Delta.StopReason = "max_tokens"
+	c.processEvent(&delta)
+	stop := anthropic.BetaRawMessageStreamEventUnion{Type: "message_stop"}
+	n0 := len(c.pending)
+	c.processEvent(&stop)
+	if c.hookErr != nil || len(c.pending) == n0 {
+		return true
+	}
+	last, isChunk := c.pending[len(c.pending)-1].(wire.ChatStreamChunk)
+	if !isChunk || len(last.Choices) == 0 || last.Choices[0].FinishReason == nil {
+		return false
+	}
+	return *last.Choices[0].FinishReason == "length"
+}
+
+// go2lean:spec anthropicToOpenAIConverter.processEvent
+// SpecAnthropicToOpenAIConverterProcessEventParallelToolCallIndexes: two
+// tool calls started one after the other in the same message get distinct
+// tool_calls[].index values, whatever state the converter was in (issue
+// #1923: OpenAI clients merge tool calls that share an index).
+func SpecAnthropicToOpenAIConverterProcessEventParallelToolCallIndexes(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
+	if c == nil {
+		return true
+	}
+	stop := anthropic.BetaRawMessageStreamEventUnion{Type: "content_block_stop"}
+	c.processEvent(&stop) // close whatever block the random event opened
+	n0 := len(c.pending)
+	first := anthropic.BetaRawMessageStreamEventUnion{Type: "content_block_start"}
+	first.ContentBlock.Type = "tool_use"
+	first.ContentBlock.ID = "toolu_first"
+	first.ContentBlock.Name = "bash"
+	c.processEvent(&first)
+	c.processEvent(&stop)
+	second := anthropic.BetaRawMessageStreamEventUnion{Type: "content_block_start"}
+	second.ContentBlock.Type = "tool_use"
+	second.ContentBlock.ID = "toolu_second"
+	second.ContentBlock.Name = "bash"
+	c.processEvent(&second)
+	firstIdx, secondIdx := -1, -1
+	for _, p := range c.pending[n0:] {
+		chunk, isChunk := p.(wire.ChatStreamChunk)
+		if !isChunk || len(chunk.Choices) == 0 {
+			continue
+		}
+		for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+			if tc.ID == "toolu_first" {
+				firstIdx = tc.Index
+			}
+			if tc.ID == "toolu_second" {
+				secondIdx = tc.Index
+			}
+		}
+	}
+	if firstIdx < 0 || secondIdx < 0 {
+		return true // a hook suppressed one of them
+	}
+	return firstIdx != secondIdx
 }

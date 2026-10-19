@@ -3,6 +3,7 @@ package request
 import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/tingly-dev/tingly-box/internal/protocol"
 )
@@ -108,4 +109,351 @@ func SpecConvertBetaToolResultContentKeepsText(content []anthropic.BetaToolResul
 		}
 	}
 	return true
+}
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestKeepsEveryMessage: when every input
+// message carries a text block with text, the converted request has at least
+// as many messages as the input (issue #1921: messages with a role other
+// than user or assistant must not vanish).
+func SpecConvertAnthropicBetaToOpenAIRequestKeepsEveryMessage(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if anthropicReq == nil || ret0 == nil {
+		return true
+	}
+	for _, msg := range anthropicReq.Messages {
+		hasText := false
+		for _, block := range msg.Content {
+			if block.OfText != nil && block.OfText.Text != "" {
+				hasText = true
+			}
+		}
+		if !hasText {
+			return true
+		}
+	}
+	return len(ret0.Messages) >= len(anthropicReq.Messages)
+}
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestKeepsSystemMessages: every message
+// with role "system" and non-empty text in messages[] still reaches the
+// converted request as a system or developer message (issue #1921). The
+// top-level system field is left empty so it adds no system message.
+func SpecConvertAnthropicBetaToOpenAIRequestKeepsSystemMessages(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if anthropicReq == nil || ret0 == nil || len(anthropicReq.System) > 0 {
+		return true
+	}
+	want := 0
+	for _, m := range anthropicReq.Messages {
+		if string(m.Role) != "system" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.OfText != nil && b.OfText.Text != "" {
+				want++
+				break
+			}
+		}
+	}
+	if want == 0 {
+		return true
+	}
+	got := 0
+	for _, m := range ret0.Messages {
+		if m.OfSystem != nil || m.OfDeveloper != nil {
+			got++
+		}
+	}
+	return got >= want
+}
+
+// wellFormedToolTurns: roles are user or assistant only, tool_use blocks
+// sit in assistant messages and tool_result blocks in user messages, and
+// every tool id is non-empty and within the 40-character limit (so issue
+// #1924 does not apply).
+func wellFormedToolTurns(req *anthropic.BetaMessageNewParams) bool {
+	for _, m := range req.Messages {
+		role := string(m.Role)
+		if role != "user" && role != "assistant" {
+			return false
+		}
+		for _, b := range m.Content {
+			if b.OfToolUse != nil {
+				if role != "assistant" || len(b.OfToolUse.ID) == 0 || len(b.OfToolUse.ID) > openAIToolCallIDLimit {
+					return false
+				}
+			}
+			if b.OfToolResult != nil {
+				if role != "user" || len(b.OfToolResult.ToolUseID) == 0 || len(b.OfToolResult.ToolUseID) > openAIToolCallIDLimit {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestWellFormedToolPairs: on a
+// well-formed request, every tool_result answering a tool_use of the input
+// becomes a tool message whose tool_call_id names an assistant tool call.
+func SpecConvertAnthropicBetaToOpenAIRequestWellFormedToolPairs(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if anthropicReq == nil || ret0 == nil || !wellFormedToolTurns(anthropicReq) {
+		return true
+	}
+	for _, m := range anthropicReq.Messages {
+		for _, b := range m.Content {
+			if b.OfToolResult == nil {
+				continue
+			}
+			answered := false
+			for _, m2 := range anthropicReq.Messages {
+				for _, b2 := range m2.Content {
+					if b2.OfToolUse != nil && b2.OfToolUse.ID == b.OfToolResult.ToolUseID {
+						answered = true
+					}
+				}
+			}
+			if !answered {
+				continue
+			}
+			id := b.OfToolResult.ToolUseID
+			toolMsg, call := false, false
+			for _, out := range ret0.Messages {
+				if out.OfTool != nil && out.OfTool.ToolCallID == id {
+					toolMsg = true
+				}
+				if out.OfAssistant != nil {
+					for _, tc := range out.OfAssistant.ToolCalls {
+						if tc.OfFunction != nil && tc.OfFunction.ID == id {
+							call = true
+						}
+					}
+				}
+			}
+			if !toolMsg || !call {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:spec convertV1MessagesToResponsesInput
+// SpecConvertV1MessagesToResponsesInputKeepsSystemMessages: every message
+// with role "system" and non-empty text becomes a Responses input message
+// with role system or developer (issue #1921, Responses path).
+func SpecConvertV1MessagesToResponsesInputKeepsSystemMessages(messages []anthropic.MessageParam, ret responses.ResponseInputParam) bool {
+	want := 0
+	for _, m := range messages {
+		if string(m.Role) != "system" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.OfText != nil && b.OfText.Text != "" {
+				want++
+				break
+			}
+		}
+	}
+	if want == 0 {
+		return true
+	}
+	got := 0
+	for _, item := range ret {
+		if item.OfMessage != nil && (string(item.OfMessage.Role) == "system" || string(item.OfMessage.Role) == "developer") {
+			got++
+		}
+		if item.OfInputMessage != nil && (item.OfInputMessage.Role == "system" || item.OfInputMessage.Role == "developer") {
+			got++
+		}
+	}
+	return got >= want
+}
+
+// Equivalence of the direct and the converted path: a client that reaches
+// an upstream of the other protocol through tingly-box should get the
+// result it gets from a direct upstream of its own protocol. The two
+// upstreams answer alike when they see the same conversation, so the specs
+// below check that converting a request to the other protocol loses
+// nothing an upstream reads: converting it back gives the same system
+// text, the same text per role in order, the same tool calls (id and name)
+// and the same tool results (id and text). Known losses are excluded by the
+// preconditions: system-role messages (issue #1921) and tool ids over 40
+// characters (issue #1924).
+
+// betaConversation is what an upstream reads from an Anthropic request.
+func betaConversation(req *anthropic.BetaMessageNewParams) (system, user, assistant string, calls, results []string) {
+	for _, b := range req.System {
+		system += b.Text
+	}
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			switch {
+			case b.OfText != nil:
+				if string(m.Role) == "user" {
+					user += b.OfText.Text
+				} else {
+					assistant += b.OfText.Text
+				}
+			case b.OfToolUse != nil:
+				calls = append(calls, b.OfToolUse.ID+"/"+b.OfToolUse.Name)
+			case b.OfToolResult != nil:
+				text := ""
+				for _, c := range b.OfToolResult.Content {
+					if c.OfText != nil {
+						text += c.OfText.Text
+					}
+				}
+				results = append(results, b.OfToolResult.ToolUseID+":"+text)
+			}
+		}
+	}
+	return
+}
+
+// plainBetaRequest: roles user and assistant only, blocks of text, tool_use
+// and tool_result only (tool results holding text only), tool ids within
+// the limit.
+func plainBetaRequest(req *anthropic.BetaMessageNewParams) bool {
+	if !wellFormedToolTurns(req) {
+		return false
+	}
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.OfText == nil && b.OfToolUse == nil && b.OfToolResult == nil {
+				return false
+			}
+			if b.OfToolResult != nil {
+				for _, c := range b.OfToolResult.Content {
+					if c.OfText == nil {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec ConvertAnthropicBetaToOpenAIRequest
+// SpecConvertAnthropicBetaToOpenAIRequestRoundTrip: an Anthropic client
+// through tingly-box to an OpenAI Chat upstream. Converting the request
+// back to Anthropic gives the conversation the client sent.
+func SpecConvertAnthropicBetaToOpenAIRequestRoundTrip(anthropicReq *anthropic.BetaMessageNewParams, compatible bool, isStreaming bool, disableStreamUsage bool, ret0 *openai.ChatCompletionNewParams, ret1 *protocol.OpenAIConfig) bool {
+	if anthropicReq == nil || ret0 == nil || !plainBetaRequest(anthropicReq) {
+		return true
+	}
+	back := ConvertOpenAIToAnthropicRequest(ret0, anthropicReq.MaxTokens)
+	if back == nil {
+		return false
+	}
+	s1, u1, a1, c1, r1 := betaConversation(anthropicReq)
+	s2, u2, a2, c2, r2 := betaConversation(back)
+	return s1 == s2 && u1 == u2 && a1 == a2 && sameStrings(c1, c2) && sameStrings(r1, r2)
+}
+
+// openAIConversation is what an upstream reads from an OpenAI Chat request.
+func openAIConversation(req *openai.ChatCompletionNewParams) (system, user, assistant string, calls, results []string) {
+	for _, m := range req.Messages {
+		switch {
+		case m.OfSystem != nil:
+			system += m.OfSystem.Content.OfString.Value
+			for _, p := range m.OfSystem.Content.OfArrayOfContentParts {
+				system += p.Text
+			}
+		case m.OfUser != nil:
+			user += m.OfUser.Content.OfString.Value
+			for _, p := range m.OfUser.Content.OfArrayOfContentParts {
+				if p.OfText != nil {
+					user += p.OfText.Text
+				}
+			}
+		case m.OfAssistant != nil:
+			assistant += m.OfAssistant.Content.OfString.Value
+			for _, p := range m.OfAssistant.Content.OfArrayOfContentParts {
+				if p.OfText != nil {
+					assistant += p.OfText.Text
+				}
+			}
+			for _, tc := range m.OfAssistant.ToolCalls {
+				if tc.OfFunction != nil {
+					calls = append(calls, tc.OfFunction.ID+"/"+tc.OfFunction.Function.Name)
+				}
+			}
+		case m.OfTool != nil:
+			text := m.OfTool.Content.OfString.Value
+			for _, p := range m.OfTool.Content.OfArrayOfContentParts {
+				if p.OfText != nil {
+					text += p.OfText.Text
+				}
+			}
+			results = append(results, m.OfTool.ToolCallID+":"+text)
+		}
+	}
+	return
+}
+
+// plainOpenAIRequest: system, user, assistant and tool messages only, user
+// and tool parts of text only, tool call ids non-empty and within the limit.
+func plainOpenAIRequest(req *openai.ChatCompletionNewParams) bool {
+	for _, m := range req.Messages {
+		if m.OfSystem == nil && m.OfUser == nil && m.OfAssistant == nil && m.OfTool == nil {
+			return false
+		}
+		if m.OfUser != nil {
+			for _, p := range m.OfUser.Content.OfArrayOfContentParts {
+				if p.OfText == nil {
+					return false
+				}
+			}
+		}
+		if m.OfAssistant != nil {
+			for _, tc := range m.OfAssistant.ToolCalls {
+				if tc.OfFunction == nil || len(tc.OfFunction.ID) == 0 || len(tc.OfFunction.ID) > openAIToolCallIDLimit {
+					return false
+				}
+			}
+		}
+		if m.OfTool != nil {
+			if len(m.OfTool.ToolCallID) == 0 || len(m.OfTool.ToolCallID) > openAIToolCallIDLimit {
+				return false
+			}
+			for _, p := range m.OfTool.Content.OfArrayOfContentParts {
+				if p.OfText == nil {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:spec ConvertOpenAIToAnthropicRequest
+// SpecConvertOpenAIToAnthropicRequestRoundTrip: an OpenAI Chat client
+// through tingly-box to an Anthropic upstream. Converting the request back
+// to OpenAI Chat gives the conversation the client sent.
+func SpecConvertOpenAIToAnthropicRequestRoundTrip(req *openai.ChatCompletionNewParams, defaultMaxTokens int64, ret *anthropic.BetaMessageNewParams) bool {
+	if req == nil || ret == nil || !plainOpenAIRequest(req) {
+		return true
+	}
+	back, _ := ConvertAnthropicBetaToOpenAIRequest(ret, false, false, false)
+	if back == nil {
+		return false
+	}
+	s1, u1, a1, c1, r1 := openAIConversation(req)
+	s2, u2, a2, c2, r2 := openAIConversation(back)
+	return s1 == s2 && u1 == u2 && a1 == a2 && sameStrings(c1, c2) && sameStrings(r1, r2)
 }

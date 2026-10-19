@@ -114,3 +114,74 @@ on `internal/protocol/request` (MiniMax-M3, thinking off). Artefacts:
   of itself recursed until the stack overflowed.
 - `GO2LEAN_TRACE=1` prints every input the random engine draws.
 - `-guidance file` appends text to the agent's proposal prompt.
+
+## 5. Second round: properties beyond issue #1924
+
+go2lean at `f6f8ed1` to `778525f` (models linked across packages, calls
+without results followed, interface values boxed, nil-ness of func, map,
+channel and interface values tracked). Spec files: `docs/specs/tingly-box/`.
+Options: `-maxlen 48`, budget 60 to 90 s per property.
+
+| property (target) | engine output | M3 output |
+|---|---|---|
+| `KeepsSystemMessages` (`ConvertAnthropicBetaToOpenAIRequest`) | found at trial 994 | `confirmed` |
+| `KeepsSystemMessages` (`convertV1MessagesToResponsesInput`) | found at trial 1 | `confirmed`; the real result is an empty input list |
+| `ParallelToolCallIndexes` (`anthropicToOpenAIConverter.processEvent`) | found at trial 0 | `confirmed` |
+| `MaxTokensIsLength` (`anthropicToOpenAIConverter.processEvent`) | found at trial 0 | `confirmed` |
+| `ToolCallIDsBounded` (`ConvertAnthropicBetaToOpenAIRequest`) | found at trial 882 | `confirmed` |
+| `KeepsEveryMessage` (`ConvertAnthropicBetaToOpenAIRequest`) | found at trial 49 | `confirmed` |
+| `ToolPairsKept` (`ConvertAnthropicBetaToOpenAIRequest`) | found at trial 485 | `confirmed` |
+| `WellFormedToolPairs` (`ConvertAnthropicBetaToOpenAIRequest`) | none in 2000 trials | not run |
+| `ToolMessageIDsBounded`, `ConvertBetaToolResultContentKeepsText` | none in 2000 trials | not run |
+| 7 usage specs (`FromOpenAIChatCompletion`, `FromAnthropicBetaMessage`, `ChatUsage`, `ToChatUsageWire`, `ToChatStreamUsageWire`, `ToResponsesUsageWire`) | none in 2000 trials each | not run |
+| 3 response specs (`nonstream.ConvertAnthropicBetaToOpenAIChat`: tool call count, text, finish reason) | none in about 460 trials each (budget) | not run |
+| `ParseSSEDataPayload` prefix, `truncateToolCallID` (2), `anthropicStopReasonToIncomplete` | exhaustive: holds (48, 16, 16, 40 inputs) | certificates |
+
+Inputs and source lines, as observed:
+
+- `KeepsSystemMessages` on the Chat path: 22 input messages; message 13
+  has role `"system"` and two non-empty text blocks; the request's
+  top-level `system` field is empty. The converted request has no system
+  or developer message. The message loop at
+  `internal/protocol/request/anthropic_view.go:287-296` has cases for the
+  user and assistant roles only.
+- `KeepsSystemMessages` on the Responses path: `anthropic_v1_to_responses.go:98-106`
+  appends input items for roles `"user"` and `"assistant"` only.
+- `ParallelToolCallIndexes`: the spec feeds two `content_block_start`
+  events of type `tool_use` (ids `toolu_first`, `toolu_second`) to the
+  converter; both emitted chunks carry `tool_calls[0].index == 0`
+  (`internal/protocol/stream/anthropic_to_openai_converter.go:152`; the
+  argument deltas at `:180`).
+- `MaxTokensIsLength`: the spec feeds a `message_delta` with stop reason
+  `max_tokens`, then `message_stop`; the last chunk's `finish_reason` is
+  not `"length"`. `processEvent` sets `"stop"` or `"tool_calls"` only
+  (`:217-219`).
+- `KeepsEveryMessage` and `ToolPairsKept`: the counterexamples hold
+  messages whose roles are strings other than `user` and `assistant`.
+- In the first run of this round, before cross-package linking, five of
+  the usage specs were refuted in the model; M3 reported three
+  `spurious` and two `inconclusive` (harness compile errors). After
+  linking `ai.NewTokenUsageFull` and `(*ai.TokenUsage).PromptTotalTokens`
+  into the model, none of the seven was refuted.
+
+Written, not yet run: two request round-trip specs that compare a client
+talking to an upstream of its own protocol with one going through the
+conversion (`SpecConvertAnthropicBetaToOpenAIRequestRoundTrip`,
+`SpecConvertOpenAIToAnthropicRequestRoundTrip`), with the SDK constructors
+linked by `compile -deps`.
+
+## 6. Changes made to go2lean in the second round
+
+- Calls into sibling packages of the same compile are linked
+  (`xcall`); `compile -deps` also models the dependency functions reached
+  by static calls (bounded), e.g. the SDK constructors.
+- Calls without results are followed; a stuck callee falls back to a
+  havoc result instead of making the run moot.
+- Interface values the program builds are boxed with their dynamic type;
+  type assertions unbox them (new panic kind `type_assertion`).
+- Nil-ness of func, map, channel and interface values: nil literals, zero
+  values and opaque inputs M3 passes as nil are nil; values the program
+  builds are non-nil; only unmodelled call results are unknown.
+- M3: compile errors without a column are recognised; zero-valued
+  fields are left out of literals; a non-nil pointer to an opaque object
+  is passed as `new(T)`.
