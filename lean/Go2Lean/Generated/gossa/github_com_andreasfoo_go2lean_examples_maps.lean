@@ -371,7 +371,7 @@ def f9 : GoSSA.Func := {
       term := .jump 4 [26] }
   ] }
 
-/-- func((k string)) via NewCounter (status: complete) -/
+/-- func(k string) via NewCounter (status: complete) -/
 def f10 : GoSSA.Func := {
   name := "Counter.Add~NewCounter", params := [0, 1], nvals := 9, entry := 0,
   blocks := #[
@@ -404,7 +404,7 @@ def f10 : GoSSA.Func := {
       term := .panic .other }
   ] }
 
-/-- func((k string) int) via NewCounter (status: complete) -/
+/-- func(k string) int via NewCounter (status: complete) -/
 def f11 : GoSSA.Func := {
   name := "Counter.Share~NewCounter", params := [0, 1], nvals := 9, entry := 0,
   blocks := #[
@@ -437,7 +437,7 @@ def f11 : GoSSA.Func := {
       term := .panic .other }
   ] }
 
-/-- func((k string, v int)) via NewRegistry (status: complete) -/
+/-- func(k string, v int) via NewRegistry (status: complete) -/
 def f12 : GoSSA.Func := {
   name := "Registry.Put~NewRegistry", params := [0, 1], nvals := 5, entry := 0,
   blocks := #[

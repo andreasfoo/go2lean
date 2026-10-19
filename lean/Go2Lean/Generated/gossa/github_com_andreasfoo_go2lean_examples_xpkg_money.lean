@@ -79,6 +79,36 @@ def f3 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[] }
+/-- func() int via NewAmount (status: complete) -/
+def f4 : GoSSA.Func := {
+  name := "Amount.PerScale~NewAmount", params := [0, 1], nvals := 5, entry := 0,
+  blocks := #[
+    -- 0: ctor
+    { params := [],
+      instrs := #[],
+      term := .call 2 [0, 1] 2 1 [] 5 },
+    -- 1: recv
+    { params := [],
+      instrs := #[],
+      term := .jump 2 [] },
+    -- 2: method
+    { params := [],
+      instrs := #[],
+      term := .call 0 [2] 3 3 [] 5 },
+    -- 3: ret
+    { params := [],
+      instrs := #[],
+      term := .ret 3 },
+    -- 4: ctor-error
+    { params := [],
+      instrs := #[.op 4 (.const .unit) []],
+      term := .ret 4 },
+    -- 5: stuck
+    { params := [],
+      instrs := #[],
+      term := .panic .other }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4], havocWidths := #[] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_xpkg_money
