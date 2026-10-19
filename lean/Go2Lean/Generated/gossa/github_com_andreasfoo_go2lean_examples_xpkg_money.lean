@@ -8,8 +8,26 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 set_option maxRecDepth 100000
 
-/-- func(v int, lo int, hi int) int (status: complete) -/
+/-- func (a github.com/andreasfoo/go2lean/examples/xpkg/money.Amount) PerScale() int (status: complete) -/
 def f0 : GoSSA.Func := {
+  name := "Amount.PerScale", params := [0], nvals := 10, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.alloc (.structv [(.int 64 0#64), (.int 64 0#64)])) [],
+                 .op 2 .storePath [1, 0],
+                 .op 3 (.fieldAddr 0) [1],
+                 .op 4 .loadPath [3],
+                 .op 5 (.fieldAddr 1) [1],
+                 .op 6 .loadPath [5],
+                 .op 7 (.const (.int 64 1#64)) [],
+                 .op 8 .add [6, 7],
+                 .op 9 .sdiv [4, 8]],
+      term := .ret 9 }
+  ] }
+
+/-- func(v int, lo int, hi int) int (status: complete) -/
+def f1 : GoSSA.Func := {
   name := "Clamp", params := [0, 1, 2], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -34,8 +52,23 @@ def f0 : GoSSA.Func := {
       term := .ret 0 }
   ] }
 
+/-- func(units int, scale int) github.com/andreasfoo/go2lean/examples/xpkg/money.Amount (status: complete) -/
+def f2 : GoSSA.Func := {
+  name := "NewAmount", params := [0, 1], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.alloc (.structv [(.int 64 0#64), (.int 64 0#64)])) [],
+                 .op 3 (.fieldAddr 0) [2],
+                 .op 4 .storePath [3, 0],
+                 .op 5 (.fieldAddr 1) [2],
+                 .op 6 .storePath [5, 1],
+                 .op 7 .loadPath [2]],
+      term := .ret 7 }
+  ] }
+
 /-- func(part int, total int) int (status: complete) -/
-def f1 : GoSSA.Func := {
+def f3 : GoSSA.Func := {
   name := "Pct", params := [0, 1], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -46,6 +79,6 @@ def f1 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1], havocWidths := #[] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_xpkg_money

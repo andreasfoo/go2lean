@@ -213,7 +213,12 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 		if p.Zero == "nil" {
 			v = "nil"
 		}
-		return map[string]any{"k": "opaque", "name": p.Go, "v": v}, nil
+		g := map[string]any{"k": "opaque", "name": p.Go, "v": v}
+		if p.ZeroModel != nil {
+			// An unexported field of a foreign struct: always its zero.
+			g["zero"] = p.ZeroModel
+		}
+		return g, nil
 	case contract.ABIArray:
 		e, err := genIn(abi, p.ElemAsParam(), maxLen, open)
 		if err != nil {

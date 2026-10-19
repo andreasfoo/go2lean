@@ -3,6 +3,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -170,7 +171,7 @@ var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)
 func (w Workspace) WriteABI(a *ABI, pkgPath, funcName string) (string, error) {
 	// Instances of generic functions carry their type arguments, import
 	// paths included, in the name: keep them out of the directory layout.
-	file := strings.NewReplacer("/", "_", "*", "_").Replace(funcName)
+	file := ShortID(strings.NewReplacer("/", "_", "*", "_").Replace(funcName))
 	rel := filepath.Join("models", a.Frontend, PackageKey(pkgPath), file+".json")
 	return rel, writeJSON(filepath.Join(w.Root, rel), a)
 }
@@ -196,7 +197,20 @@ func (w Workspace) ModelReportByKey(frontend, key string) (*ModelReport, error) 
 // TargetID is the workspace id of a function: package key and function
 // name (a method is "Type.Method").
 func TargetID(pkgPath, funcName string) string {
-	return "t_" + strings.ToLower(nonIdent.ReplaceAllString(PackageKey(pkgPath)+"_"+funcName, "_"))
+	return ShortID("t_" + strings.ToLower(nonIdent.ReplaceAllString(PackageKey(pkgPath)+"_"+funcName, "_")))
+}
+
+// ShortID keeps an id usable as a file name, with room for the prefixes
+// and suffixes counterexample ids add: one longer than 220 bytes (generic
+// instances spell their type arguments, import paths included) is cut to
+// 180 and suffixed with a hash of the whole.
+func ShortID(id string) string {
+	if len(id) <= 220 {
+		return id
+	}
+	h := fnv.New64a()
+	h.Write([]byte(id))
+	return fmt.Sprintf("%s_%016x", id[:180], h.Sum64())
 }
 
 // Properties lists every property in the workspace.

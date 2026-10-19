@@ -16,3 +16,15 @@ func Clamp(v, lo, hi int) int {
 	}
 	return v
 }
+
+// Amount is a sum of money; its scale is set only by NewAmount.
+type Amount struct {
+	Units int
+	scale int
+}
+
+// NewAmount makes an amount with a scale.
+func NewAmount(units, scale int) Amount { return Amount{units, scale} }
+
+// PerScale divides the units by one more than the scale.
+func (a Amount) PerScale() int { return a.Units / (a.scale + 1) }

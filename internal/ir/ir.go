@@ -153,6 +153,31 @@ type Extract struct{ I int }
 func (e Extract) Lean() string { return fmt.Sprintf("(.extract %d)", e.I) }
 
 // Alloc allocates a heap object initialised to Zero and yields a pointer.
+// AssertIface is x.(I) for an interface I; Tags are those of the boxed
+// types of the program that implement I.
+type AssertIface struct {
+	Tags    []uint32
+	CommaOk bool
+}
+
+func (a AssertIface) Lean() string {
+	return fmt.Sprintf("(.assertIface %s %t)", tagList(a.Tags), a.CommaOk)
+}
+
+// Dispatch picks the method a call on an interface runs: args are the
+// interface value and one func value per tag in Tags.
+type Dispatch struct{ Tags []uint32 }
+
+func (d Dispatch) Lean() string { return fmt.Sprintf("(.dispatch %s)", tagList(d.Tags)) }
+
+func tagList(tags []uint32) string {
+	parts := make([]string, len(tags))
+	for i, t := range tags {
+		parts[i] = fmt.Sprint(t)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 // FuncRef is a func value naming function ID of the program; the args are
 // the values a closure captures.
 type FuncRef struct{ ID int }
@@ -274,6 +299,10 @@ var StdlibOps = map[string]Op{
 	"strings.Join":                   Simple("strJoin"),
 	"strings.Repeat":                 Simple("strRepeat"),
 	"encoding/hex.EncodeToString":    Simple("hexEncode"),
+	// A reflect.Value is the interface value it reflects; IsZero is the
+	// only method modelled (param.IsOmitted of the OpenAI SDK uses it).
+	"reflect.ValueOf":        Simple("reflectOf"),
+	"(reflect.Value).IsZero": Simple("reflectIsZero"),
 	// A random UUID: a fresh value, distinct from every other one a run
 	// draws (the real values collide with negligible probability).
 	"github.com/google/uuid.New": FreshArr{N: 16},

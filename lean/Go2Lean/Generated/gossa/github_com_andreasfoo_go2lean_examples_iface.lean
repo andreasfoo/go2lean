@@ -8,65 +8,62 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 set_option maxRecDepth 100000
 
-/-- func(n int, name string) int (status: complete) -/
+/-- func(n int) int (status: complete) -/
 def f0 : GoSSA.Func := {
+  name := "Area", params := [0], nvals := 20, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.alloc (.structv [(.int 64 0#64)])) [],
+                 .op 3 (.fieldAddr 0) [2],
+                 .op 4 .storePath [3, 0],
+                 .op 5 .loadPath [2],
+                 .op 6 (.box 1728985994) [5],
+                 .op 7 (.const (.int 64 10#64)) [],
+                 .op 8 .sgt [0, 7]],
+      term := .br 8 1 [] 2 [6] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 9 (.alloc (.structv [(.int 64 0#64), (.int 64 0#64)])) [],
+                 .op 10 (.fieldAddr 0) [9],
+                 .op 11 .storePath [10, 0],
+                 .op 12 (.fieldAddr 1) [9],
+                 .op 13 (.const (.int 64 2#64)) [],
+                 .op 14 .storePath [12, 13],
+                 .op 15 (.box 947494092) [9]],
+      term := .jump 2 [15] },
+    -- 2: if.done
+    { params := [1],
+      instrs := #[.op 16 (.funcRef 20) [],
+                 .op 17 (.funcRef 12) [],
+                 .op 18 (.dispatch [1728985994, 947494092]) [1, 16, 17]],
+      term := .callv 18 [] 19 3 [] 4 },
+    -- 3: if.done.after-call
+    { params := [],
+      instrs := #[],
+      term := .ret 19 },
+    -- 4: if.done.call-fallback
+    { params := [],
+      instrs := #[.havoc 19 0],
+      term := .jump 3 [] }
+  ] }
+
+/-- func(n int, name string) int (status: complete) -/
+def f1 : GoSSA.Func := {
   name := "Count", params := [0, 1], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[.op 2 (.alloc (.structv [(.slice 0 0#64 0#64 0#64)])) []],
-      term := .call 4 [2, 0] 3 3 [] 4 },
+      term := .call 8 [2, 0] 3 3 [] 4 },
     -- 1: if.then
     { params := [],
       instrs := #[],
-      term := .call 5 [2, 1] 6 5 [] 6 },
+      term := .call 9 [2, 1] 6 5 [] 6 },
     -- 2: if.done
     { params := [],
       instrs := #[],
-      term := .call 3 [2] 7 7 [] 8 },
-    -- 3: entry.after-call
-    { params := [],
-      instrs := #[.op 4 (.strConst []) [],
-                 .op 5 .ne [1, 4]],
-      term := .br 5 1 [] 2 [] },
-    -- 4: entry.call-fallback
-    { params := [],
-      instrs := #[.op 3 (.const .unit) []],
-      term := .jump 3 [] },
-    -- 5: if.then.after-call
-    { params := [],
-      instrs := #[],
-      term := .jump 2 [] },
-    -- 6: if.then.call-fallback
-    { params := [],
-      instrs := #[.op 6 (.const .unit) []],
-      term := .jump 5 [] },
-    -- 7: if.done.after-call
-    { params := [],
-      instrs := #[],
-      term := .ret 7 },
-    -- 8: if.done.call-fallback
-    { params := [],
-      instrs := #[.havoc 7 0],
-      term := .jump 7 [] }
-  ] }
-
-/-- func(n int, name string) int (status: complete) -/
-def f1 : GoSSA.Func := {
-  name := "Mixed", params := [0, 1], nvals := 8, entry := 0,
-  blocks := #[
-    -- 0: entry
-    { params := [],
-      instrs := #[.op 2 (.alloc (.structv [(.slice 0 0#64 0#64 0#64)])) []],
-      term := .call 4 [2, 0] 3 3 [] 4 },
-    -- 1: if.then
-    { params := [],
-      instrs := #[],
-      term := .call 5 [2, 1] 6 5 [] 6 },
-    -- 2: if.done
-    { params := [],
-      instrs := #[],
-      term := .call 6 [2] 7 7 [] 8 },
+      term := .call 7 [2] 7 7 [] 8 },
     -- 3: entry.after-call
     { params := [],
       instrs := #[.op 4 (.strConst []) [],
@@ -94,8 +91,155 @@ def f1 : GoSSA.Func := {
       term := .jump 7 [] }
   ] }
 
-/-- func (p *github.com/andreasfoo/go2lean/examples/iface.Pipe) Keep(s string) (status: partial) -/
+/-- func(n int, name string) int (status: complete) -/
 def f2 : GoSSA.Func := {
+  name := "Mixed", params := [0, 1], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.alloc (.structv [(.slice 0 0#64 0#64 0#64)])) []],
+      term := .call 8 [2, 0] 3 3 [] 4 },
+    -- 1: if.then
+    { params := [],
+      instrs := #[],
+      term := .call 9 [2, 1] 6 5 [] 6 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[],
+      term := .call 10 [2] 7 7 [] 8 },
+    -- 3: entry.after-call
+    { params := [],
+      instrs := #[.op 4 (.strConst []) [],
+                 .op 5 .ne [1, 4]],
+      term := .br 5 1 [] 2 [] },
+    -- 4: entry.call-fallback
+    { params := [],
+      instrs := #[.op 3 (.const .unit) []],
+      term := .jump 3 [] },
+    -- 5: if.then.after-call
+    { params := [],
+      instrs := #[],
+      term := .jump 2 [] },
+    -- 6: if.then.call-fallback
+    { params := [],
+      instrs := #[.op 6 (.const .unit) []],
+      term := .jump 5 [] },
+    -- 7: if.done.after-call
+    { params := [],
+      instrs := #[],
+      term := .ret 7 },
+    -- 8: if.done.call-fallback
+    { params := [],
+      instrs := #[.havoc 7 2],
+      term := .jump 7 [] }
+  ] }
+
+/-- func(o github.com/andreasfoo/go2lean/examples/iface.Opt) string (status: complete) -/
+def f3 : GoSSA.Func := {
+  name := "Name", params := [0], nvals := 9, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.alloc (.structv [(.str 0 0#64 0#64), (.bool false)])) [],
+                 .op 2 .storePath [1, 0],
+                 .op 3 .loadPath [1],
+                 .op 4 (.box 2842685759) [3]],
+      term := .call 4 [4] 5 3 [] 4 },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 6 (.strConst [110, 111, 110, 101]) []],
+      term := .ret 6 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 7 (.fieldAddr 0) [1],
+                 .op 8 .loadPath [7]],
+      term := .ret 8 },
+    -- 3: entry.after-call
+    { params := [],
+      instrs := #[],
+      term := .br 5 1 [] 2 [] },
+    -- 4: entry.call-fallback
+    { params := [],
+      instrs := #[.havoc 5 3],
+      term := .jump 3 [] }
+  ] }
+
+/-- func(v any) bool (status: partial) -/
+def f4 : GoSSA.Func := {
+  name := "Omitted", params := [0], nvals := 15, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 .nilKnown [0]],
+      term := .br 2 5 [] 6 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 3 (.const (.bool false)) []],
+      term := .ret 3 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 5 .nilKnown [0]],
+      term := .br 5 8 [] 9 [] },
+    -- 3: if.then
+    { params := [],
+      instrs := #[.op 10 (.funcRef 5) [],
+                 .op 11 (.dispatch [2842685759]) [8, 10]],
+      term := .callv 11 [] 12 11 [] 12 },
+    -- 4: if.done
+    { params := [],
+      instrs := #[.op 13 .reflectOf [0],
+                 .op 14 .reflectIsZero [13]],
+      term := .ret 14 },
+    -- 5: entry.nil-known
+    { params := [],
+      instrs := #[.op 1 .isNilOpaque [0]],
+      term := .jump 7 [] },
+    -- 6: entry.nil-unknown
+    { params := [],
+      instrs := #[.havoc 1 4],
+      term := .jump 7 [] },
+    -- 7: entry.nil-join
+    { params := [],
+      instrs := #[],
+      term := .br 1 1 [] 2 [] },
+    -- 8: if.done.known
+    { params := [],
+      instrs := #[.op 4 (.assertIface [2842685759] true) [0]],
+      term := .jump 10 [] },
+    -- 9: if.done.unknown
+    { params := [],
+      instrs := #[.op 6 (.const .unit) [],
+                 .havoc 7 5,
+                 .op 4 .mkTuple [6, 7]],
+      term := .jump 10 [] },
+    -- 10: if.done.known-join
+    { params := [],
+      instrs := #[.op 8 (.extract 0) [4],
+                 .op 9 (.extract 1) [4]],
+      term := .br 9 3 [] 4 [] },
+    -- 11: if.then.after-call
+    { params := [],
+      instrs := #[],
+      term := .ret 12 },
+    -- 12: if.then.call-fallback
+    { params := [],
+      instrs := #[.havoc 12 6],
+      term := .jump 11 [] }
+  ] }
+
+/-- func (o github.com/andreasfoo/go2lean/examples/iface.Opt) isZero() bool (status: complete) -/
+def f5 : GoSSA.Func := {
+  name := "Opt.isZero", params := [0], nvals := 3, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.const (.structv [(.str 0 0#64 0#64), (.bool false)])) [],
+                 .op 2 .eqDeep [0, 1]],
+      term := .ret 2 }
+  ] }
+
+/-- func (p *github.com/andreasfoo/go2lean/examples/iface.Pipe) Keep(s string) (status: partial) -/
+def f6 : GoSSA.Func := {
   name := "Pipe.Keep", params := [0, 1], nvals := 32, entry := 0,
   blocks := #[
     -- 0: entry
@@ -146,7 +290,7 @@ def f2 : GoSSA.Func := {
       term := .br 24 2 [] 1 [] },
     -- 6: cond.true.call-fallback
     { params := [],
-      instrs := #[.havoc 24 2],
+      instrs := #[.havoc 24 7],
       term := .jump 5 [] },
     -- 7: cond.true.nil-known
     { params := [],
@@ -155,7 +299,7 @@ def f2 : GoSSA.Func := {
       term := .jump 9 [] },
     -- 8: cond.true.nil-unknown
     { params := [],
-      instrs := #[.havoc 29 3],
+      instrs := #[.havoc 29 8],
       term := .jump 9 [] },
     -- 9: cond.true.nil-join
     { params := [],
@@ -164,7 +308,7 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Ints() int (status: partial) -/
-def f3 : GoSSA.Func := {
+def f7 : GoSSA.Func := {
   name := "Queue.Ints", params := [0], nvals := 21, entry := 0,
   blocks := #[
     -- 0: entry
@@ -202,8 +346,8 @@ def f3 : GoSSA.Func := {
       term := .jump 7 [] },
     -- 6: rangeindex.body.assert-unknown
     { params := [],
-      instrs := #[.havoc 15 4,
-                 .havoc 16 5,
+      instrs := #[.havoc 15 9,
+                 .havoc 16 10,
                  .op 13 .mkTuple [15, 16]],
       term := .jump 7 [] },
     -- 7: rangeindex.body.assert-join
@@ -214,7 +358,7 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Push(v int) (status: complete) -/
-def f4 : GoSSA.Func := {
+def f8 : GoSSA.Func := {
   name := "Queue.Push", params := [0, 1], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
@@ -237,7 +381,7 @@ def f4 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) PushName(s string) (status: complete) -/
-def f5 : GoSSA.Func := {
+def f9 : GoSSA.Func := {
   name := "Queue.PushName", params := [0, 1], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
@@ -260,7 +404,7 @@ def f5 : GoSSA.Func := {
   ] }
 
 /-- func (q *github.com/andreasfoo/go2lean/examples/iface.Queue) Sum() int (status: partial) -/
-def f6 : GoSSA.Func := {
+def f10 : GoSSA.Func := {
   name := "Queue.Sum", params := [0], nvals := 16, entry := 0,
   blocks := #[
     -- 0: entry
@@ -293,7 +437,7 @@ def f6 : GoSSA.Func := {
       term := .jump 6 [] },
     -- 5: rangeindex.body.assert-unknown
     { params := [],
-      instrs := #[.havoc 13 6],
+      instrs := #[.havoc 13 11],
       term := .jump 6 [] },
     -- 6: rangeindex.body.assert-join
     { params := [],
@@ -301,8 +445,87 @@ def f6 : GoSSA.Func := {
       term := .jump 1 [15, 9] }
   ] }
 
+/-- func(n int, total int) int (status: complete) -/
+def f11 : GoSSA.Func := {
+  name := "Ratio", params := [0, 1], nvals := 12, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.alloc (.structv [(.int 64 0#64)])) [],
+                 .op 3 (.fieldAddr 0) [2],
+                 .op 4 .storePath [3, 0],
+                 .op 5 .loadPath [2],
+                 .op 6 (.box 1728985994) [5],
+                 .op 7 (.funcRef 20) [],
+                 .op 8 (.funcRef 12) [],
+                 .op 9 (.dispatch [1728985994, 947494092]) [6, 7, 8]],
+      term := .callv 9 [] 10 1 [] 2 },
+    -- 1: entry.after-call
+    { params := [],
+      instrs := #[.op 11 .sdiv [1, 10]],
+      term := .ret 11 },
+    -- 2: entry.call-fallback
+    { params := [],
+      instrs := #[.havoc 10 12],
+      term := .jump 1 [] }
+  ] }
+
+/-- func (r *github.com/andreasfoo/go2lean/examples/iface.Rect) Area() int (status: complete) -/
+def f12 : GoSSA.Func := {
+  name := "Rect.Area", params := [0], nvals := 6, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.fieldAddr 0) [0],
+                 .op 2 .loadPath [1],
+                 .op 3 (.fieldAddr 1) [0],
+                 .op 4 .loadPath [3],
+                 .op 5 .mul [2, 4]],
+      term := .ret 5 }
+  ] }
+
+/-- func(m *github.com/andreasfoo/go2lean/examples/iface.Msg) bool (status: complete) -/
+def f13 : GoSSA.Func := {
+  name := "Set", params := [0], nvals := 4, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.box 907606219) [0]],
+      term := .call 4 [1] 2 1 [] 2 },
+    -- 1: entry.after-call
+    { params := [],
+      instrs := #[.op 3 .not [2]],
+      term := .ret 3 },
+    -- 2: entry.call-fallback
+    { params := [],
+      instrs := #[.havoc 2 13],
+      term := .jump 1 [] }
+  ] }
+
+/-- func(n int, ret int) bool (status: complete) -/
+def f14 : GoSSA.Func := {
+  name := "SpecAreaDispatch", params := [0, 1], nvals := 9, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.const (.int 64 10#64)) [],
+                 .op 3 .sgt [0, 2]],
+      term := .br 3 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 4 (.const (.int 64 2#64)) [],
+                 .op 5 .mul [4, 0],
+                 .op 6 .eq [1, 5]],
+      term := .ret 6 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 7 .mul [0, 0],
+                 .op 8 .eq [1, 7]],
+      term := .ret 8 }
+  ] }
+
 /-- func(n int, name string, ret int) bool (status: complete) -/
-def f7 : GoSSA.Func := {
+def f15 : GoSSA.Func := {
   name := "SpecCountOne", params := [0, 1, 2], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -312,8 +535,39 @@ def f7 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
+/-- func(o github.com/andreasfoo/go2lean/examples/iface.Opt, ret string) bool (status: complete) -/
+def f16 : GoSSA.Func := {
+  name := "SpecNameOmitted", params := [0, 1], nvals := 15, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.alloc (.structv [(.str 0 0#64 0#64), (.bool false)])) [],
+                 .op 3 .storePath [2, 0],
+                 .op 4 (.fieldAddr 0) [2],
+                 .op 5 .loadPath [4],
+                 .op 6 (.strConst []) [],
+                 .op 7 .eq [5, 6]],
+      term := .br 7 3 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 8 (.strConst [110, 111, 110, 101]) [],
+                 .op 9 .eq [1, 8]],
+      term := .ret 9 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 10 (.fieldAddr 0) [2],
+                 .op 11 .loadPath [10],
+                 .op 12 .eq [1, 11]],
+      term := .ret 12 },
+    -- 3: cond.true
+    { params := [],
+      instrs := #[.op 13 (.fieldAddr 1) [2],
+                 .op 14 .loadPath [13]],
+      term := .br 14 2 [] 1 [] }
+  ] }
+
 /-- func(p *github.com/andreasfoo/go2lean/examples/iface.Pipe, s string) bool (status: partial) -/
-def f8 : GoSSA.Func := {
+def f17 : GoSSA.Func := {
   name := "SpecPipeKeepUnfiltered", params := [0, 1], nvals := 30, entry := 0,
   blocks := #[
     -- 0: entry
@@ -370,7 +624,7 @@ def f8 : GoSSA.Func := {
       term := .jump 9 [] },
     -- 8: cond.true.nil-unknown
     { params := [],
-      instrs := #[.havoc 20 7],
+      instrs := #[.havoc 20 14],
       term := .jump 9 [] },
     -- 9: cond.true.nil-join
     { params := [],
@@ -379,7 +633,7 @@ def f8 : GoSSA.Func := {
   ] }
 
 /-- func(q *github.com/andreasfoo/go2lean/examples/iface.Queue, v int) bool (status: partial) -/
-def f9 : GoSSA.Func := {
+def f18 : GoSSA.Func := {
   name := "SpecQueuePushLast", params := [0, 1], nvals := 26, entry := 0,
   blocks := #[
     -- 0: entry
@@ -427,8 +681,8 @@ def f9 : GoSSA.Func := {
       term := .jump 9 [] },
     -- 8: if.done.assert-unknown
     { params := [],
-      instrs := #[.havoc 20 8,
-                 .havoc 21 9,
+      instrs := #[.havoc 20 15,
+                 .havoc 21 16,
                  .op 18 .mkTuple [20, 21]],
       term := .jump 9 [] },
     -- 9: if.done.assert-join
@@ -439,8 +693,36 @@ def f9 : GoSSA.Func := {
       term := .br 23 5 [] 6 [24] }
   ] }
 
+/-- func(m *github.com/andreasfoo/go2lean/examples/iface.Msg, ret bool) bool (status: complete) -/
+def f19 : GoSSA.Func := {
+  name := "SpecSetNonNil", params := [0, 1], nvals := 5, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.const (.ptr 0 [])) [],
+                 .op 3 .ne [0, 2],
+                 .op 4 .eq [1, 3]],
+      term := .ret 4 }
+  ] }
+
+/-- func (s github.com/andreasfoo/go2lean/examples/iface.Sq) Area() int (status: complete) -/
+def f20 : GoSSA.Func := {
+  name := "Sq.Area", params := [0], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.alloc (.structv [(.int 64 0#64)])) [],
+                 .op 2 .storePath [1, 0],
+                 .op 3 (.fieldAddr 0) [1],
+                 .op 4 .loadPath [3],
+                 .op 5 (.fieldAddr 0) [1],
+                 .op 6 .loadPath [5],
+                 .op 7 .mul [4, 6]],
+      term := .ret 7 }
+  ] }
+
 /-- func(v any) int (status: partial) -/
-def f10 : GoSSA.Func := {
+def f21 : GoSSA.Func := {
   name := "Unwrap", params := [0], nvals := 3, entry := 0,
   blocks := #[
     -- 0: entry
@@ -453,7 +735,7 @@ def f10 : GoSSA.Func := {
       term := .jump 3 [] },
     -- 2: entry.assert-unknown
     { params := [],
-      instrs := #[.havoc 1 10],
+      instrs := #[.havoc 1 17],
       term := .jump 3 [] },
     -- 3: entry.assert-join
     { params := [],
@@ -461,6 +743,6 @@ def f10 : GoSSA.Func := {
       term := .ret 1 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10], havocWidths := #[64, 64, 1, 1, 64, 1, 64, 1, 64, 1, 64] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21], havocWidths := #[64, 64, 64, 1, 1, 1, 1, 1, 1, 64, 1, 64, 64, 1, 1, 64, 1, 64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_iface

@@ -318,7 +318,26 @@ func betaConversation(req *anthropic.BetaMessageNewParams) (system, user, assist
 // and tool_result in user messages, tool ids within the limit. Other block
 // kinds (images, thinking, ...) may occur; the comparison ignores them.
 func plainBetaRequest(req *anthropic.BetaMessageNewParams) bool {
-	return wellFormedToolTurns(req)
+	if !wellFormedToolTurns(req) {
+		return false
+	}
+	// Every tool_use answered by a later tool_result and every result
+	// answering an earlier use: tingly-box repairs the rest on purpose.
+	open := map[string]bool{}
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.OfToolUse != nil {
+				open[b.OfToolUse.ID] = true
+			}
+			if b.OfToolResult != nil {
+				if !open[b.OfToolResult.ToolUseID] {
+					return false
+				}
+				delete(open, b.OfToolResult.ToolUseID)
+			}
+		}
+	}
+	return len(open) == 0
 }
 
 func sameStrings(a, b []string) bool {
@@ -411,7 +430,23 @@ func plainOpenAIRequest(req *openai.ChatCompletionNewParams) bool {
 			return false
 		}
 	}
-	return true
+	// Every tool call answered by a later tool message and every tool
+	// message answering an earlier call (the rest is repaired on purpose).
+	open := map[string]bool{}
+	for _, m := range req.Messages {
+		if m.OfAssistant != nil {
+			for _, tc := range m.OfAssistant.ToolCalls {
+				open[tc.OfFunction.ID] = true
+			}
+		}
+		if m.OfTool != nil {
+			if !open[m.OfTool.ToolCallID] {
+				return false
+			}
+			delete(open, m.OfTool.ToolCallID)
+		}
+	}
+	return len(open) == 0
 }
 
 // go2lean:spec ConvertOpenAIToAnthropicRequest
@@ -485,6 +520,11 @@ func responsesConversation(req *responses.ResponseNewParams) (system, user, assi
 				if c.OfOutputText != nil {
 					assistant += c.OfOutputText.Text
 				}
+				// A refusal is what the assistant said; Anthropic and Chat
+				// carry it as text.
+				if c.OfRefusal != nil {
+					assistant += c.OfRefusal.Refusal
+				}
 			}
 		case item.OfFunctionCall != nil:
 			calls = append(calls, item.OfFunctionCall.CallID+"/"+item.OfFunctionCall.Name)
@@ -505,6 +545,23 @@ func responsesConversation(req *responses.ResponseNewParams) (system, user, assi
 // call and function call output items only; roles user, assistant, system
 // and developer; call ids non-empty.
 func plainResponsesRequest(req *responses.ResponseNewParams) bool {
+	// Every call needs its output: an orphan call is repaired on purpose
+	// (tingly-box adds an "aborted" result so the upstream accepts it).
+	open := map[string]bool{}
+	for _, item := range req.Input.OfInputItemList {
+		if item.OfFunctionCall != nil {
+			open[item.OfFunctionCall.CallID] = true
+		}
+		if item.OfFunctionCallOutput != nil {
+			if !open[item.OfFunctionCallOutput.CallID.Value] {
+				return false
+			}
+			delete(open, item.OfFunctionCallOutput.CallID.Value)
+		}
+	}
+	if len(open) != 0 {
+		return false
+	}
 	for _, item := range req.Input.OfInputItemList {
 		switch {
 		case item.OfMessage != nil:

@@ -29,3 +29,25 @@ func SpecPipeKeepUnfiltered(p *Pipe, s string) bool {
 	n := len(p.kept)
 	return n > 0 && p.kept[n-1] == s
 }
+
+// go2lean:spec Area
+// SpecAreaDispatch: a square for small sides, a 2-high rectangle above 10.
+func SpecAreaDispatch(n int, ret int) bool {
+	if n > 10 {
+		return ret == 2*n
+	}
+	return ret == n*n
+}
+
+// go2lean:spec Name
+// SpecNameOmitted: "none" exactly for the zero option, else its value.
+func SpecNameOmitted(o Opt, ret string) bool {
+	if o.V == "" && !o.Set {
+		return ret == "none"
+	}
+	return ret == o.V
+}
+
+// go2lean:spec Set
+// SpecSetNonNil: a message is set exactly when the pointer is not nil.
+func SpecSetNonNil(m *Msg, ret bool) bool { return ret == (m != nil) }

@@ -9,6 +9,20 @@ namespace Go2Lean.Search
 
 open Lean
 
+/-- Decode a zero value described by `gossa.zeroModel`. -/
+partial def valOfJson (j : Json) : Except String GoSSA.Val := do
+  match ← j.getObjValAs? String "k" with
+  | "int" => let w ← j.getObjValAs? Nat "w"; return .int w 0
+  | "bool" => return .bool false
+  | "err" => return .err false
+  | "str" => return .str 0 0#64 0#64
+  | "nil" => return .opaqueNil
+  | "ptr" => return .ptr 0 []
+  | "slice" => return .slice 0 0#64 0#64 0#64
+  | "struct" => return .structv (← ((← j.getObjValAs? (Array Json) "fields").toList.mapM valOfJson))
+  | "arr" => return .arr (← ((← j.getObjValAs? (Array Json) "elems").toList.mapM valOfJson))
+  | _ => return .unit
+
 /-- Decode a generator; the shape mirrors `constraint.genJSON` on the Go side. -/
 partial def genOfJson (j : Json) : Except String Gen := do
   let k ← j.getObjValAs? String "k"
@@ -30,6 +44,8 @@ partial def genOfJson (j : Json) : Except String Gen := do
   | "nilptr" => return .nilptr name
   | "ref" => return .ref name (← j.getObjValAs? Nat "ty")
   | "opaque" =>
+    if let .ok z := j.getObjVal? "zero" then
+      return .opaque name (← valOfJson z)
     let v := match (j.getObjValAs? String "v").toOption with
       | some "nil" => .opaqueNil
       | some "nonnil" => .boxed 0 .unit

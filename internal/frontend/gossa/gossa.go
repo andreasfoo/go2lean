@@ -128,7 +128,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 		roots = append(roots, fns...)
 	}
 	if opts.Deps {
-		deps := depClosure(roots, mainPaths, zeros)
+		deps := depClosure(roots, mainPaths, zeros, invokedNames(sprog))
 		var paths []string
 		for path := range deps {
 			paths = append(paths, path)
@@ -155,6 +155,24 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 	for k := range units {
 		units[k].fns = withAnon(units[k].fns)
 	}
+	// The types modelled code boxes into interfaces: the dynamic types an
+	// interface value the model built can have.
+	var boxed []types.Type
+	seenBoxed := map[string]bool{}
+	for _, u := range units {
+		for _, f := range u.fns {
+			for _, b := range f.Blocks {
+				for _, in := range b.Instrs {
+					if mi, ok := in.(*ssa.MakeInterface); ok {
+						if k := types.TypeString(mi.X.Type(), nil); !seenBoxed[k] {
+							seenBoxed[k] = true
+							boxed = append(boxed, mi.X.Type())
+						}
+					}
+				}
+			}
+		}
+	}
 	for _, u := range units {
 		for id, f := range u.fns {
 			xrefs[f.String()] = contract.XCall{Package: u.path, ID: id}
@@ -162,7 +180,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 	}
 	var progs []*ir.Prog
 	for _, u := range units {
-		p, err := translatePackage(u.path, u.fns, xrefs, zeros)
+		p, err := translatePackage(u.path, u.fns, xrefs, zeros, sprog, boxed)
 		if err != nil {
 			return nil, "", err
 		}
@@ -178,7 +196,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 // package-level variable holds from its initializer (zeros), and the bodies
 // of closures (added to their package by withAnon). Generic functions and
 // wrappers are left out (they stay unmodelled).
-func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa.Global]ssa.Value) map[string][]*ssa.Function {
+func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa.Global]ssa.Value, invoked map[string]bool) map[string][]*ssa.Function {
 	out := map[string][]*ssa.Function{}
 	seen := map[*ssa.Function]bool{}
 	count := 0
@@ -189,17 +207,30 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 		}
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
+				var refs []*ssa.Function
 				for _, op := range in.Operands(nil) {
-					var callee *ssa.Function
 					switch v := (*op).(type) {
 					case *ssa.Function:
-						callee = v
+						refs = append(refs, v)
 					case *ssa.Global:
-						callee, _ = zeros[v].(*ssa.Function)
+						if fn, ok := zeros[v].(*ssa.Function); ok {
+							refs = append(refs, fn)
+						}
 					}
-					if callee == nil {
-						continue
+				}
+				// A boxed value: the methods of its type some call on an
+				// interface may reach.
+				if mi, ok := in.(*ssa.MakeInterface); ok {
+					ms := f.Prog.MethodSets.MethodSet(mi.X.Type())
+					for i := 0; i < ms.Len(); i++ {
+						if invoked[ms.At(i).Obj().Name()] {
+							if fn := f.Prog.MethodValue(ms.At(i)); fn != nil {
+								refs = append(refs, fn)
+							}
+						}
 					}
+				}
+				for _, callee := range refs {
 					if callee.Parent() != nil {
 						// A closure: walk its body as part of its parent's.
 						if !seen[callee] {
@@ -343,6 +374,22 @@ func withAnon(fns []*ssa.Function) []*ssa.Function {
 	return out
 }
 
+// invokedNames returns the names of the methods called on interface values
+// anywhere in the program.
+func invokedNames(sprog *ssa.Program) map[string]bool {
+	out := map[string]bool{}
+	for f := range ssautil.AllFunctions(sprog) {
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				if c, ok := in.(ssa.CallInstruction); ok && c.Common().IsInvoke() {
+					out[c.Common().Method.Name()] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 // isStdlib says whether an import path belongs to the standard library
 // (no dot in its first element).
 func isStdlib(path string) bool {
@@ -379,9 +426,9 @@ func candidates(spkg *ssa.Package) []*ssa.Function {
 	return fns
 }
 
-func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]ssa.Value) (*ir.Prog, error) {
+func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]ssa.Value, sprog *ssa.Program, boxed []types.Type) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
-	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros}
+	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros, sprog: sprog, boxed: boxed}
 
 	// Pass 1: assign FuncIds so calls can be resolved.
 	byName := map[string]*ssa.Function{}
@@ -488,6 +535,25 @@ type progState struct {
 	// zeros holds the package-level variables nothing writes: a load of
 	// one is its zero value.
 	zeros map[*ssa.Global]ssa.Value
+	sprog *ssa.Program
+	// boxed lists the types modelled code boxes into interfaces.
+	boxed []types.Type
+}
+
+// maxImplementers bounds the boxed types an interface assertion or a
+// method call on an interface considers; beyond it they stay unmodelled.
+const maxImplementers = 64
+
+// implementers returns the boxed types implementing iface, or false when
+// there are more than maxImplementers.
+func (s *progState) implementers(iface *types.Interface) ([]types.Type, bool) {
+	var out []types.Type
+	for _, t := range s.boxed {
+		if types.Implements(t, iface) {
+			out = append(out, t)
+		}
+	}
+	return out, len(out) <= maxImplementers
 }
 
 func (s *progState) newHavoc(width int, site, reason, goHint string) int {
@@ -1186,6 +1252,11 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if zero, ok := zeroVal(x.AssertedType); ok && !types.IsInterface(x.AssertedType) {
 			return t.typeAssert(x, zero)
 		}
+		if iface, ok := x.AssertedType.Underlying().(*types.Interface); ok {
+			if impls, ok := t.prog.implementers(iface); ok {
+				return t.ifaceAssert(x, impls)
+			}
+		}
 		if x.CommaOk {
 			return t.havoc(x, "type assertion", "opaque-assert", "")
 		}
@@ -1666,6 +1737,11 @@ func (t *fnState) call(x *ssa.Call) error {
 		}
 		return t.emitCall(x, ir.Term{Kind: ir.TermCall, Callee: id}, callee.String())
 	}
+	if x.Call.IsInvoke() {
+		if done, err := t.invoke(x); done || err != nil {
+			return err
+		}
+	}
 	if callee == nil && !x.Call.IsInvoke() {
 		// A call through a func value: the model follows the function it
 		// names, if it knows it.
@@ -1794,6 +1870,80 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]
 	return nil
+}
+
+// ifaceAssert lowers x.(I) for an interface I: a value the model boxed
+// passes when its type is among impls, the boxed types implementing I.
+func (t *fnState) ifaceAssert(x *ssa.TypeAssert, impls []types.Type) error {
+	v, err := t.val(x.X)
+	if err != nil {
+		return err
+	}
+	tags := make([]uint32, len(impls))
+	for i, ty := range impls {
+		tags[i] = typeTag(ty)
+	}
+	dst := t.def(x)
+	return t.onKnown(v, func() error {
+		t.emit(ir.Instr{Dst: dst, Op: ir.AssertIface{Tags: tags, CommaOk: x.CommaOk}, Args: []ir.Var{v}})
+		return nil
+	}, func() error {
+		t.issue("type assertion %s on an interface value the model did not build is havoc", x.Name())
+		return t.havocResult(dst, x, "type assertion", "opaque-assert")
+	})
+}
+
+// invoke lowers a method call on an interface value: the method of the
+// boxed value's type, among the boxed types implementing the interface
+// whose method the model holds; a nil interface panics, any other value
+// makes the call unmodelled. It reports false when no type qualifies.
+func (t *fnState) invoke(x *ssa.Call) (bool, error) {
+	iface, ok := x.Call.Value.Type().Underlying().(*types.Interface)
+	if !ok {
+		return false, nil
+	}
+	impls, ok := t.prog.implementers(iface)
+	if !ok {
+		return false, nil
+	}
+	m := x.Call.Method
+	var tags []uint32
+	var fns []*ssa.Function
+	for _, ty := range impls {
+		sel := t.prog.sprog.MethodSets.MethodSet(ty).Lookup(m.Pkg(), m.Name())
+		if sel == nil {
+			continue
+		}
+		fn := t.prog.sprog.MethodValue(sel)
+		if fn == nil {
+			continue
+		}
+		if _, ok := t.prog.ids[fn]; !ok {
+			if xr, ok := t.prog.xrefs[fn.String()]; !ok || xr.Package == t.prog.prog.Package {
+				continue
+			}
+		}
+		tags = append(tags, typeTag(ty))
+		fns = append(fns, fn)
+	}
+	if len(fns) == 0 {
+		return false, nil
+	}
+	recv, err := t.val(x.Call.Value)
+	if err != nil {
+		return false, err
+	}
+	args := []ir.Var{recv}
+	for _, fn := range fns {
+		v := t.fresh()
+		if err := t.funcValue(v, fn, nil); err != nil {
+			return false, err
+		}
+		args = append(args, v)
+	}
+	fv := t.fresh()
+	t.emit(ir.Instr{Dst: fv, Op: ir.Dispatch{Tags: tags}, Args: args})
+	return true, t.emitCall(x, ir.Term{Kind: ir.TermCallV, FV: fv}, x.Call.Method.Name())
 }
 
 // opaqueLen binds dst to the length of a map or channel the model does
@@ -2376,7 +2526,11 @@ func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named
 	for i := 0; i < u.NumFields(); i++ {
 		fld := u.Field(i)
 		if foreign && !fld.Exported() {
-			fields = append(fields, contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: zeroLit(fld.Type(), types.TypeString(fld.Type(), nil))})
+			p := contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: zeroLit(fld.Type(), types.TypeString(fld.Type(), nil))}
+			if z, ok := zeroVal(fld.Type()); ok {
+				p.ZeroModel = zeroModel(z)
+			}
+			fields = append(fields, p)
 			continue
 		}
 		f, err := ab.param(fld.Name(), fld.Type(), stack)
@@ -2386,6 +2540,40 @@ func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named
 		fields = append(fields, f)
 	}
 	return fields, nil
+}
+
+// zeroModel describes a zero value for the generator (see valOfJson in
+// lean/Go2Lean/Driver.lean).
+func zeroModel(v ir.Val) any {
+	switch x := v.(type) {
+	case ir.IntVal:
+		return map[string]any{"k": "int", "w": x.Width}
+	case ir.BoolVal:
+		return map[string]any{"k": "bool"}
+	case ir.ErrVal:
+		return map[string]any{"k": "err"}
+	case ir.EmptyStr:
+		return map[string]any{"k": "str"}
+	case ir.OpaqueNil:
+		return map[string]any{"k": "nil"}
+	case ir.NilPtr:
+		return map[string]any{"k": "ptr"}
+	case ir.NilSlice:
+		return map[string]any{"k": "slice"}
+	case ir.StructVal:
+		fs := make([]any, len(x.Fields))
+		for i, f := range x.Fields {
+			fs[i] = zeroModel(f)
+		}
+		return map[string]any{"k": "struct", "fields": fs}
+	case ir.ArrVal:
+		es := make([]any, len(x.Elems))
+		for i, e := range x.Elems {
+			es[i] = zeroModel(e)
+		}
+		return map[string]any{"k": "arr", "elems": es}
+	}
+	return map[string]any{"k": "unit"}
 }
 
 // param describes one value of type t named name. `stack` holds the named

@@ -17,7 +17,7 @@ var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)
 // PropertyID builds a workspace-unique, Lean-module-safe identifier.
 func PropertyID(parts ...string) string {
 	id := "p_" + strings.ToLower(strings.Join(parts, "_"))
-	return nonIdent.ReplaceAllString(id, "_")
+	return contract.ShortID(nonIdent.ReplaceAllString(id, "_"))
 }
 
 // Propose templates one no_panic property per target function and one

@@ -294,6 +294,10 @@ type ABIParam struct {
 	// Zero is the Go literal of an opaque value's zero ("0" for a float,
 	// "nil" otherwise), used for elements of slices and arrays.
 	Zero string `json:"zero,omitempty"`
+	// ZeroModel is the model's zero value of an unexported field of a
+	// foreign struct, which a test cannot set: the generator fixes the
+	// field to it (shape decoded by the Lean driver's valOfJson).
+	ZeroModel any `json:"zero_model,omitempty"`
 	// MaxLen, when negative, pins a string parameter to the empty string
 	// (strings.Builder: the test can only pass an empty one).
 	MaxLen int `json:"max_len,omitempty"`

@@ -145,6 +145,10 @@ inductive Op where
   | eqDeep | neDeep
   /-- `hex.EncodeToString(b)`: two lowercase hex digits per byte. -/
   | hexEncode
+  /-- `reflect.ValueOf(x)`: the interface value itself. -/
+  | reflectOf
+  /-- `reflect.ValueOf(x).IsZero()` on a value the program boxed. -/
+  | reflectIsZero
   /-- An array of `n` bytes distinct from every other `freshArr` value of
   the run (a random UUID): the bytes spell the heap size, which the op
   grows by one. -/
@@ -172,6 +176,14 @@ inductive Op where
   -- interfaces
   /-- Store a concrete value of dynamic type `tag` in an interface. -/
   | box (tag : Nat)
+  /-- `x.(I)` for an interface `I`: the boxed types of the program that
+  implement `I` have tags `tags`; the value stays as it is. -/
+  | assertIface (tags : List Nat) (commaOk : Bool)
+  /-- The method a call on interface value `x` runs, args `[x, f₁, …, fₙ]`:
+  `fᵢ` is the method of the boxed type with tag `tags[i]`; the result calls
+  it with the boxed value as receiver. A nil interface gives a nil func
+  (the call panics), any other value an unknown one. -/
+  | dispatch (tags : List Nat)
   /-- A func value naming function `f` of the program, capturing the
   arguments (a closure's free variables). -/
   | funcRef (f : Nat)
@@ -407,6 +419,28 @@ where
       | none, _ => none
     | _, _ => some false
 
+/-- Is this the zero value of its type? Strings by their length; `none`
+for values the model does not know. -/
+def isZeroVal : Val → Option Bool
+  | .int _ v => some (v == 0)
+  | .bool b => some !b
+  | .err b => some !b
+  | .ptr r _ => some (r == 0)
+  | .slice r .. => some (r == 0)
+  | .str _ _ len => some (len == 0)
+  | .opaqueNil => some true
+  | .boxed .. => some false
+  | .arr vs => allZero vs
+  | .structv vs => allZero vs
+  | _ => none
+where
+  allZero : List Val → Option Bool
+    | [] => some true
+    | v :: vs => match isZeroVal v, allZero vs with
+      | some false, _ => some false
+      | some true, r => r
+      | none, _ => none
+
 /-- Key equality for maps: strings by their bytes, the rest by `eqVal`. -/
 def keyEq (heap : Heap Val) (a b : Val) : Bool :=
   match a, b with
@@ -487,6 +521,24 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     else .panic .typeAssertion
   | .unbox _ commaOk zero, [.opaqueNil] =>
     if commaOk then .ok (.tuple [zero, .bool false]) else .panic .typeAssertion
+  | .assertIface tags commaOk, [x] =>
+    let fail := if commaOk then .ok (.tuple [.opaqueNil, .bool false]) else .panic .typeAssertion
+    match x with
+    | .boxed t _ =>
+      if tags.contains t then .ok (if commaOk then .tuple [x, .bool true] else x) else fail
+    | .opaqueNil => fail
+    | _ => .panic .modelStuck
+  | .dispatch tags, x :: fs =>
+    match x with
+    | .boxed t v =>
+      match (tags.zip fs).lookup t with
+      | some (.boxed 0 (.tuple (f :: bound))) => .ok (.boxed 0 (.tuple (f :: bound ++ [v])))
+      | _ => .ok .unit
+    | .opaqueNil => .ok .opaqueNil
+    | _ => .ok .unit
+  | .reflectOf, [x] => .ok x
+  | .reflectIsZero, [.boxed _ v] =>
+    match isZeroVal v with | some b => .ok (.bool b) | none => .panic .modelStuck
   | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
   | .isNilOpaque, [x] => .ok (.bool (match x with | .opaqueNil => true | _ => false))
   | .add, args => binInt (· + ·) args
