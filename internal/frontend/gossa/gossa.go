@@ -75,12 +75,24 @@ func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
 	if pkgs[0].Module != nil {
 		modPath = pkgs[0].Module.Path
 	}
+	// Cross-package references: every candidate function of every package
+	// of this compile, so a call into a sibling package links to its model
+	// instead of becoming a havoc value.
+	xrefs := map[*ssa.Function]contract.XCall{}
+	for i, spkg := range spkgs {
+		if spkg == nil {
+			continue
+		}
+		for id, f := range candidates(spkg) {
+			xrefs[f] = contract.XCall{Package: pkgs[i].PkgPath, ID: id}
+		}
+	}
 	var progs []*ir.Prog
 	for i, spkg := range spkgs {
 		if spkg == nil {
 			continue
 		}
-		p, err := translatePackage(pkgs[i].PkgPath, spkg)
+		p, err := translatePackage(pkgs[i].PkgPath, spkg, xrefs)
 		if err != nil {
 			return nil, "", err
 		}
@@ -89,12 +101,10 @@ func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
 	return progs, modPath, nil
 }
 
-func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
-	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
-	st := &progState{prog: p, ids: map[*ssa.Function]int{}}
-
-	// Pass 1: pick candidates (package-level functions and the methods of
-	// the package's named types) and assign FuncIds so calls can be resolved.
+// candidates picks the functions a package's model holds (package-level
+// functions and the methods of the package's named types), in the order of
+// their FuncIds.
+func candidates(spkg *ssa.Package) []*ssa.Function {
 	var fns []*ssa.Function
 	seen := map[*ssa.Function]bool{}
 	add := func(f *ssa.Function) {
@@ -117,6 +127,15 @@ func translatePackage(pkgPath string, spkg *ssa.Package) (*ir.Prog, error) {
 		}
 	}
 	sort.Slice(fns, func(i, j int) bool { return funcName(fns[i]) < funcName(fns[j]) })
+	return fns
+}
+
+func translatePackage(pkgPath string, spkg *ssa.Package, xrefs map[*ssa.Function]contract.XCall) (*ir.Prog, error) {
+	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
+	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs}
+
+	// Pass 1: assign FuncIds so calls can be resolved.
+	fns := candidates(spkg)
 	byName := map[string]*ssa.Function{}
 	for _, f := range fns {
 		st.ids[f] = len(p.Funcs)
@@ -216,6 +235,7 @@ func isTestFunc(name string) bool {
 type progState struct {
 	prog    *ir.Prog
 	ids     map[*ssa.Function]int
+	xrefs   map[*ssa.Function]contract.XCall // functions of sibling packages
 	specFor func(*ssa.Function) string
 }
 
@@ -246,6 +266,9 @@ type fnState struct {
 	blockID map[*ssa.BasicBlock]int
 	cur     *ir.Block
 	partial bool
+	// quiet suppresses issues while the fallback block of a call is built:
+	// its havoc is a contingency, not a gap in the model.
+	quiet bool
 }
 
 func (t *fnState) fresh() ir.Var {
@@ -255,6 +278,9 @@ func (t *fnState) fresh() ir.Var {
 }
 
 func (t *fnState) issue(format string, args ...any) {
+	if t.quiet {
+		return
+	}
 	t.partial = true
 	t.out.Issues = append(t.out.Issues, fmt.Sprintf(format, args...))
 }
@@ -1127,26 +1153,17 @@ func (t *fnState) call(x *ssa.Call) error {
 			return nil
 		}
 	}
-	if id, ok := t.prog.ids[callee]; ok && callee != nil && hasResult {
-		var args []ir.Var
-		for _, a := range x.Call.Args {
-			v, err := t.val(a)
-			if err != nil {
-				return err
-			}
-			args = append(args, v)
-		}
-		dst := t.def(x)
-		next := len(t.out.Blocks)
-		// Terminate the current block before appending: append may move the
-		// backing array and t.cur would then point at a stale copy.
+	if id, ok := t.prog.ids[callee]; ok && callee != nil {
 		if !slices.Contains(t.out.Calls, id) {
 			t.out.Calls = append(t.out.Calls, id)
 		}
-		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: id, CArgs: args, Dst: dst, Next: next}
-		t.out.Blocks = append(t.out.Blocks, ir.Block{Name: t.cur.Name + ".after-call"})
-		t.cur = &t.out.Blocks[next]
-		return nil
+		return t.emitCall(x, ir.Term{Kind: ir.TermCall, Callee: id}, callee.String())
+	}
+	if xr, ok := t.prog.xrefs[callee]; ok && callee != nil && xr.Package != t.prog.prog.Package {
+		if !slices.Contains(t.out.XCalls, xr) {
+			t.out.XCalls = append(t.out.XCalls, xr)
+		}
+		return t.emitCall(x, ir.Term{Kind: ir.TermXCall, Callee: xr.ID, CalleePkg: xr.Package}, callee.String())
 	}
 	name := x.Call.Value.Name()
 	if callee != nil {
@@ -1157,6 +1174,65 @@ func (t *fnState) call(x *ssa.Call) error {
 	}
 	t.issue("call to %s ignored (no result, effects not modelled)", name)
 	return nil
+}
+
+// emitCall terminates the current block with the call term (its callee
+// already set), continuing in a fresh block. A second fresh block is the
+// call's fallback: run when the callee gets stuck, it binds the result to
+// a havoc value (as an unmodelled call would) and joins the continuation.
+// A call without a result binds the unit value, so the callee's effects on
+// the heap are modelled too.
+func (t *fnState) emitCall(x *ssa.Call, term ir.Term, name string) error {
+	var args []ir.Var
+	for _, a := range x.Call.Args {
+		v, err := t.val(a)
+		if err != nil {
+			return err
+		}
+		args = append(args, v)
+	}
+	dst := t.def(x)
+	next := len(t.out.Blocks)
+	fb := next + 1
+	term.CArgs, term.Dst, term.Next, term.Fallback = args, dst, next, fb
+	// Terminate the current block before appending: append may move the
+	// backing array and t.cur would then point at a stale copy.
+	t.cur.Term = term
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: t.cur.Name + ".after-call"},
+		ir.Block{Name: t.cur.Name + ".call-fallback"})
+	t.cur = &t.out.Blocks[fb]
+	t.quiet = true
+	err := t.havocResult(dst, x, "call "+name+" (callee stuck)", "callee-stuck")
+	t.quiet = false
+	if err != nil {
+		return err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: next}
+	t.cur = &t.out.Blocks[next]
+	return nil
+}
+
+// havocResult binds dst to a havoc value of the call's result type (a
+// tuple for several results, unit for none).
+func (t *fnState) havocResult(dst ir.Var, x ssa.Value, site, reason string) error {
+	if isUnitTuple(x.Type()) {
+		t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: ir.UnitVal{}}})
+		return nil
+	}
+	if tu, ok := x.Type().(*types.Tuple); ok {
+		var parts []ir.Var
+		for i := 0; i < tu.Len(); i++ {
+			v := t.fresh()
+			if err := t.havocInto(v, tu.At(i).Type(), fmt.Sprintf("%s: %s #%d", t.f.Name(), site, i), reason, ""); err != nil {
+				return err
+			}
+			parts = append(parts, v)
+		}
+		t.emit(ir.Instr{Dst: dst, Op: ir.Simple("mkTuple"), Args: parts})
+		return nil
+	}
+	return t.havocInto(dst, x.Type(), t.f.Name()+": "+site, reason, "")
 }
 
 // ---- types -----------------------------------------------------------------

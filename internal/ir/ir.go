@@ -241,6 +241,9 @@ const (
 	TermBr
 	TermPanic
 	TermCall
+	// TermXCall calls a function of another package of the same compile;
+	// the driver links it to a FuncId when it merges the models.
+	TermXCall
 )
 
 // Term is a block terminator. Which fields are meaningful depends on Kind.
@@ -254,12 +257,17 @@ type Term struct {
 	TArgs []Var
 	FArgs []Var
 	Panic contract.PanicKind
-	// call
-	Callee int
-	CArgs  []Var
-	Dst    Var
-	Next   int
-	NArgs  []Var
+	// call; CalleePkg is set for a cross-package call (TermXCall) and
+	// Callee is then an index into that package's program.
+	Callee    int
+	CalleePkg string
+	CArgs     []Var
+	Dst       Var
+	Next      int
+	NArgs     []Var
+	// Fallback is the block run instead of Next when the callee gets
+	// stuck: it binds Dst to a havoc value, as an unmodelled call would.
+	Fallback int
 }
 
 type Block struct {
@@ -280,9 +288,10 @@ type Func struct {
 	Status    contract.ModelStatus
 	Issues    []string
 	SpecFor   string
-	Consts    []string // integer literals, see contract.ModelFunc.Consts
-	StrConsts []string // string literals
-	Calls     []int    // callees within the program, by function id
+	Consts    []string         // integer literals, see contract.ModelFunc.Consts
+	StrConsts []string         // string literals
+	Calls     []int            // callees within the program, by function id
+	XCalls    []contract.XCall // callees in other packages of the same compile
 	ABI       contract.ABI
 }
 
@@ -349,11 +358,17 @@ func (p *Prog) Validate() error {
 				if err := checkBlock(t.F, where+" br"); err != nil {
 					return err
 				}
-			case TermCall:
-				if t.Callee < 0 || t.Callee >= len(p.Funcs) {
+			case TermCall, TermXCall:
+				if t.Kind == TermCall && (t.Callee < 0 || t.Callee >= len(p.Funcs)) {
 					return fmt.Errorf("%s: %s calls function %d of %d", f.Name, where, t.Callee, len(p.Funcs))
 				}
+				if t.Kind == TermXCall && (t.CalleePkg == "" || t.Callee < 0) {
+					return fmt.Errorf("%s: %s cross-package call without a target", f.Name, where)
+				}
 				if err := checkBlock(t.Next, where+" call continuation"); err != nil {
+					return err
+				}
+				if err := checkBlock(t.Fallback, where+" call fallback"); err != nil {
 					return err
 				}
 				if err := checkVar(t.Dst, where+" call result"); err != nil {

@@ -77,6 +77,70 @@ def runSpec (p : GoSSA.Prog) (s : Spec) : IO UInt32 := do
   | "exhaustive" => exhaust p s.prop s.gens s.extra s.maxLen s.limit s.fuel s.strs s.table s.allowNil s.budgetMs; return 0
   | other => IO.eprintln s!"unknown engine {other}"; return 2
 
+-- Linking ---------------------------------------------------------------------
+
+/-- The models a program calls into through `xcall` terminators. -/
+def xrefs (p : GoSSA.Prog) : List String :=
+  p.funcs.foldl (init := []) fun acc fn =>
+    fn.blocks.foldl (init := acc) fun acc blk =>
+      match blk.term with
+      | .xcall pkg .. => if acc.contains pkg then acc else pkg :: acc
+      | _ => acc
+
+/-- The functions of `p` renumbered for a merged program: FuncIds move up by
+`fbase`, havoc sites by `hbase`, and an `xcall` into a model whose base
+`base` knows becomes a plain `call`. -/
+def shiftFuncs (p : GoSSA.Prog) (fbase hbase : Nat) (base : String → Option Nat) :
+    Array GoSSA.Func :=
+  p.funcs.map fun fn =>
+    { fn with blocks := fn.blocks.map fun blk =>
+      { blk with
+        instrs := blk.instrs.map fun
+          | .havoc dst site => .havoc dst (site + hbase)
+          | i => i
+        term := match blk.term with
+          | .call f args dst next nargs fb => .call (f + fbase) args dst next nargs fb
+          | .xcall pkg f args dst next nargs fb =>
+            match base pkg with
+            | some b => .call (f + b) args dst next nargs fb
+            | none => .xcall pkg f args dst next nargs fb
+          | t => t } }
+
+/-- The models reachable from `todo` through `xcall`s, in discovery order. -/
+partial def closure (registry : List (String × GoSSA.Prog)) (todo seen : List String) :
+    List String :=
+  match todo with
+  | [] => seen.reverse
+  | pkg :: rest =>
+    if seen.contains pkg then closure registry rest seen
+    else match registry.lookup pkg with
+      | none => closure registry rest seen
+      | some p => closure registry (rest ++ xrefs p) (pkg :: seen)
+
+/-- Merge the models a search of `main` needs into one program: `main`
+first, so its FuncIds and havoc sites keep their numbers (the property and
+the reports refer to them), then every model it reaches through `xcall`,
+renumbered. An `xcall` into a model the registry does not hold stays as it
+is and gets the interpreter stuck, as an unmodelled call would. -/
+def link (registry : List (String × GoSSA.Prog)) (main : String) : Option GoSSA.Prog := do
+  let _ ← registry.lookup main
+  let order := closure registry [main] []
+  let (bases, _, _) := order.foldl (init := (([] : List (String × Nat × Nat)), 0, 0))
+    fun (acc, fb, hb) pkg =>
+      match registry.lookup pkg with
+      | some p => ((pkg, fb, hb) :: acc, fb + p.funcs.size, hb + p.havocWidths.size)
+      | none => (acc, fb, hb)
+  let fbaseOf := fun pkg => (bases.lookup pkg).map (·.1)
+  let funcs := order.foldl (init := #[]) fun acc pkg =>
+    match registry.lookup pkg, bases.lookup pkg with
+    | some p, some (fb, hb) => acc ++ shiftFuncs p fb hb fbaseOf
+    | _, _ => acc
+  let widths := order.foldl (init := #[]) fun acc pkg =>
+    match registry.lookup pkg with
+    | some p => acc ++ p.havocWidths
+    | none => acc
+  return { funcs, havocWidths := widths }
+
 /-- Entry point of the `go2lean-search` executable: `go2lean-search spec.json`,
 with the models in `registry`. -/
 def driverMain (registry : List (String × GoSSA.Prog)) (args : List String) : IO UInt32 := do
@@ -86,7 +150,7 @@ def driverMain (registry : List (String × GoSSA.Prog)) (args : List String) : I
     match Json.parse txt >>= specOfJson with
     | .error e => IO.eprintln s!"{path}: {e}"; return 2
     | .ok spec =>
-      match registry.lookup spec.prog with
+      match link registry spec.prog with
       | none => IO.eprintln s!"{path}: no model named {spec.prog} in the registry (recompile)"; return 3
       | some p => runSpec p spec
   | _ => IO.eprintln "usage: go2lean-search <spec.json>"; return 2

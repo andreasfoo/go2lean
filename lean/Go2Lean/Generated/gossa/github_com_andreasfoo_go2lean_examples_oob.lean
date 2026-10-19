@@ -114,11 +114,15 @@ def f3 : GoSSA.Func := {
     -- 2: if.done
     { params := [],
       instrs := #[],
-      term := .call 0 [3, 1, 2] 6 3 [] },
+      term := .call 0 [3, 1, 2] 6 3 [] 4 },
     -- 3: if.done.after-call
     { params := [],
       instrs := #[.op 7 .eq [6, 3]],
-      term := .ret 7 }
+      term := .ret 7 },
+    -- 4: if.done.call-fallback
+    { params := [],
+      instrs := #[.havoc 6 0],
+      term := .jump 3 [] }
   ] }
 
 /-- func(v int, lo int, hi int, ret int) bool (status: complete) -/
@@ -193,6 +197,6 @@ def f6 : GoSSA.Func := {
       term := .ret 11 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_oob

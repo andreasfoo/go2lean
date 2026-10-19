@@ -369,8 +369,18 @@ type ModelFunc struct {
 	StrConsts []string `json:"str_consts,omitempty"`
 	// Calls lists the IDs of the package functions this one calls, so the
 	// engines can mine the literals of the whole call tree.
-	Calls []int  `json:"calls,omitempty"`
-	ABI   string `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+	Calls []int `json:"calls,omitempty"`
+	// XCalls lists the functions of other packages this one calls, when
+	// those packages were compiled together with this one.
+	XCalls []XCall `json:"xcalls,omitempty"`
+	ABI    string  `json:"abi,omitempty"` // path of the ABI record, relative to the workspace
+}
+
+// XCall names a function of another package by its import path and its ID
+// in that package's model.
+type XCall struct {
+	Package string `json:"package"`
+	ID      int    `json:"id"`
 }
 
 // ModelReport is M1's summary of one package, read by M2 to decide what to

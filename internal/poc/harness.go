@@ -391,6 +391,12 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			if f.Kind == contract.ABIOpaque {
 				continue // zero value: nil map, nil interface, nil func
 			}
+			if isZeroJSON(abi, f, fields[i]) {
+				// Omitted: the zero value needs no setting, and some zero
+				// values cannot be spelled from the test at all (an
+				// anonymous struct type with unexported fields).
+				continue
+			}
 			if p.TypePkg != "" && !token.IsExported(f.Go) {
 				if isZeroJSON(abi, f, fields[i]) {
 					continue // the zero value needs no setting

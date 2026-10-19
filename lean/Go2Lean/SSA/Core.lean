@@ -89,8 +89,15 @@ inductive Term where
   | jump (b : BlockId) (args : List Var)
   | br (cond : Var) (t : BlockId) (targs : List Var) (f : BlockId) (fargs : List Var)
   | panic (k : PanicKind)
-  /-- `dst := call f args; jump next nargs` -/
-  | call (f : FuncId) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var)
+  /-- `dst := call f args; jump next nargs`. When the callee gets stuck
+  (a rejected stub, an op the model has no rule for) the block `fb` runs
+  instead on the heap as it was before the call: it binds `dst` to a havoc
+  value, so the caller continues as if the call were unmodelled. -/
+  | call (f : FuncId) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var) (fb : BlockId)
+  /-- A call into function `f` of the model registered as `pkg`; the driver
+  links it into a `call` when it merges the models, so the interpreter only
+  sees one when a package was not compiled alongside. -/
+  | xcall (pkg : String) (f : FuncId) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var) (fb : BlockId)
   deriving Repr
 
 structure Block (Op : Type) where
@@ -200,18 +207,21 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
           | some true => runBlock p or h fn t (enter fn t env targs) s fuel
           | some false => runBlock p or h fn f (enter fn f env fargs) s fuel
           | none => (.panic .modelStuck, s)
-        | .call f args dst next nargs =>
+        | .call f args dst next nargs fb =>
           match runFunc p or h f (args.map (env[·]!)) s fuel with
-          | (.ok v, s) =>
+          | (.ok v, s') =>
             let env := env.set! dst v
-            runBlock p or h fn next (enter fn next env nargs) s fuel
-          | (.panic k, s) =>
-            -- A call into a rejected function's stub is the most common
-            -- way to get stuck; name it when nothing deeper was recorded.
-            let s := if k.isStuck && s.stuck.isNone then
-              { s with stuck := some s!"call {(p.funcs[f]?.map (·.name)).getD (toString f)}" } else s
-            (.panic k, s)
-          | (.outOfFuel, s) => (.outOfFuel, s)
+            runBlock p or h fn next (enter fn next env nargs) s' fuel
+          | (.panic k, s') =>
+            if k.isStuck then
+              -- The callee could not be followed: forget what it did to the
+              -- heap and take the fallback, which havocs the result.
+              runBlock p or h fn fb (enter fn fb env []) { s' with heap := s.heap, stuck := s.stuck } fuel
+            else (.panic k, s')
+          | (.outOfFuel, s') => (.outOfFuel, s')
+        | .xcall _ _ _ _ _ _ fb =>
+          -- Not linked (the package was not compiled alongside): unmodelled.
+          runBlock p or h fn fb (enter fn fb env []) s fuel
 
 /-- Run function `fid` on `args`. -/
 def runFunc (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val)

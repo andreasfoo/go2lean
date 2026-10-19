@@ -221,19 +221,31 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 
 // literalPool collects the integer and string literals of the given
 // functions and, transitively, of the functions they call.
-func literalPool(report *contract.ModelReport, roots []int) (consts, strConsts []string) {
-	byID := map[int]contract.ModelFunc{}
-	for _, f := range report.Funcs {
-		byID[f.ID] = f
+func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []int) (consts, strConsts []string) {
+	reports := map[string]*contract.ModelReport{report.Package: report}
+	byID := map[contract.XCall]contract.ModelFunc{}
+	index := func(r *contract.ModelReport) {
+		for _, f := range r.Funcs {
+			byID[contract.XCall{Package: r.Package, ID: f.ID}] = f
+		}
 	}
-	seen := map[int]bool{}
-	var walk func(id int)
-	walk = func(id int) {
-		f, ok := byID[id]
-		if !ok || seen[id] {
+	index(report)
+	seen := map[contract.XCall]bool{}
+	var walk func(x contract.XCall)
+	walk = func(x contract.XCall) {
+		if _, loaded := reports[x.Package]; !loaded {
+			// A sibling package's report, when it was compiled alongside.
+			r, err := ws.ModelReport(report.Frontend, x.Package)
+			reports[x.Package] = r
+			if err == nil {
+				index(r)
+			}
+		}
+		f, ok := byID[x]
+		if !ok || seen[x] {
 			return
 		}
-		seen[id] = true
+		seen[x] = true
 		for _, c := range f.Consts {
 			if !slices.Contains(consts, c) {
 				consts = append(consts, c)
@@ -245,12 +257,15 @@ func literalPool(report *contract.ModelReport, roots []int) (consts, strConsts [
 			}
 		}
 		for _, callee := range f.Calls {
+			walk(contract.XCall{Package: x.Package, ID: callee})
+		}
+		for _, callee := range f.XCalls {
 			walk(callee)
 		}
 	}
 	for _, r := range roots {
 		if r >= 0 {
-			walk(r)
+			walk(contract.XCall{Package: report.Package, ID: r})
 		}
 	}
 	return consts, strConsts
@@ -286,7 +301,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	// The literal pool: the target's and the spec's constants and those of
 	// everything they call, so the branch a callee takes on "assistant" is
 	// reachable from the caller's inputs.
-	consts, strConsts := literalPool(report, []int{fid, sid})
+	consts, strConsts := literalPool(ws, report, []int{fid, sid})
 	if fid < 0 {
 		return nil, "", fmt.Errorf("function %s not in model report", target.Func)
 	}

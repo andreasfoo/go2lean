@@ -29,7 +29,7 @@ func TestLiteralStructAndPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "&Node{Val: int(1), Next: &Node{Val: int(2), Next: (*Node)(nil)}}"
+	want := "&Node{Val: int(1), Next: &Node{Val: int(2)}}"
 	if got != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}
