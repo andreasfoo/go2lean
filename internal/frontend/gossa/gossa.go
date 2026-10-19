@@ -53,6 +53,27 @@ func Translate(dir, pattern string) (*ir.Prog, string, error) {
 // their errors reported through the returned map, so one broken package
 // does not stop a sweep.
 func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
+	return TranslateAllOpts(dir, Options{}, patterns...)
+}
+
+// Options tune TranslateAll.
+type Options struct {
+	// Deps also models the functions of dependency packages (outside the
+	// standard library) that the compiled packages reach through static
+	// calls, as small extra programs the search driver links in; without
+	// it those calls are unmodelled (havoc results).
+	Deps bool
+}
+
+// Limits of the dependency walk: how deep it follows calls from the
+// compiled packages, and how many functions it models at most.
+const (
+	depDepth = 4
+	depLimit = 1500
+)
+
+// TranslateAllOpts is TranslateAll with options.
+func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog, string, error) {
 	// Tests: true also loads the package's internal test variant
 	// ("path [path.test]"), which includes *_test.go files of the same
 	// package: that is where agent-written spec-in-Go functions live.
@@ -69,7 +90,13 @@ func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
 		return nil, "", fmt.Errorf("patterns %s matched no packages", strings.Join(patterns, " "))
 	}
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].PkgPath < pkgs[j].PkgPath })
-	sprog, spkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
+	build := ssautil.Packages
+	if opts.Deps {
+		// Bodies for the dependencies too: Packages creates those from type
+		// information only.
+		build = ssautil.AllPackages
+	}
+	sprog, spkgs := build(pkgs, ssa.InstantiateGenerics)
 	sprog.Build()
 
 	modPath := ""
@@ -82,26 +109,104 @@ func TranslateAll(dir string, patterns ...string) ([]*ir.Prog, string, error) {
 	// Keyed by name: a package compiled as its test variant holds other
 	// function objects than the plain variant its importers call.
 	xrefs := map[string]contract.XCall{}
+	type unit struct {
+		path string
+		fns  []*ssa.Function
+	}
+	var units []unit
+	mainPaths := map[string]bool{}
+	var roots []*ssa.Function
 	for i, spkg := range spkgs {
 		if spkg == nil {
 			continue
 		}
-		for id, f := range candidates(spkg) {
-			xrefs[f.String()] = contract.XCall{Package: pkgs[i].PkgPath, ID: id}
+		fns := candidates(spkg)
+		units = append(units, unit{pkgs[i].PkgPath, fns})
+		mainPaths[pkgs[i].PkgPath] = true
+		roots = append(roots, fns...)
+	}
+	if opts.Deps {
+		deps := depClosure(roots, mainPaths)
+		var paths []string
+		for path := range deps {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			fns := deps[path]
+			sort.Slice(fns, func(i, j int) bool { return funcName(fns[i]) < funcName(fns[j]) })
+			units = append(units, unit{path, fns})
+		}
+	}
+	for _, u := range units {
+		for id, f := range u.fns {
+			xrefs[f.String()] = contract.XCall{Package: u.path, ID: id}
 		}
 	}
 	var progs []*ir.Prog
-	for i, spkg := range spkgs {
-		if spkg == nil {
-			continue
-		}
-		p, err := translatePackage(pkgs[i].PkgPath, spkg, xrefs)
+	for _, u := range units {
+		p, err := translatePackage(u.path, u.fns, xrefs)
 		if err != nil {
 			return nil, "", err
 		}
 		progs = append(progs, p)
 	}
 	return progs, modPath, nil
+}
+
+// depClosure walks the static calls of roots into packages outside the
+// compile and the standard library, up to depDepth calls deep and depLimit
+// functions, and returns the functions reached by package path. Generic
+// functions, wrappers and closures are left out (they stay unmodelled).
+func depClosure(roots []*ssa.Function, mainPaths map[string]bool) map[string][]*ssa.Function {
+	out := map[string][]*ssa.Function{}
+	seen := map[*ssa.Function]bool{}
+	count := 0
+	var visit func(f *ssa.Function, depth int)
+	visit = func(f *ssa.Function, depth int) {
+		if depth > depDepth {
+			return
+		}
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				call, ok := in.(ssa.CallInstruction)
+				if !ok {
+					continue
+				}
+				callee := call.Common().StaticCallee()
+				if callee == nil || seen[callee] || callee.Pkg == nil || callee.Synthetic != "" ||
+					callee.Parent() != nil || callee.TypeParams().Len() > 0 || len(callee.TypeArgs()) > 0 ||
+					isInit(callee.Name()) || len(callee.Blocks) == 0 {
+					continue
+				}
+				path := callee.Pkg.Pkg.Path()
+				if mainPaths[path] || isStdlib(path) {
+					continue
+				}
+				if _, std := ir.StdlibOps[callee.String()]; std {
+					continue
+				}
+				if count >= depLimit {
+					return
+				}
+				seen[callee] = true
+				count++
+				out[path] = append(out[path], callee)
+				visit(callee, depth+1)
+			}
+		}
+	}
+	for _, f := range roots {
+		visit(f, 1)
+	}
+	return out
+}
+
+// isStdlib says whether an import path belongs to the standard library
+// (no dot in its first element).
+func isStdlib(path string) bool {
+	first, _, _ := strings.Cut(path, "/")
+	return !strings.Contains(first, ".")
 }
 
 // candidates picks the functions a package's model holds (package-level
@@ -133,12 +238,11 @@ func candidates(spkg *ssa.Package) []*ssa.Function {
 	return fns
 }
 
-func translatePackage(pkgPath string, spkg *ssa.Package, xrefs map[string]contract.XCall) (*ir.Prog, error) {
+func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs}
 
 	// Pass 1: assign FuncIds so calls can be resolved.
-	fns := candidates(spkg)
 	byName := map[string]*ssa.Function{}
 	for _, f := range fns {
 		st.ids[f] = len(p.Funcs)

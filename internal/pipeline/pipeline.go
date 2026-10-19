@@ -22,6 +22,9 @@ import (
 type Env struct {
 	Root   string
 	Module string
+	// Deps models the dependency functions the compiled packages call
+	// (see gossa.Options.Deps).
+	Deps bool
 }
 
 func (e Env) module() string {
@@ -46,7 +49,7 @@ func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*con
 // CompileAll runs M1 on every package matching the patterns (e.g. "./...")
 // with a single load of the dependency graph.
 func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string) ([]*contract.ModelReport, error) {
-	progs, modPath, err := gossa.TranslateAll(env.module(), patterns...)
+	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: env.Deps}, patterns...)
 	if err != nil {
 		return nil, err
 	}

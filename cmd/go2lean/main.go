@@ -95,6 +95,7 @@ func openWorkspace(cf *commonFlags) (contract.Workspace, pipeline.Env, error) {
 func cmdCompile(args []string) error {
 	fs := flag.NewFlagSet("compile", flag.ExitOnError)
 	ws := workspaceFlag(fs)
+	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("compile: at least one package pattern expected (e.g. ./...)")
@@ -103,6 +104,7 @@ func cmdCompile(args []string) error {
 	if err != nil {
 		return err
 	}
+	env.Deps = *deps
 	_, err = pipeline.CompileAll(w, env, os.Stdout, fs.Args()...)
 	return err
 }
