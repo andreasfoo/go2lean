@@ -412,6 +412,22 @@ flagged separately.
    is dominated by `mul`/`div` and by loop unrolling, and the interpreter has
    to be `simp`-unfolded first (the `h ▸` width casts in `binInt` are hostile
    to that). Measure on `Clamp` before investing further.
+   **Measured (prototype, `lean/Proofs/OobClampIdentity.lean`):** for all
+   64-bit `v lo hi`, the model of `oob.Clamp` followed by
+   `SpecClampIdentity` returns true; checked in 9 s, axioms `propext`,
+   `Classical.choice`, `Quot.sound` only. What made it work: the needed
+   functions are looked up in the generated program by `rfl` lemmas
+   (`prog.funcs[0]? = some f0`) instead of unfolding all of it (that times
+   out), and each op used gets an `rfl` lemma at its width
+   (`denote or h .slt [.int 64 a, .int 64 b] = .ok (.bool (a.slt b), h)`)
+   instead of unfolding `denote` (generating its equation lemmas times
+   out). `simp` then leaves a case analysis on the comparisons, closed by
+   `cases`, `simp_all` and `bv_decide`. Not yet working: a spec that calls
+   the target again (`SpecClampIdempotent`): after splitting, lookups in
+   the environment array (`setIfInBounds` chains) are not reduced, so
+   `bv_decide` sees opaque booleans; this needs `getElem!`/`setIfInBounds`
+   simp lemmas and a generic split-simp loop before M2 can emit such
+   proofs for every loop-free integer function.
 5. **SMT export** (Z3/cvc5) when complete bug-finding on loops is needed:
    external, asynchronous, better `mul`/`div` heuristics; no Lean certificate,
    which bug-finding does not need because M3 is the certificate.
