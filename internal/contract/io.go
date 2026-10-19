@@ -152,6 +152,14 @@ func (w Workspace) ModelReport(frontend, pkgPath string) (*ModelReport, error) {
 	return &r, err
 }
 
+// ModelReportByKey reads a package's report by its package key (the
+// directory name under models/<frontend>/).
+func (w Workspace) ModelReportByKey(frontend, key string) (*ModelReport, error) {
+	var r ModelReport
+	err := readJSON(filepath.Join(w.Root, "models", frontend, key, "report.json"), &r)
+	return &r, err
+}
+
 // TargetID is the workspace id of a function: package key and function
 // name (a method is "Type.Method").
 func TargetID(pkgPath, funcName string) string {

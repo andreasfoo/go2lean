@@ -147,7 +147,11 @@ def link (registry : List (String × GoSSA.Prog)) (main : String) : Option GoSSA
     match registry.lookup pkg with
     | some p => acc ++ p.havocWidths
     | none => acc
-  return { funcs, havocWidths := widths }
+  let origin := order.foldl (init := #[]) fun acc pkg =>
+    match registry.lookup pkg with
+    | some p => acc ++ (Array.range p.havocWidths.size).map (pkg, ·)
+    | none => acc
+  return { funcs, havocWidths := widths, siteOrigin := origin }
 
 /-- Entry point of the `go2lean-search` executable: `go2lean-search spec.json`,
 with the models in `registry`. -/

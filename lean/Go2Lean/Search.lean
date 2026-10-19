@@ -336,9 +336,17 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
           | _ => false
         -- An assumed value (an unmodelled result taken as zero) is the same
         -- under every havoc assignment, so agreement says nothing about it.
-        let assumed := (s'.log.toList.drop before).any fun (site, _, _) =>
+        let assumedAt := (s'.log.toList.drop before).find? fun (site, _, _) =>
           p.havocWidths[site]? == some 3
-        if s'.log.size > before && (assumed || !decided) then (.specUnknown, s', some v)
+        -- Name the first assumption read, for the engines' moot report.
+        let s' := match assumedAt with
+          | some (site, _, _) =>
+            let origin := match p.siteOrigin[site]? with
+              | some (pkg, i) => s!"{pkg}#{i}"
+              | none => toString site
+            { s' with stuck := s'.stuck <|> some s!"assumption at havoc site {origin}" }
+          | none => s'
+        if s'.log.size > before && (assumedAt.isSome || !decided) then (.specUnknown, s', some v)
         else if b then (.holds, s', some v) else (.violated, s', some v)
       | (.ok _, s) => (.specPanicked .modelStuck, s, some v)
       | (.panic k, s) => (.specPanicked k, s, some v)

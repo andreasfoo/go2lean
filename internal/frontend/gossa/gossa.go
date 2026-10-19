@@ -737,11 +737,41 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 		t.emit(ir.Instr{Dst: dst, HavocSite: idx})
 		return nil
 	}
-	// Every assumption below is logged when it runs: a marker havoc read.
-	t.emit(ir.Instr{Dst: t.fresh(), HavocSite: t.prog.newHavoc(ir.HavocAssumption, site+" (assumed)", "assumed", goHint)})
+	// A func, map, channel or interface the model knows nothing about:
+	// unknown (every use of it is havoc), not an assumption.
+	if isNilable(ty) {
+		t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: ir.Opaque{}}})
+		return nil
+	}
+	// A struct, or a pointer to a fresh one: havoc field by field, so the
+	// engines can vary its contents (see structHavoc).
+	if st, ok := ty.Underlying().(*types.Struct); ok {
+		if t.structHavoc(dst, st, site, reason, goHint, 3) {
+			return nil
+		}
+	}
+	if pt, ok := ty.Underlying().(*types.Pointer); ok {
+		if st, ok := pt.Elem().Underlying().(*types.Struct); ok {
+			if zero, ok := zeroVal(pt.Elem()); ok {
+				val := t.fresh()
+				if t.structHavoc(val, st, site, reason, goHint, 3) {
+					t.issue("%s: assumed a pointer to a fresh %s with havoc fields (not modelled)", site, pt.Elem())
+					t.emit(ir.Instr{Dst: dst, Op: ir.Alloc{Zero: zero}})
+					t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{dst, val}})
+					return nil
+				}
+			}
+		}
+	}
+	// What is left is a fixed guess the engines cannot vary: logged when it
+	// runs (a marker havoc read), except for byte slices of havoc length.
+	marker := func() {
+		t.emit(ir.Instr{Dst: t.fresh(), HavocSite: t.prog.newHavoc(ir.HavocAssumption, site+" (assumed)", "assumed", goHint)})
+	}
 	switch u := ty.Underlying().(type) {
 	case *types.Pointer:
 		if zero, ok := zeroVal(u.Elem()); ok {
+			marker()
 			t.issue("%s: assumed a pointer to a fresh zero %s (not modelled)", site, u.Elem())
 			t.emit(ir.Instr{Dst: dst, Op: ir.Alloc{Zero: zero}})
 			return nil
@@ -752,6 +782,9 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 			zero, ok = assumedValue(u.Elem())
 		}
 		if ok {
+			if w, _, isInt := intWidth(u.Elem()); !isInt || w != 8 {
+				marker()
+			}
 			t.issue("%s: assumed a slice of 0..3 zero values of %s (not modelled)", site, u.Elem())
 			raw := t.fresh()
 			t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, site+" (length)", reason, goHint)})
@@ -767,9 +800,45 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 	if !ok {
 		return fmt.Errorf("cannot havoc a value of type %s", ty)
 	}
+	marker()
 	t.issue("%s: assumed the zero value of %s (not modelled)", site, ty)
 	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: v}})
 	return nil
+}
+
+// structHavoc binds dst to a struct value of type st whose fields are
+// havoc where they can be (integers, bools, strings, errors), unknown for
+// funcs, maps, channels and interfaces, havoc'd recursively for nested
+// structs down to depth, and zero otherwise (nil pointers and slices).
+// It reports false when some field has no zero value.
+func (t *fnState) structHavoc(dst ir.Var, st *types.Struct, site, reason, goHint string, depth int) bool {
+	var fields []ir.Var
+	for i := 0; i < st.NumFields(); i++ {
+		ft := st.Field(i).Type()
+		v := t.fresh()
+		fsite := site + "." + st.Field(i).Name()
+		switch {
+		case func() bool { _, ok := havocKind(ft); return ok }():
+			k, _ := havocKind(ft)
+			t.emit(ir.Instr{Dst: v, HavocSite: t.prog.newHavoc(k, fsite, reason, goHint)})
+		case isNilable(ft):
+			t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.Opaque{}}})
+		default:
+			if inner, ok := ft.Underlying().(*types.Struct); ok && depth > 0 && !isStringsBuilder(ft) {
+				if t.structHavoc(v, inner, fsite, reason, goHint, depth-1) {
+					break
+				}
+			}
+			zero, ok := zeroVal(ft)
+			if !ok {
+				return false
+			}
+			t.emit(ir.Instr{Dst: v, Op: ir.Const{V: zero}})
+		}
+		fields = append(fields, v)
+	}
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("mkStruct"), Args: fields})
+	return true
 }
 
 func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {

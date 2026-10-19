@@ -383,7 +383,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		if res.BudgetHit {
 			note = fmt.Sprintf(" [stopped by the %ds budget]", opts.BudgetSeconds)
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s%s", res.Trials, res.OutOfFuel, res.Moot, exitNote(specExits, res.SpecExits), note, stuckNote(res.StuckSites)))
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s%s", res.Trials, res.OutOfFuel, res.Moot, exitNote(specExits, res.SpecExits), note, stuckNote(res.StuckSites, report.Havoc, reportsByKey(ws, report.Frontend, res.StuckSites))))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
 		res, err := runSearch(leanDir, prop.ID+"_exhaustive", spec, "exhaustive")
@@ -424,7 +424,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 }
 
 // stuckNote names the most frequent site at which the model got stuck.
-func stuckNote(sites map[string]int) string {
+func stuckNote(sites map[string]int, havoc []contract.ABIHavoc, reports map[string]*contract.ModelReport) string {
 	best, n := "", 0
 	for s, c := range sites {
 		if c > n || c == n && s < best {
@@ -433,6 +433,25 @@ func stuckNote(sites map[string]int) string {
 	}
 	if n == 0 {
 		return ""
+	}
+	// An assumption is named by its havoc site; sites past the target's
+	// own program belong to a linked package.
+	if rest, ok := strings.CutPrefix(best, "assumption at havoc site "); ok {
+		// "<model key>#<local index>" in a linked program, else a plain index.
+		pkgKey, idx, linked := strings.Cut(rest, "#")
+		if !linked {
+			idx = pkgKey
+		}
+		if i, err := strconv.Atoi(idx); err == nil {
+			switch {
+			case linked && reports[pkgKey] != nil && i < len(reports[pkgKey].Havoc):
+				best = "an assumed value: " + reports[pkgKey].Havoc[i].Site
+			case !linked && i < len(havoc):
+				best = "an assumed value: " + havoc[i].Site
+			default:
+				best = "an assumed value at " + rest
+			}
+		}
 	}
 	return fmt.Sprintf("; stuck mostly at %s (%d)", best, n)
 }
@@ -574,4 +593,24 @@ func exitNote(sites []contract.ExitSite, exits map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s: %d", label, n))
 	}
 	return fmt.Sprintf("; spec checked %d, vacuous %d [%s]", checked, vacuous, strings.Join(parts, ", "))
+}
+
+// reportsByKey loads the model reports of the linked packages a stuck
+// site names ("<module key>#<index>"), keyed by module key.
+func reportsByKey(ws contract.Workspace, frontend string, sites map[string]int) map[string]*contract.ModelReport {
+	out := map[string]*contract.ModelReport{}
+	for site := range sites {
+		rest, ok := strings.CutPrefix(site, "assumption at havoc site ")
+		if !ok {
+			continue
+		}
+		key, _, linked := strings.Cut(rest, "#")
+		if !linked || out[key] != nil {
+			continue
+		}
+		if r, err := ws.ModelReportByKey(frontend, strings.TrimPrefix(key, frontend+".")); err == nil {
+			out[key] = r
+		}
+	}
+	return out
 }

@@ -124,6 +124,9 @@ structure Prog (Op : Type) where
   funcs : Array (Func Op)
   /-- Width hint per havoc site, consumed by the search driver to generate values. -/
   havocWidths : Array Nat := #[]
+  /-- For a program the driver linked from several models: the model and
+  local index each havoc site came from (empty for a single model). -/
+  siteOrigin : Array (String × Nat) := #[]
   deriving Repr
 
 /-- Havoc oracle: site → iteration → value. -/
