@@ -560,7 +560,7 @@ func exitCounts(sites []contract.ExitSite, exits map[string]int) (vacuous, check
 	for b, n := range exits {
 		vac := false
 		for _, s := range sites {
-			if strconv.Itoa(s.Block) == b && s.ConstTrue {
+			if strconv.Itoa(s.Block) == b && s.ConstTrue && !s.Last {
 				vac = true
 			}
 		}
@@ -587,7 +587,7 @@ func exitNote(sites []contract.ExitSite, exits map[string]int) string {
 			continue
 		}
 		label := fmt.Sprintf("line %d", s.Line)
-		if s.ConstTrue {
+		if s.ConstTrue && !s.Last {
 			label += " (return true)"
 		}
 		parts = append(parts, fmt.Sprintf("%s: %d", label, n))

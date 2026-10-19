@@ -460,6 +460,7 @@ func (t *fnState) translate() error {
 	} else {
 		t.out.Status = contract.ModelComplete
 	}
+	markLastExit(t.out.Exits)
 	return nil
 }
 
@@ -1423,6 +1424,19 @@ func (t *fnState) call(x *ssa.Call) error {
 
 // recordExit notes a return statement: its block (the current one), its
 // source line, and whether it returns the constant true.
+// markLastExit flags the return statement with the highest source line.
+func markLastExit(exits []contract.ExitSite) {
+	last := -1
+	for i, e := range exits {
+		if last < 0 || e.Line > exits[last].Line {
+			last = i
+		}
+	}
+	if last >= 0 {
+		exits[last].Last = true
+	}
+}
+
 func (t *fnState) recordExit(x *ssa.Return) {
 	block := -1
 	for i := range t.out.Blocks {

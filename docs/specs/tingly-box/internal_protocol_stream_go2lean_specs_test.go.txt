@@ -230,7 +230,7 @@ func replayMessage(bm anthropic.BetaMessage) replayed {
 		r.text += ch.Delta.Content
 		r.reasoning += ch.Delta.ReasoningContent
 		for _, tc := range ch.Delta.ToolCalls {
-			if tc.ID != "" {
+			if tc.Type == "function" { // the chunk that opens a tool call
 				r.calls = append(r.calls, tc.ID+"/"+tc.Function.Name)
 			}
 		}
@@ -270,10 +270,17 @@ func SpecAnthropicToOpenAIConverterProcessEventStreamTextMatches(c *anthropicToO
 
 // go2lean:spec anthropicToOpenAIConverter.processEvent
 // SpecAnthropicToOpenAIConverterProcessEventStreamReasoningMatches: the
-// streamed reasoning_content equals the non-streamed one.
+// streamed reasoning_content equals the non-streamed one, for messages
+// whose thinking blocks have the shape the API sends (thinking text in
+// Thinking, Text empty).
 func SpecAnthropicToOpenAIConverterProcessEventStreamReasoningMatches(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
 	if event == nil {
 		return true
+	}
+	for _, b := range event.Message.Content {
+		if b.Type == "thinking" && b.Text != "" {
+			return true
+		}
 	}
 	_, reasoning, _, _, ok := nonStreamed(event.Message)
 	if !ok {
@@ -308,9 +315,21 @@ func SpecAnthropicToOpenAIConverterProcessEventStreamToolCallsMatch(c *anthropic
 // go2lean:spec anthropicToOpenAIConverter.processEvent
 // SpecAnthropicToOpenAIConverterProcessEventStreamFinishMatches: the
 // streamed finish_reason equals the non-streamed one (max_tokens excluded:
-// already confirmed by MaxTokensIsLength).
+// already confirmed by MaxTokensIsLength), for messages whose stop reason
+// agrees with their blocks.
 func SpecAnthropicToOpenAIConverterProcessEventStreamFinishMatches(c *anthropicToOpenAIConverter, event *anthropic.BetaRawMessageStreamEventUnion) bool {
 	if event == nil || event.Message.StopReason == "max_tokens" {
+		return true
+	}
+	// As the API sends it: stop reason tool_use exactly when the message
+	// holds a tool_use block.
+	hasToolUse := false
+	for _, b := range event.Message.Content {
+		if b.Type == "tool_use" {
+			hasToolUse = true
+		}
+	}
+	if hasToolUse != (event.Message.StopReason == "tool_use") {
 		return true
 	}
 	_, _, finish, _, ok := nonStreamed(event.Message)

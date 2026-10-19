@@ -391,6 +391,9 @@ type ExitSite struct {
 	Block     int  `json:"block"`
 	Line      int  `json:"line"`
 	ConstTrue bool `json:"const_true,omitempty"`
+	// Last marks the textually last return of the function: a `return
+	// true` there ends a check that passed, not a guard.
+	Last bool `json:"last,omitempty"`
 }
 
 // XCall names a function of another package by its import path and its ID
