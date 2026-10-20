@@ -13,7 +13,8 @@ Go source ─► go/ssa ─► Lean SSA model ─► counterexample ─► go te
 Status: working proof of concept. Four ground-truth packages run end to end
 in 2–5 s each; every planted bug is confirmed by a real Go run and every
 correct function gets a bounded certificate or "no counterexample". The design
-and roadmap are in [docs/design.md](docs/design.md).
+and roadmap are in [docs/design.md](docs/design.md); the Go semantics
+modelled (and how faithfully) are listed in [docs/semantics.md](docs/semantics.md).
 
 ## Quick start
 
@@ -216,6 +217,7 @@ internal/pipeline/     the steps the CLI and the agent share
 lean/                  Lean 4 project: SSA core, GoSSA dialect, search engines
 examples/              ground-truth packages
 docs/design.md         design and roadmap
+docs/semantics.md      the Go semantics modelled, by construct, with status
 ```
 
 ## Roadmap

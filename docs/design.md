@@ -167,6 +167,9 @@ frontends sharing everything and translation being testable apart from semantics
 
 ### 4.3 `GoSSA` dialect
 
+The current coverage, construct by construct with its status (exact,
+havoc, assumption, stuck, rejected), is kept in [semantics.md](semantics.md).
+
 Stage A (built): integers of every width, bools, read-only slices of integers.
 Stage B (built, §4.3b): heap-backed slices of any modelled element type,
 structs, pointers, strings, `append`/`copy`.
