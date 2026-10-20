@@ -177,7 +177,8 @@ Calls not listed here are unmodelled (§4.6).
 | `fmt.Sprintf` with `%s %d %v %t %%` on strings, integers and bools, no flags or widths | exact; any other format or argument: havoc string |
 | `fmt.Errorf`, `errors.New` | a non-nil error (message not modelled) |
 | `encoding/json.Unmarshal` into `*string`, `*bool`, `*interface{}`, `*map[string]interface{}`, `*[]interface{}` | exact (Go's rules for null, type errors, merging into a non-nil map; numbers are opaque floats; invalid UTF-8 → U+FFFD) |
-| `encoding/json.Unmarshal` into structs, `json.Marshal` | havoc (in progress) |
+| `encoding/json.Marshal` | exact for strings (Go's HTML-safe escaping, invalid UTF-8 → `\ufffd`), bools, integers, `[]byte` (base64), `json.RawMessage` (compacted), slices, arrays, pointers, maps with string or integer keys (sorted), interfaces holding a type the package boxes, structs (json tags, `omitempty`, `omitzero`, `-`, embedded and `,inline` fields); SDK param objects (`default:` constants, `param.Opt`), SDK param unions (one present variant; none → null, several → error); floats and other custom marshalers: stuck |
+| `encoding/json.Unmarshal` into structs and the types above | exact for the same types (exact key then case-insensitive match, unknown keys ignored, type errors reported while decoding goes on, maps merged, nil pointers allocated); SDK response types also get their JSON metadata (raw text, per-member `respjson.Field`, `ExtraFields`); `json.RawMessage` keeps the value with sorted keys and no whitespace (Go keeps the original bytes); numbers with a fraction or exponent are an error for integers (Go also rejects `1e2`, the model accepts it) |
 | `encoding/hex.EncodeToString` | exact |
 | `reflect.ValueOf`, `(reflect.Value).IsZero` | §4.5 |
 | `github.com/google/uuid.New` | a fresh value distinct from every other in the run (real UUIDs collide with negligible probability) |

@@ -712,6 +712,21 @@ search does not get to). Regression after these changes (`run -deps
 ./examples/...`): **36 of 36 confirmed** (Weight, Label, Role new), no
 spurious, **82 certificates** (78 before).
 
+After the benchmark, **struct JSON encoding and decoding** (for the
+non-streaming case): each package gets a table of JSON descriptions
+(`JDesc`: strings with SDK constant defaults, ints, bools, floats,
+`[]byte`, `RawMessage`, slices, arrays, pointers, maps, interfaces,
+structs with tag options and SDK metadata, SDK unions, `param.Opt`) that
+generic `jsonMarshal` / `jsonDecode` ops interpret. Checked against
+`encoding/json` by a differential run (12 random structs encoded, 40
+documents decoded: all byte-identical). `examples/jsonc`: `Reload` (an
+omitempty 0 replaced by the default on reload) and `Quote` (`<` escaped as
+`\u003c`) confirmed, `RoundTrip` holds. Random strings now also draw `"`,
+`\`, `<`, `&` and tab, JSON texts from the pool are not mangled, and the
+keys of decoded struct types join the key pool. The harness keeps empty
+slice literals (an empty slice encodes as `[]`, a nil one as `null`).
+Regression: 38 of 38 confirmed, 84 certificates.
+
 Changes made for the misses (each with a ground-truth example, `examples/inputs`):
 
 - **Map and interface inputs.** Maps with string, integer or bool keys are

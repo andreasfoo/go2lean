@@ -223,6 +223,17 @@ func (j JSONUnmarshal) Lean() string {
 	return fmt.Sprintf("(.jsonUnmarshal %d [%d, %d, %d, %d, %d])", j.Kind, j.Tags[0], j.Tags[1], j.Tags[2], j.Tags[3], j.Tags[4])
 }
 
+// JSONMarshal is json.Marshal of a value described by entry Root of the
+// module's jsonTable; it yields ([]byte, error).
+type JSONMarshal struct{ Root int }
+
+func (j JSONMarshal) Lean() string { return fmt.Sprintf("(.jsonMarshal jsonTable %d)", j.Root) }
+
+// JSONDecode is json.Unmarshal(data, p) into *p described by entry Root.
+type JSONDecode struct{ Root int }
+
+func (j JSONDecode) Lean() string { return fmt.Sprintf("(.jsonDecode jsonTable %d)", j.Root) }
+
 type MapLookup struct {
 	CommaOk bool
 	Zero    Val
@@ -439,6 +450,9 @@ type Prog struct {
 	Funcs       []*Func
 	HavocWidths []int
 	Havoc       []contract.ABIHavoc
+	// JSONTable is the Lean term of the module's `jsonTable` (the JSON
+	// descriptions its jsonMarshal / jsonDecode ops index), empty if none.
+	JSONTable string
 }
 
 // Validate checks structural invariants the Lean printer and interpreter

@@ -335,7 +335,7 @@ func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []in
 // are almost never valid JSON, so without these a decoder only ever fails.
 func jsonTexts(mapKeys, strConsts []string) []string {
 	quote := func(s string) string { b, _ := json.Marshal(s); return string(b) }
-	vals := []string{"null", "true", `""`}
+	vals := []string{"null", "true", `""`, "0", "1", "-1", "[]", "{}"}
 	for i, s := range strConsts {
 		if i == 8 {
 			break
@@ -351,7 +351,7 @@ func jsonTexts(mapKeys, strConsts []string) []string {
 			out = append(out, "{"+quote(k)+":"+v+"}")
 		}
 	}
-	for _, v := range vals[3:] {
+	for _, v := range vals[8:] {
 		out = append(out, v)
 	}
 	return out

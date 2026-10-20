@@ -135,8 +135,9 @@ def numberStrs (extra : List Nat) : List (List Nat) :=
   ((fixed ++ mined).map fun (v : Int) => itoaBytes v).eraseDups
 
 /-- Bytes a random string is built from: letters, digits and the
-punctuation that parsers branch on. -/
-def alphabet : Array Nat := #[97, 98, 99, 65, 66, 48, 49, 57, 32, 45, 95, 46, 47, 58, 61, 44, 10]
+punctuation that parsers branch on, and the characters encoders treat
+specially (`"`, `\`, `<`, `&`, tab: JSON's and HTML's escapes). -/
+def alphabet : Array Nat := #[97, 98, 99, 65, 66, 48, 49, 57, 32, 45, 95, 46, 47, 58, 61, 44, 10, 34, 92, 60, 38, 9]
 
 /-- The depth budget a top-level argument starts with. -/
 def topDepth : Nat := 4
@@ -343,6 +344,9 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
         let (i, g) := randNat g 0 (pool.length - 1)
         let base := pool[i]!
         let (variant, g) := randNat g 0 7
+        -- JSON texts (`{...}`, `[...]`) stay whole: a mangled one is just
+        -- a syntax error.
+        let variant := if base.head? == some 123 || base.head? == some 91 then 7 else variant
         match variant with
         | 0 => (base.dropLast, g)
         | 1 => (base ++ [120], g)

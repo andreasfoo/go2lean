@@ -126,6 +126,9 @@ func Print(p *ir.Prog, module string) string {
 	// too small for a few hundred instructions in one block (614 needs
 	// more than 8192).
 	fmt.Fprintf(&b, "set_option maxRecDepth 100000\n\n")
+	if p.JSONTable != "" {
+		fmt.Fprintf(&b, "/-- The JSON descriptions of the types this package encodes or decodes. -/\ndef jsonTable : GoSSA.JTable :=\n  %s\n\n", p.JSONTable)
+	}
 	for i, f := range p.Funcs {
 		fmt.Fprintf(&b, "/-- %s (status: %s) -/\n", f.GoSig, f.Status)
 		fmt.Fprintf(&b, "def f%d : GoSSA.Func := {\n  name := %q, params := %s, nvals := %d, entry := %d,\n  blocks := #[\n",

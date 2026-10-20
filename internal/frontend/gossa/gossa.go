@@ -623,7 +623,7 @@ func candidates(spkg *ssa.Package) []*ssa.Function {
 
 func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]ssa.Value, sprog *ssa.Program, boxed []types.Type) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
-	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros, sprog: sprog, boxed: boxed}
+	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros, sprog: sprog, boxed: boxed, json: newJSONTable(sprog)}
 
 	// Pass 1: assign FuncIds so calls can be resolved.
 	byName := map[string]*ssa.Function{}
@@ -644,6 +644,7 @@ func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]cont
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("internal error: generated program is malformed: %w", err)
 	}
+	p.JSONTable = st.json.lean(st.boxed)
 	return p, nil
 }
 
@@ -733,6 +734,8 @@ type progState struct {
 	sprog *ssa.Program
 	// boxed lists the types modelled code boxes into interfaces.
 	boxed []types.Type
+	// json describes the types the package encodes or decodes.
+	json *jsonTable
 }
 
 // maxImplementers bounds the boxed types an interface assertion or a
@@ -1948,6 +1951,12 @@ func (t *fnState) call(x *ssa.Call) error {
 		if done, err := t.jsonUnmarshal(x); done || err != nil {
 			return err
 		}
+		if done, err := t.jsonDecode(x); done || err != nil {
+			return err
+		}
+	}
+	if callee != nil && callee.String() == "encoding/json.Marshal" && len(x.Call.Args) == 1 {
+		return t.jsonMarshal(x)
 	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
@@ -2168,6 +2177,53 @@ func (t *fnState) jsonUnmarshal(x *ssa.Call) (bool, error) {
 	}}
 	t.emit(ir.Instr{Dst: t.def(x), Op: op, Args: []ir.Var{data, p}})
 	t.out.UsesJSON = true
+	return true, nil
+}
+
+// jsonMarshal lowers json.Marshal(v) by the JSON description of v's type
+// (the type stored in the interface argument, when the call site shows it).
+func (t *fnState) jsonMarshal(x *ssa.Call) error {
+	arg := x.Call.Args[0]
+	ty := arg.Type()
+	if mi, ok := arg.(*ssa.MakeInterface); ok {
+		arg, ty = mi.X, mi.X.Type()
+	}
+	v, err := t.val(arg)
+	if err != nil {
+		return err
+	}
+	t.emit(ir.Instr{Dst: t.def(x), Op: ir.JSONMarshal{Root: t.prog.json.desc(ty)}, Args: []ir.Var{v}})
+	t.out.UsesJSON = true
+	return nil
+}
+
+// jsonDecode lowers json.Unmarshal(data, &v) for a v of any type by its JSON
+// description (structs, slices, maps, pointers, SDK types).
+func (t *fnState) jsonDecode(x *ssa.Call) (bool, error) {
+	mi, ok := x.Call.Args[1].(*ssa.MakeInterface)
+	if !ok {
+		return false, nil
+	}
+	pt, ok := mi.X.Type().Underlying().(*types.Pointer)
+	if !ok {
+		return false, nil
+	}
+	data, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	p, err := t.val(mi.X)
+	if err != nil {
+		return true, err
+	}
+	t.emit(ir.Instr{Dst: t.def(x), Op: ir.JSONDecode{Root: t.prog.json.desc(pt.Elem())}, Args: []ir.Var{data, p}})
+	t.out.UsesJSON = true
+	// The keys the decoded types read: JSON inputs are built from them.
+	for _, k := range t.prog.json.keys {
+		if !slices.Contains(t.out.MapKeys, k) {
+			t.out.MapKeys = append(t.out.MapKeys, k)
+		}
+	}
 	return true, nil
 }
 
