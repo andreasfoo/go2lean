@@ -348,6 +348,9 @@ type ABIParam struct {
 	// name; "-" when encoding skips it), used to build SDK response values
 	// from a JSON document.
 	JSONName string `json:"json_name,omitempty"`
+	// JSONInline marks a field tagged `json:",inline"` (an SDK union's
+	// variants): its encoding stands in for the struct's own.
+	JSONInline bool `json:"json_inline,omitempty"`
 }
 
 // ABIType is a named struct type in the ABI's type table.

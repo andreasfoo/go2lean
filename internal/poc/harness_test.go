@@ -180,3 +180,15 @@ func TestLiteralRawJSONValueIsDecoded(t *testing.T) {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
+
+func TestJSONDocInlinesUnionVariant(t *testing.T) {
+	meta := contract.ABIParam{Go: "JSON", GoType: "struct{raw string}", Model: []string{"JSON"}, Kind: contract.ABIStruct, JSONName: "-",
+		Fields: []contract.ABIParam{{Go: "raw", GoType: "string", Model: []string{"raw"}, Kind: contract.ABIString, JSONText: true}}}
+	args := contract.ABIParam{Go: "Arguments", GoType: "sdk.Args", Model: []string{"Arguments"}, Kind: contract.ABIStruct, JSONName: "arguments",
+		Fields: []contract.ABIParam{{Go: "OfString", GoType: "string", Model: []string{"OfString"}, Kind: contract.ABIString, JSONName: "OfString", JSONInline: true}}}
+	item := contract.ABIParam{Go: "item", GoType: "sdk.Item", Model: []string{"item"}, Kind: contract.ABIStruct, Fields: []contract.ABIParam{args, meta}}
+	doc, _ := json.Marshal(jsonDoc(&contract.ABI{}, item, []any{[]any{`{"a":1}`}, []any{`{"x":true}`}}))
+	if string(doc) != `{"arguments":"{\"a\":1}","x":true}` {
+		t.Fatalf("got %s", doc)
+	}
+}

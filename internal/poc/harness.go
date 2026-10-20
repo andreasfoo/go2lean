@@ -594,6 +594,7 @@ func jsonDoc(abi *contract.ABI, p contract.ABIParam, v any) any {
 		fields, _ := v.([]any)
 		obj := map[string]any{}
 		var extra map[string]json.RawMessage
+		var inlined any // a union's live scalar variant
 		for i, f := range p.Fields {
 			if i >= len(fields) {
 				break
@@ -609,7 +610,21 @@ func jsonDoc(abi *contract.ABI, p contract.ABIParam, v any) any {
 			if !token.IsExported(f.Go) || f.JSONName == "-" || f.Kind == contract.ABIOpaque || isZeroJSON(abi, f, fields[i]) {
 				continue
 			}
-			obj[f.JSONName] = jsonDoc(abi, f, fields[i])
+			d := jsonDoc(abi, f, fields[i])
+			if f.JSONInline {
+				if m, ok := d.(map[string]any); ok {
+					for k, x := range m {
+						obj[k] = x
+					}
+				} else {
+					inlined = d
+				}
+				continue
+			}
+			obj[f.JSONName] = d
+		}
+		if inlined != nil && len(obj) == 0 {
+			return inlined
 		}
 		for k, x := range extra {
 			if _, typed := obj[k]; !typed {
