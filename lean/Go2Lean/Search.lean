@@ -687,12 +687,17 @@ def modelOutput : Outcome → Option Val → Json
   | _, v => Json.mkObj [("res", "ok"), ("value", (v.map renderVal).getD Json.null)]
 
 def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (trial seed : Nat)
-    (o : Outcome) (s : HState Val) (ret : Option Val) : Json :=
+    (o : Outcome) (s : HState Val) (ret : Option Val) (origins : Array (String × Nat) := #[]) : Json :=
   let inputs := (gens.zip args).flatMap (fun (g, v) => flatten g v)
   let memory := memoryOf or heap gens args
   let objects := objectsOf heap gens args
+  -- `origin`: the package and its own index of a linked site, so that the
+  -- site can be found in that package's model report.
   let havoc := s.log.toList.map fun (site, iter, v) =>
-    Json.mkObj [("idx", site), ("iter", iter), ("value", renderVal v)]
+    Json.mkObj ([("idx", (site : Json)), ("iter", iter), ("value", renderVal v)] ++
+      match origins[site]? with
+      | some (pkg, i) => [("origin", Json.str s!"{pkg}#{i}")]
+      | none => [])
   let probes := s.probes.toList.map fun (label, v) =>
     Json.mkObj [("label", label), ("value", renderObj s.heap true v)]
   Json.mkObj [("found", true), ("trial", trial), ("seed", seed),
@@ -749,7 +754,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       -- A refutation whose run read a havoc value (an unmodelled call) is
       -- kept as a fallback while the search goes on for one that did not:
       -- M3 refutes most havoc-dependent ones.
-      let j := report or heap gens args trial seed o s ret
+      let j := report or heap gens args trial seed o s ret p.siteOrigin
       if s.log.size == 0 then
         IO.println j.compress
         return
@@ -1027,7 +1032,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       return
     let (o, s, ret) := check p or h prop args fuel heap [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
     if o.refutes prop then
-      let j := report or heap gens args i 0 o s ret
+      let j := report or heap gens args i 0 o s ret p.siteOrigin
       if s.log.size == 0 then
         IO.println j.compress
         return

@@ -159,7 +159,7 @@ memory).
 | a variable nothing writes after init, initialised to a constant or a function | its value | exact (writes from `…ForTest` helpers ignored) |
 | a variable initialised to a constant expression over constants and such variables (`var mb = kb * 1024`) | its value, folded at compile time | exact (an expression that would wrap or divide by zero is not folded: havoc) |
 | a zero-valued variable no function writes | the zero value | exact |
-| any other load | havoc | havoc |
+| any other load | havoc (a confirmed panic whose run read one carries the verdict note `reads_unknown_state`, naming it: the program may initialise it first) | havoc |
 | stores to globals | ignored | assumption |
 | `init` functions | not run | assumption |
 

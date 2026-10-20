@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +49,9 @@ type prepared struct {
 	fn     string
 	imps   []string
 	v      *contract.Verdict // set early when the harness cannot be built
+	// state lists the package-level variables the model read as havoc on
+	// the way to the counterexample (sites from the model reports).
+	state []string
 }
 
 // VerifyAll realises the counterexamples, runs those of each package in a
@@ -128,7 +132,7 @@ func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &prepared{cx: cx, prop: prop, target: target}
+	p := &prepared{cx: cx, prop: prop, target: target, state: unknownState(ws, cx)}
 	p.fn, p.imps, err = HarnessFunc(target, prop, cx, abi)
 	if err != nil {
 		p.v = &contract.Verdict{Counterexample: cx.ID, Status: contract.VerdictInconclusive,
@@ -213,7 +217,42 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 	}
 	judge(v, p.prop, p.cx, res)
 	v.Probes = res.probes
+	if v.Status == contract.VerdictConfirmed && len(p.state) > 0 && p.prop.Kind == contract.KindNoPanic {
+		// Confirmed, but on package state the model does not know: the
+		// program may set it up before any call (an Init function), and
+		// the harness does not.
+		v.Diagnosis = &contract.Diagnosis{Reason: "reads_unknown_state", Notes: []string{
+			"the run that panicked read package-level state the model does not know (" + strings.Join(p.state, "; ") +
+				"): check that the program does not initialise it before calls like this one"}}
+	}
 	return v
+}
+
+// unknownState names the package-level variables a counterexample's model
+// run read as havoc (unmodeled loads), resolved in their packages' reports.
+func unknownState(ws contract.Workspace, cx *contract.Counterexample) []string {
+	var out []string
+	reports := map[string]*contract.ModelReport{}
+	for _, h := range cx.Havoc {
+		key, idx, ok := strings.Cut(h.Origin, "#")
+		if !ok {
+			continue
+		}
+		key = strings.TrimPrefix(key, cx.Frontend+".")
+		r, seen := reports[key]
+		if !seen {
+			r, _ = ws.ModelReportByKey(cx.Frontend, key)
+			reports[key] = r
+		}
+		i, err := strconv.Atoi(idx)
+		if r == nil || err != nil || i >= len(r.Havoc) {
+			continue
+		}
+		if site := r.Havoc[i]; site.Reason == "unmodeled-load" && !slices.Contains(out, site.Site) {
+			out = append(out, site.Site)
+		}
+	}
+	return out
 }
 
 // deliver writes the PoC directory (a standalone test file and a README)

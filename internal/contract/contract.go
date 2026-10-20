@@ -91,9 +91,12 @@ const (
 // one iteration. GoHint, copied from the ABI, tells M3 how to realise it in
 // Go (e.g. "xs[i]" means element Iter of parameter xs).
 type HavocValue struct {
-	Idx    int    `json:"idx"`
-	Iter   int    `json:"iter"`
-	Value  string `json:"value"`
+	Idx   int    `json:"idx"`
+	Iter  int    `json:"iter"`
+	Value string `json:"value"`
+	// Origin is "<package key>#<index>": the site in its own package's
+	// model report (Idx numbers the sites of the linked program).
+	Origin string `json:"origin,omitempty"`
 	GoHint string `json:"go_hint,omitempty"`
 }
 

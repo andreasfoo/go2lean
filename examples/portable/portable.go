@@ -174,3 +174,15 @@ func Month(s string) string {
 func Label(s *meta.Session, name string) string {
 	return s.Model + "/" + strconv.Itoa(100/len(name))
 }
+
+type encoder struct{ perToken int }
+
+var enc *encoder
+
+// InitEncoder sets up the encoder, as one-api's InitTokenEncoders does at
+// start-up.
+func InitEncoder() { enc = &encoder{perToken: 4} }
+
+// Tokens is the token count of s. It panics when InitEncoder has not run:
+// confirmed, with the verdict noting the package state it read.
+func Tokens(s string) int { return len(s) / enc.perToken }

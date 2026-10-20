@@ -103,6 +103,7 @@ exhausted_havoc portable_digit_nopanic
 exhausted portable_first_nopanic
 inconclusive portable_group_nopanic
 confirmed portable_head_nopanic
+exhausted portable_initencoder_nopanic
 exhausted portable_intpart_nopanic
 confirmed portable_label_nopanic
 exhausted portable_meta_get_nopanic
@@ -116,6 +117,7 @@ exhausted portable_permax_nopanic
 exhausted portable_permb_nopanic
 confirmed portable_pick_nopanic
 confirmed portable_port_nopanic
+confirmed portable_tokens_nopanic
 confirmed portable_unit_nopanic
 confirmed portable_url_nopanic
 confirmed recs_dedup_nopanic

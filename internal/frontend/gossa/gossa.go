@@ -1905,7 +1905,7 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 	case token.MUL: // load through a pointer
 		if t.intoHandle(x.X) {
 			// A handle is opaque: what its fields hold is havoc.
-			return t.havoc(x, "load "+x.X.Name()+" through a handle", "unmodeled-load", "")
+			return t.havoc(x, "load "+x.X.Name()+" through a handle", "opaque-handle", "")
 		}
 		if s, ok := sentinelErr(x); ok {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
