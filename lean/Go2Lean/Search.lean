@@ -357,16 +357,17 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | none => (.unit, g, heap)
   | .nilptr _ => (.ptr 0 [], g, heap)
   | .opaque _ v => (v, g, heap)
-  | .mapOf _ key val maxLen =>
+  | .mapOf name key val maxLen =>
     -- Like a slice: halved bounds per level, empty at depth zero. Keys
     -- equal to an earlier one are dropped (a map holds each once).
     let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else max (min maxLen 1) (maxLen / 2 ^ (topDepth - depth))
-    -- Nil one time in five. Below the top a map is nil even without
-    -- allowNil: a field the client left out decodes as a nil map, and
-    -- reading one is safe in Go (no trivial counterexample, as a nil
-    -- pointer would be), while writing into one is a real bug.
+    -- Nil one time in five. Below the top an exported field's map is nil
+    -- even without allowNil: a field the client left out decodes as a nil
+    -- map, and reading one is safe in Go (no trivial counterexample, as a
+    -- nil pointer would be), while writing into one is a real bug. An
+    -- unexported map is state a constructor makes: it keeps the policy.
     let (roll, g) := randNat g 0 4
-    if (allowNil || depth < topDepth) && roll == 0 then (.opaqueNil, g, heap) else
+    if (allowNil || (depth < topDepth && !name.front.isLower)) && roll == 0 then (.opaqueNil, g, heap) else
     let (len, g) := randNat g 0 maxLen
     let (entries, g, heap) := (List.range len).foldl (fun (acc, g, heap) _ =>
       let (k, g, heap) := genVal pf extra g heap pool table (depth - 1) allowNil key
@@ -871,10 +872,10 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     (enumList extra maxLen pool table (depth - 1) allowNil (List.replicate n elem)).map fun build heap =>
       let (vs, heap) := build heap
       (.arr vs, heap)
-  | .mapOf _ key val _ =>
-    -- nil (when allowed, and always below the top, as in genVal), empty,
-    -- and every map of one entry.
-    (if allowNil || depth < enumTop then [fun heap => (.opaqueNil, heap)] else []) ++
+  | .mapOf name key val _ =>
+    -- nil (when allowed, and below the top for an exported field, as in
+    -- genVal), empty, and every map of one entry.
+    (if allowNil || (depth < enumTop && !name.front.isLower) then [fun heap => (.opaqueNil, heap)] else []) ++
     [fun heap => let (p, heap) := heapAlloc heap (mapObj []); (.boxed 1 p, heap)] ++
     (if depth == 0 then [] else
       (enumList extra maxLen pool table (depth - 1) allowNil [key, val]).map fun build heap =>

@@ -192,3 +192,22 @@ func TestJSONDocInlinesUnionVariant(t *testing.T) {
 		t.Fatalf("got %s", doc)
 	}
 }
+
+func TestProgramStructHoldingSDKValueIsALiteral(t *testing.T) {
+	meta := contract.ABIParam{Go: "JSON", GoType: "struct{raw string}", Model: []string{"JSON"}, Kind: contract.ABIStruct, JSONName: "-",
+		Fields: []contract.ABIParam{{Go: "raw", GoType: "string", Model: []string{"raw"}, Kind: contract.ABIString, JSONText: true}}}
+	n := intParam("N")
+	n.JSONName = "n"
+	resp := contract.ABIParam{Go: "response", GoType: "sdk.Response", Model: []string{"response"}, Kind: contract.ABIStruct,
+		Fields: []contract.ABIParam{n, meta}}
+	count := intParam("count")
+	st := contract.ABIParam{Go: "a", GoType: "Assembler", Model: []string{"a"}, Kind: contract.ABIStruct,
+		Fields: []contract.ABIParam{{Go: "response", GoType: "*sdk.Response", Model: []string{"response"}, Kind: contract.ABIPtr, Pointee: &resp}, count}}
+	got, err := literal(&contract.ABI{}, st, []any{[]any{"1", []any{`{"x":true}`}}, "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "Assembler{") || !strings.Contains(got, "json.Unmarshal") || !strings.Contains(got, "count: int(2)") {
+		t.Fatalf("want a literal holding a decoded SDK value, got %s", got)
+	}
+}

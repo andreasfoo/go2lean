@@ -2096,6 +2096,11 @@ func (t *fnState) call(x *ssa.Call) error {
 			return err
 		}
 	}
+	if callee != nil && callee.String() == "errors.As" && len(x.Call.Args) == 2 {
+		if done, err := t.errorsAs(x); done || err != nil {
+			return err
+		}
+	}
 	if callee != nil && callee.String() == "encoding/json.Marshal" && len(x.Call.Args) == 1 {
 		return t.jsonMarshal(x)
 	}
@@ -2302,6 +2307,45 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]
 	return nil
+}
+
+// errorsAs lowers errors.As(err, &v), whose outcome the model cannot know
+// (it does not keep an error's dynamic type): havoc, and when it holds, v
+// gets a havoc value of its type (for *T, a pointer to a fresh T of havoc
+// fields). Before, v stayed nil, and code reading it after a true result
+// met a nil the real program cannot have.
+func (t *fnState) errorsAs(x *ssa.Call) (bool, error) {
+	mi, ok := x.Call.Args[1].(*ssa.MakeInterface)
+	if !ok {
+		return false, nil
+	}
+	pt, ok := mi.X.Type().Underlying().(*types.Pointer)
+	if !ok {
+		return false, nil
+	}
+	p, err := t.val(mi.X)
+	if err != nil {
+		return true, err
+	}
+	dst := t.def(x)
+	site := t.f.Name() + ": call errors.As"
+	if err := t.havocInto(dst, types.Typ[types.Bool], site, "unmodeled-call", ""); err != nil {
+		return true, err
+	}
+	set := len(t.out.Blocks)
+	join := set + 1
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: dst, T: set, F: join}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".as-set"}, ir.Block{Name: name + ".as-join"})
+	t.cur = &t.out.Blocks[set]
+	v := t.fresh()
+	if err := t.havocInto(v, pt.Elem(), site+" (target)", "unmodeled-call", ""); err != nil {
+		return true, err
+	}
+	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{p, v}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return true, nil
 }
 
 // sprintf lowers fmt.Sprintf: the formatted string when the model can

@@ -408,9 +408,13 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if !ok || len(fields) != len(p.Fields) {
 			return "", fmt.Errorf("%s: expected %d fields, got %v", p.Go, len(p.Fields), v)
 		}
-		if hasRawJSON(abi, p, v) {
-			// An SDK response value with raw JSON somewhere inside: such
-			// values only come from decoding, so decode the document.
+		if sdkResponse(abi, p) {
+			// An SDK response value: such values only come from decoding
+			// (raw JSON and member metadata included), and the generator
+			// builds them so (sdkDoc), so decode the document. A struct of
+			// the program that holds one is written as a literal: its own
+			// unexported fields (maps a constructor made) must not be lost
+			// to a decode.
 			doc, err := json.Marshal(jsonDoc(abi, p, v))
 			if err != nil {
 				return "", err
@@ -542,6 +546,27 @@ func withTable(abi *contract.ABI, p contract.ABIParam) contract.ABIParam {
 		}
 	}
 	return p
+}
+
+// sdkResponse says whether p is an SDK response type: one the frontend gave
+// a JSON description, or (an ABI without one) a struct whose JSON field
+// holds the raw JSON text (respjson metadata).
+func sdkResponse(abi *contract.ABI, p contract.ABIParam) bool {
+	for _, t := range abi.Types {
+		if t.GoType == p.TypeRef && p.TypeRef != "" && t.JSONDesc > 0 {
+			return true
+		}
+	}
+	for _, f := range withTable(abi, p).Fields {
+		if f.Go == "JSON" && f.Kind == contract.ABIStruct {
+			for _, g := range f.Fields {
+				if g.JSONText {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // hasRawJSON says whether the value holds a non-empty generated raw JSON
