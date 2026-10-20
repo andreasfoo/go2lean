@@ -84,6 +84,29 @@ func EncodeRaw(r json.RawMessage) string {
 	return string(b)
 }
 
+// Encode64 encodes in the four encodings of package base64.
+func Encode64(s string) string {
+	b := []byte(s)
+	return base64.StdEncoding.EncodeToString(b) + "|" + base64.URLEncoding.EncodeToString(b) + "|" +
+		base64.RawStdEncoding.EncodeToString(b) + "|" + base64.RawURLEncoding.EncodeToString(b)
+}
+
+// DecodeURL64 decodes URL-safe base64, padded and raw.
+func DecodeURL64(s string) string {
+	out := ""
+	if b, err := base64.URLEncoding.DecodeString(s); err == nil {
+		out += string(b)
+	} else {
+		out += "ERR"
+	}
+	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+		out += "|" + string(b)
+	} else {
+		out += "|ERR"
+	}
+	return out
+}
+
 // Decode64 decodes standard base64.
 func Decode64(s string) string {
 	b, err := base64.StdEncoding.DecodeString(s)
@@ -107,6 +130,22 @@ func DecodeSchema(s string) string {
 	}
 	if err != nil {
 		out += "|ERR"
+	}
+	return out
+}
+
+// DecodeCitations decodes an SDK response type (apijson): a bool member
+// of another JSON type is coerced. (The member's status, JSON.Enabled,
+// needs the SDK's respjson package, which json-diff does not compile.)
+func DecodeCitations(s string) string {
+	var c anthropic.CitationsConfig
+	err := json.Unmarshal([]byte(s), &c)
+	out := "f"
+	if c.Enabled {
+		out = "t"
+	}
+	if err != nil {
+		out += "E"
 	}
 	return out
 }

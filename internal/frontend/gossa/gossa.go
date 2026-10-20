@@ -1993,15 +1993,26 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil && callee.String() == "encoding/json.Marshal" && len(x.Call.Args) == 1 {
 		return t.jsonMarshal(x)
 	}
-	if callee != nil && callee.String() == "(*encoding/base64.Encoding).DecodeString" && len(x.Call.Args) == 2 && isGlobalLoad(x.Call.Args[0], "encoding/base64", "StdEncoding") {
-		// base64.StdEncoding.DecodeString (the other encodings differ in
-		// alphabet and padding: unmodelled).
-		s, err := t.val(x.Call.Args[1])
-		if err != nil {
-			return err
+	if callee != nil && len(x.Call.Args) == 2 {
+		// DecodeString and EncodeToString of the four encodings package
+		// base64 defines (others, from NewEncoding, stay unmodelled).
+		op := map[string]string{
+			"(*encoding/base64.Encoding).DecodeString":   "base64Decode",
+			"(*encoding/base64.Encoding).EncodeToString": "base64Encode",
+		}[callee.String()]
+		for k, name := range []string{"StdEncoding", "URLEncoding", "RawStdEncoding", "RawURLEncoding"} {
+			if op == "" || !isGlobalLoad(x.Call.Args[0], "encoding/base64", name) {
+				continue
+			}
+			s, err := t.val(x.Call.Args[1])
+			if err != nil {
+				return err
+			}
+			kv := t.fresh()
+			t.emit(ir.Instr{Dst: kv, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: fmt.Sprint(k)}}})
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple(op), Args: []ir.Var{s, kv}})
+			return nil
 		}
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("base64DecodeStd"), Args: []ir.Var{s}})
-		return nil
 	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.

@@ -298,9 +298,11 @@ inductive Op where
   | eqDeep | neDeep
   /-- `hex.EncodeToString(b)`: two lowercase hex digits per byte. -/
   | hexEncode
-  /-- `base64.StdEncoding.DecodeString`: the bytes and the error (CR and
-  LF are skipped, as Go does; on an error the bytes are nil). -/
-  | base64DecodeStd
+  /-- `DecodeString` of the base64 encoding its second operand names (see
+  `base64DecK`): the bytes and the error (on an error the bytes are nil). -/
+  | base64Decode
+  /-- `EncodeToString` of the base64 encoding its second operand names. -/
+  | base64Encode
   /-- `fmt.Sprintf(format, args...)` for the verbs `%s %d %v %t %%` without
   flags or widths on strings, integers and bools the program boxed; any
   other format or value gets the model stuck (the call is then unmodelled). -/
@@ -1177,6 +1179,24 @@ def base64Dec (bs : List Nat) : Option (List Nat) :=
     | _ => none
   go bs
 
+/-- The four encodings of package base64, by `k`: bit 0 the URL alphabet
+(`-_` for `+/`), bit 1 no padding (`RawStdEncoding`, `RawURLEncoding`). -/
+def base64EncK (k : Nat) (bs : List Nat) : List Nat :=
+  let out := base64Enc bs
+  let out := if k % 2 == 1 then out.map fun c => if c == 43 then 45 else if c == 47 then 95 else c else out
+  if k / 2 % 2 == 1 then out.filter (· != 61) else out
+
+/-- `DecodeString` of encoding `k` (see `base64EncK`); CR and LF are
+skipped, as Go does. -/
+def base64DecK (k : Nat) (bs : List Nat) : Option (List Nat) :=
+  let bs := bs.filter fun b => b != 10 && b != 13
+  -- The other alphabet's two characters are invalid.
+  let bs := if k % 2 == 1 then bs.map fun c => if c == 43 || c == 47 then 0 else if c == 45 then 43 else if c == 95 then 47 else c else bs
+  if k / 2 % 2 == 1 then
+    if bs.contains 61 || bs.length % 4 == 1 then none
+    else base64Dec (bs ++ List.replicate ((4 - bs.length % 4) % 4) 61)
+  else base64Dec bs
+
 /-- JSON text without the whitespace outside strings (what Go does to a
 `json.RawMessage` it encodes). -/
 def compactJson (bs : List Nat) : List Nat := Id.run do
@@ -1708,9 +1728,9 @@ where
   only; null leaves a field unchanged (an Opt becomes null); pointers and
   maps are decoded afresh; a member of the wrong JSON type follows
   apijson's loose rules for strings (a bool or an integer literal is
-  stringified, an object or array kept as raw text) and for slices (a
-  non-array leaves the field as it was), and gets the model stuck
-  otherwise. Also the
+  stringified, an object or array kept as raw text), bools (gjson's
+  Bool()) and slices (a non-array leaves the field as it was), and gets
+  the model stuck otherwise. Also the
   status and source of each typed member, for the metadata. -/
   decApi (fields : List JField) (members : List (String × List Nat)) (kvs : Std.TreeMap.Raw String Lean.Json)
       (src : List Nat) (vs : List Val) (heap : Heap Val) :
@@ -1776,6 +1796,15 @@ where
                 vs := vs.set f.idx x
                 heap := h
                 metas := metas ++ [(f.key, (2, vsrc))]
+              | some .bool, j' =>
+                -- gjson's Bool(): ParseBool of a lower-cased string, a
+                -- non-zero number, false otherwise; only a number is valid.
+                let b := match j' with
+                  | .str x => ["1", "t", "true"].contains x.toLower
+                  | .num n => n.mantissa != 0
+                  | _ => false
+                vs := vs.set f.idx (.bool b)
+                metas := metas ++ [(f.key, (if j' matches .num _ then coerced else 2, vsrc))]
               | some (.slice _), .arr _ => .error () -- elements may be coerced
               | some (.slice _), _ =>
                 -- Not an array: the field is left as it was, invalid.
@@ -1854,7 +1883,34 @@ partial def jDoc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Option (Li
       pure (key, ← jDoc t heap vd x)
     pure (jObjBytes (dedup members))
   | some .iface, .opaqueNil | some .iface, .boxed 0 _ => some (asciiBytes "null")
-  | some .iface, .boxed tag inner => t.boxed.lookup tag >>= fun d' => jDoc t heap d' inner
+  | some .iface, .boxed tag inner =>
+    match t.boxed.lookup tag with
+    | some d' => jDoc t heap d' inner
+    | none =>
+      -- The basic types an `any` holds after decoding (see jsonToVal).
+      -- A float64's value is not known to the model, and the harness has
+      -- no alternative for it either: it writes null.
+      if tag == t.basic.getD 0 0 then (strBytes heap inner).map goJsonQuote
+      else if tag == t.basic.getD 2 0 then some (asciiBytes "null")
+      else if tag == t.basic.getD 1 0 then
+        match inner with
+        | .bool b => some (asciiBytes (if b then "true" else "false"))
+        | _ => none
+      else if tag == t.basic.getD 3 0 then do
+        let (_, es) ← mapEntries heap inner
+        let members ← es.mapM fun (k, x) => do pure ((← strBytes heap k), ← jDoc t heap d x)
+        pure (jObjBytes (dedup members))
+      else if tag == t.basic.getD 4 0 then
+        match inner with
+        | .slice ref off len _ =>
+          match heap[ref]? with
+          | some (.arr es) => elems d ((es.drop off.toNat).take len.toNat)
+          | _ => none
+        | _ => none
+      else none
+  -- A float element: the model does not know its value, and the harness
+  -- writes null for it.
+  | some .float, _ => some (asciiBytes "null")
   | some (.strct fields md _), .structv vs => do
     let mut members : List (List Nat × List Nat) := []
     let mut inlined : Option (List Nat) := none
@@ -1869,6 +1925,10 @@ partial def jDoc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Option (Li
         | 123 :: _ => members := members ++ (jObjMembers doc).map fun (k, s) => (asciiBytes k, s)
         | _ => inlined := some doc
       else members := members ++ [(f.key, doc)]
+    -- Typed members as the harness's map holds them: a later field (an
+    -- inline variant's members included) replaces an earlier one with
+    -- the same key.
+    members := dedup members
     -- The raw JSON's members no typed field wrote (harness: decoded into
     -- map[string]json.RawMessage, so the last of a duplicate key wins, and
     -- re-encoded compact and HTML-escaped).
@@ -1908,10 +1968,14 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
   | .makeMap, [] =>
     let (p, heap) := heapAlloc heap (.arr [])
     .ok (.boxed 1 p, heap)
-  | .base64DecodeStd, [s] =>
+  | .base64Encode, [.slice ref off len _, .int _ k] =>
+    match strBytes heap (.str ref off len) with
+    | some bs => .ok (strAlloc heap (base64EncK k.toNat bs))
+    | none => .panic .modelStuck
+  | .base64Decode, [s, .int _ k] =>
     match strBytes heap s with
     | some bs =>
-      match base64Dec (bs.filter fun b => b != 10 && b != 13) with
+      match base64DecK k.toNat bs with
       | some out =>
         let (p, heap) := heapAlloc heap (.arr (out.map fun b => .int 8 (BitVec.ofNat 8 b)))
         match p with

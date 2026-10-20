@@ -32,6 +32,24 @@ func SpecDecodeSchemaDiff(s string, ret string) bool {
 	return false
 }
 
+// go2lean:spec DecodeCitations
+func SpecDecodeCitationsDiff(s string, ret string) bool {
+	go2leanProbe("citations", ret)
+	return false
+}
+
+// go2lean:spec Encode64
+func SpecEncode64Diff(s string, ret string) bool {
+	go2leanProbe("enc64", ret)
+	return false
+}
+
+// go2lean:spec DecodeURL64
+func SpecDecodeURL64Diff(s string, ret string) bool {
+	go2leanProbe("url64", ret)
+	return false
+}
+
 // go2lean:spec Decode64
 func SpecDecode64Diff(s string, ret string) bool {
 	go2leanProbe("b64", ret)
