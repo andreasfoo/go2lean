@@ -256,6 +256,18 @@ func hasNilInput(cx *contract.Counterexample) bool {
 	return false
 }
 
+// hasOpaqueHandle says whether an input was a non-nil pointer to an
+// object the model left opaque (rendered "opaque"; the test builds it as
+// new(T), the zero value).
+func hasOpaqueHandle(cx *contract.Counterexample) bool {
+	for _, raw := range cx.Objects {
+		if strings.Contains(string(raw), `"opaque"`) {
+			return true
+		}
+	}
+	return false
+}
+
 var nullRe = regexp.MustCompile(`(^|[\[,:\s])null([\]},\s]|$)`)
 
 func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexample, r result) {
@@ -290,6 +302,16 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 		case prop.ExpectedPanic == "" || prop.ExpectedPanic == ClassifyPanic(r.Panic):
 			v.Status = contract.VerdictConfirmed
 			diag = nil
+			if strings.Contains(r.Panic, "nil pointer dereference") && hasOpaqueHandle(cx) {
+				// The test passed a pointer to the zero value of another
+				// package's struct it cannot fill in (a *gin.Context with no
+				// writer): callers never do, so the panic says nothing
+				// about the code.
+				v.Status = contract.VerdictInconclusive
+				diag = &contract.Diagnosis{Reason: "zero_handle_input", Notes: []string{
+					"an input was a pointer to the zero value of another package's struct the test cannot fill in; the nil dereference is likely inside it"}}
+				break
+			}
 			if (strings.Contains(r.Panic, "nil pointer dereference") || strings.Contains(r.Panic, "assignment to entry in nil map")) && hasNilInput(cx) {
 				// Confirmed, but worth a reader's second look: the test could
 				// only pass nil for an interface, map, func or foreign private
