@@ -49,8 +49,8 @@ type SearchOptions struct {
 	// number of CPUs); each search is its own process.
 	Jobs int
 	// BudgetSeconds bounds the wall-clock time of each engine on one property
-	// (default 10; 0 for none). A property with expensive inputs then
-	// reports fewer trials instead of stalling the sweep.
+	// (0: the default, 10; negative: none). A property with expensive inputs
+	// then reports fewer trials instead of stalling the sweep.
 	BudgetSeconds int
 }
 

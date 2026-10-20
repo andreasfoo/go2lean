@@ -872,6 +872,8 @@ type fnState struct {
 	// quiet suppresses issues while the fallback block of a call is built:
 	// its havoc is a contingency, not a gap in the model.
 	quiet bool
+	// pure caches readsOnly.
+	pure *bool
 }
 
 func (t *fnState) fresh() ir.Var {
@@ -1492,7 +1494,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		}
 		// A map the model knows nothing about (an input field, a havoc
 		// value): the update is ignored, as before.
-		return t.onKnown(m, func() error {
+		return t.onKnown(x.Map, m, func() error {
 			t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapUpdate"), Args: []ir.Var{m, k, v}})
 			return nil
 		}, func() error {
@@ -1531,7 +1533,9 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if _, isMap := x.X.Type().Underlying().(*types.Map); isMap {
 			// Insertion order; a map the model knows nothing about has no
 			// entries.
-			t.issue("range over map %s: in insertion order; a map the model knows nothing about has no entries", x.X.Name())
+			if !t.knownBuilt(x.X) {
+				t.issue("range over map %s: in insertion order; a map the model knows nothing about has no entries", x.X.Name())
+			}
 			m, err := t.val(x.X)
 			if err != nil {
 				return err
@@ -1658,7 +1662,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 				return err
 			}
 			dst := t.def(x)
-			return t.onKnown(m, func() error {
+			return t.onKnown(x.X, m, func() error {
 				t.emit(ir.Instr{Dst: dst, Op: ir.MapLookup{CommaOk: x.CommaOk, Zero: zero}, Args: []ir.Var{m, k}})
 				return nil
 			}, func() error {
@@ -1964,7 +1968,7 @@ func (t *fnState) call(x *ssa.Call) error {
 					return err
 				}
 				dst := t.def(x)
-				return t.onKnown(m, func() error {
+				return t.onKnown(x.Call.Args[0], m, func() error {
 					t.emit(ir.Instr{Dst: dst, Op: ir.Simple("mapLen"), Args: []ir.Var{m}})
 					return nil
 				}, func() error {
@@ -2007,7 +2011,7 @@ func (t *fnState) call(x *ssa.Call) error {
 					return err
 				}
 				t.def(x)
-				return t.onKnown(m, func() error {
+				return t.onKnown(x.Call.Args[0], m, func() error {
 					t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapDelete"), Args: []ir.Var{m, k}})
 					return nil
 				}, func() error { return nil })
@@ -2300,7 +2304,9 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	t.emit(ir.Instr{Dst: dst, Op: ir.Unbox{Tag: typeTag(x.AssertedType), CommaOk: x.CommaOk, Zero: zero}, Args: []ir.Var{v}})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[other]
-	t.issue("type assertion %s on an interface value the model did not build is havoc", x.Name())
+	if !t.knownBuilt(x.X) {
+		t.issue("type assertion %s on an interface value the model did not build is havoc", x.Name())
+	}
 	if err := t.havocResult(dst, x, "type assertion", "opaque-assert"); err != nil {
 		return err
 	}
@@ -2510,7 +2516,7 @@ func (t *fnState) ifaceAssert(x *ssa.TypeAssert, impls []types.Type) error {
 		tags[i] = typeTag(ty)
 	}
 	dst := t.def(x)
-	return t.onKnown(v, func() error {
+	return t.onKnown(x.X, v, func() error {
 		t.emit(ir.Instr{Dst: dst, Op: ir.AssertIface{Tags: tags, CommaOk: x.CommaOk}, Args: []ir.Var{v}})
 		return nil
 	}, func() error {
@@ -2587,7 +2593,7 @@ func (t *fnState) opaqueLen(dst ir.Var, name string, ty types.Type) {
 // onKnown runs known in a block taken when the func, map, channel or
 // interface value v is one the model knows (nil, or built by the program)
 // and unknown otherwise; both continue in a join block.
-func (t *fnState) onKnown(v ir.Var, known, unknown func() error) error {
+func (t *fnState) onKnown(sv ssa.Value, v ir.Var, known, unknown func() error) error {
 	isKnown := t.fresh()
 	t.emit(ir.Instr{Dst: isKnown, Op: ir.Simple("nilKnown"), Args: []ir.Var{v}})
 	yes := len(t.out.Blocks)
@@ -2604,12 +2610,132 @@ func (t *fnState) onKnown(v ir.Var, known, unknown func() error) error {
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[no]
-	if err := unknown(); err != nil {
+	// A value known by construction never takes this branch: build it
+	// without recording its havoc as a gap in the model.
+	quiet := t.quiet
+	t.quiet = quiet || t.knownBuilt(sv)
+	err := unknown()
+	t.quiet = quiet
+	if err != nil {
 		return err
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]
 	return nil
+}
+
+// knownBuilt reports whether v is a func, map or interface value the model
+// always knows at run time (nilKnown holds): one the function builds (make,
+// a boxed value, a closure, a func, nil), an input (the search generates
+// inputs concretely, all the way down), a phi or conversion of those, or a
+// value read out of a known one (a lookup, an assertion, a field, an
+// element) in a function that writes nothing unknown into memory. Other
+// values (loads of locals, call results) may be havoc.
+func (t *fnState) knownBuilt(v ssa.Value) bool {
+	return t.known(v, map[ssa.Value]bool{})
+}
+
+func (t *fnState) known(v ssa.Value, seen map[ssa.Value]bool) bool {
+	if seen[v] {
+		return true // a cycle through phis: known if every way in is
+	}
+	seen[v] = true
+	switch v := v.(type) {
+	case *ssa.MakeMap, *ssa.MakeInterface, *ssa.MakeClosure, *ssa.Function, *ssa.Const, *ssa.Parameter:
+		return true
+	case *ssa.ChangeType:
+		return t.known(v.X, seen)
+	case *ssa.ChangeInterface:
+		return t.known(v.X, seen)
+	case *ssa.Phi:
+		for _, e := range v.Edges {
+			if !t.known(e, seen) {
+				return false
+			}
+		}
+		return true
+	case *ssa.Extract:
+		return t.known(v.Tuple, seen)
+	case *ssa.Lookup:
+		return t.readsOnly() && t.known(v.X, seen)
+	case *ssa.TypeAssert:
+		return t.readsOnly() && t.known(v.X, seen)
+	case *ssa.Next:
+		if r, ok := v.Iter.(*ssa.Range); ok {
+			return t.readsOnly() && t.known(r.X, seen)
+		}
+	case *ssa.Field:
+		return t.readsOnly() && t.known(v.X, seen)
+	case *ssa.Index:
+		return t.readsOnly() && t.known(v.X, seen)
+	case *ssa.Slice:
+		return t.readsOnly() && t.known(v.X, seen)
+	case *ssa.FieldAddr:
+		return t.known(v.X, seen)
+	case *ssa.IndexAddr:
+		return t.known(v.X, seen)
+	case *ssa.UnOp:
+		if v.Op == token.MUL {
+			switch v.X.(type) {
+			case *ssa.FieldAddr, *ssa.IndexAddr:
+				return t.readsOnly() && t.known(v.X, seen)
+			}
+		}
+	}
+	return false
+}
+
+// readsOnly reports whether the function (with its closures) stores into
+// memory or maps only values known by construction, so that what it reads
+// out of an input is what the search generated. Stores into its own
+// locals do not count. Callees may still write; their havoc stays a
+// run-time branch, only its report is left out.
+func (t *fnState) readsOnly() bool {
+	if t.pure != nil {
+		return *t.pure
+	}
+	pure := true
+	t.pure = &pure
+	var walk func(f *ssa.Function)
+	walk = func(f *ssa.Function) {
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				var val, addr ssa.Value
+				switch in := in.(type) {
+				case *ssa.Store:
+					val, addr = in.Val, in.Addr
+				case *ssa.MapUpdate:
+					val, addr = in.Value, in.Map
+				default:
+					continue
+				}
+				if _, local := addr.(*ssa.Alloc); local {
+					continue
+				}
+				if typeMayHoldUnknown(val.Type()) && !t.known(val, map[ssa.Value]bool{}) {
+					pure = false
+					return
+				}
+			}
+		}
+		for _, af := range f.AnonFuncs {
+			walk(af)
+		}
+	}
+	walk(t.f)
+	return pure
+}
+
+// typeMayHoldUnknown reports whether a value of type ty can be (or hold) a
+// func, map, interface or pointer the model may not know.
+func typeMayHoldUnknown(ty types.Type) bool {
+	switch u := ty.Underlying().(type) {
+	case *types.Basic:
+		return false
+	case *types.Array:
+		return typeMayHoldUnknown(u.Elem())
+	}
+	return true
 }
 
 // nilOperand returns the operand compared with a nil constant in x, if
@@ -2653,7 +2779,9 @@ func (t *fnState) nilCompare(x *ssa.BinOp, v ssa.Value) error {
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[no]
-	t.issue("nil comparison %s on a value of unknown nil-ness is havoc", x.Name())
+	if !t.knownBuilt(v) {
+		t.issue("nil comparison %s on a value of unknown nil-ness is havoc", x.Name())
+	}
 	idx := t.prog.newHavoc(ir.HavocBool, t.f.Name()+": nil comparison", "opaque-op", "")
 	t.emit(ir.Instr{Dst: dst, HavocSite: idx})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}

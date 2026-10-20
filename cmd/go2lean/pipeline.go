@@ -18,7 +18,11 @@ type engineOptions struct {
 
 func (e *engineOptions) get() constraint.SearchOptions {
 	e.Engine = constraint.Engine(*e.engine)
-	return *e.SearchOptions
+	o := *e.SearchOptions
+	if o.BudgetSeconds == 0 {
+		o.BudgetSeconds = -1 // -budget 0: unlimited (0 in SearchOptions is the default)
+	}
+	return o
 }
 
 func searchFlags(fs *flag.FlagSet) *engineOptions {

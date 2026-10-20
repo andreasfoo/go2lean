@@ -116,6 +116,13 @@ yields UB or poison, Go panics. A run ends in one of:
 | a map the model knows nothing about (result of an unmodelled call) | — | lookups havoc, updates ignored (assumption), `range` runs zero times (assumption), `len` havoc below 16 (assumption) |
 | keys | string, integer, bool, and comparable values | exact (`keyEq`) |
 
+Whether a map (or an interface or func value) is known is decided at run
+time, per value. The model report lists the unknown case as an issue only
+where it can happen: not for values known by construction (made or boxed
+in the function, inputs, which the search generates concretely, and what
+the function reads out of those without writing anything unknown into
+memory).
+
 ### 4.5 Interfaces and type switches
 
 | Go | model | status |

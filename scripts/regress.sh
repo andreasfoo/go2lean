@@ -2,13 +2,15 @@
 # Regression gate on the ground-truth packages: run the whole pipeline on
 # ./examples/... and compare every property's outcome (the M3 verdict of its
 # counterexample, or its certificate) with testdata/regress/examples.golden.
+# Unlimited search budget (-budget 0): the outcome depends on the inputs
+# only, not on how fast the machine is.
 # usage: scripts/regress.sh <workspace> [-update]
 set -e
 cd "$(dirname "$0")/.."
 WS=${1:?workspace}
 rm -rf "$WS"; mkdir -p "$WS"
 go build -o "$WS/g2l" ./cmd/go2lean
-"$WS/g2l" run -deps -workspace "$WS" ./examples/... > "$WS/run.log" 2>&1 || {
+"$WS/g2l" run -deps -budget 0 -workspace "$WS" ./examples/... > "$WS/run.log" 2>&1 || {
   tail -40 "$WS/run.log"; echo "regress: go2lean run failed (log: $WS/run.log)"; exit 1; }
 python3 - "$WS" > "$WS/outcomes.txt" <<'EOF'
 import glob, json, os, sys
