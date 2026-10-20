@@ -262,6 +262,11 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		Havoc:      p.Havoc,
 		Dependency: p.Dependency,
 	}
+	var names []string
+	for _, f := range p.Funcs {
+		names = append(names, f.Name)
+	}
+	key := contract.FuncKeys(names)
 	for i, f := range p.Funcs {
 		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Closure: f.Closure, WrappedBy: f.WrappedBy, TestFile: f.TestFile, SpecMaxLen: f.SpecMaxLen, Consts: f.Consts, StrConsts: f.StrConsts, MapKeys: f.MapKeys, UsesJSON: f.UsesJSON, CmpStrs: f.CmpStrs, Variants: f.Variants, Calls: f.Calls, XCalls: f.XCalls, Exits: f.Exits}
 		if f.Status != contract.ModelRejected {
@@ -273,7 +278,7 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 			mf.ABI = abiRel
 			if f.SpecFor == "" {
 				t := &contract.Target{
-					ID:      contract.TargetID(p.Package, f.Name),
+					ID:      contract.TargetID(p.Package, key[f.Name]),
 					Module:  modulePath,
 					Package: p.Package,
 					Func:    f.Name,

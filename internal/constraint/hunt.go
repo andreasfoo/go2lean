@@ -95,6 +95,7 @@ type searchResult struct {
 	Reason      string                     `json:"reason"`
 	MaxLen      int                        `json:"max_len"`
 	HavocSites  int                        `json:"havoc_sites"`
+	HavocRead   int                        `json:"havoc_read"` // exhaustive inputs whose run read a havoc value
 	BudgetHit   bool                       `json:"budget_hit"`
 	StuckSites  map[string]int             `json:"stuck_sites"` // where the model got stuck, by count
 	SpecExits   map[string]int             `json:"spec_exits"`  // spec return block -> trials that left through it
@@ -483,7 +484,8 @@ func keyMaps(node any, keys []string) {
 // Hunt runs the selected engines on one property. It returns the
 // counterexample it wrote to the workspace (nil when none was found) and a
 // one-line summary. When the exhaustive engine covers its whole domain
-// without a counterexample, a ProofResult with status "exhausted" is written.
+// without a counterexample, a ProofResult with status "exhausted" is written
+// ("exhausted_havoc" when some inputs read havoc values).
 func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts SearchOptions) (*contract.Counterexample, string, error) {
 	if prop.MaxLen > 0 {
 		opts.MaxLen = prop.MaxLen
@@ -620,10 +622,14 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 				_, checked := exitCounts(specExits, res.SpecExits)
 				domain += fmt.Sprintf("; %d of them got past the spec's guards", checked)
 			}
-			if res.HavocSites > 0 {
-				domain += fmt.Sprintf("; %d havoc sites not enumerated", res.HavocSites)
+			status := contract.ProofExhausted
+			if res.HavocRead > 0 {
+				// Havoc values are sampled, not enumerated: no certificate
+				// for every value they stand for.
+				status = contract.ProofExhaustedHavoc
+				domain += fmt.Sprintf("; %d of them read havoc values (%d sites), three values tried each", res.HavocRead, res.HavocSites)
 			}
-			pr := &contract.ProofResult{Property: prop.ID, Status: contract.ProofExhausted, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain}
+			pr := &contract.ProofResult{Property: prop.ID, Status: status, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain}
 			if err := ws.WriteProofResult(pr); err != nil {
 				return nil, "", err
 			}

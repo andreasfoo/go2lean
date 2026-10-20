@@ -533,6 +533,16 @@ def atoiBytes (bs : List Nat) : Option Int :=
     let v : Int := if neg then -n else n
     if v < -(2 ^ 63) || v ≥ 2 ^ 63 then none else some v
 
+/-- What `strconv.Atoi` returns for a well-formed number out of the int64
+range: the nearest bound (with `ErrRange`). `none` for a syntax error. -/
+def atoiClamped (bs : List Nat) : Option Int :=
+  let (neg, digits) := match bs with
+    | 45 :: rest => (true, rest)
+    | 43 :: rest => (false, rest)
+    | rest => (false, rest)
+  if digits.isEmpty || !digits.all (fun d => 48 ≤ d && d ≤ 57) then none
+  else some (if neg then -(2 ^ 63) else 2 ^ 63 - 1)
+
 def itoaBytes (v : Int) : List Nat :=
   let digits := (toString v.natAbs).toUTF8.toList.map (·.toNat)
   if v < 0 then 45 :: digits else digits
@@ -939,7 +949,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | some x =>
       match atoiBytes x with
       | some v => .ok (.tuple [.int 64 (BitVec.ofInt 64 v), .err false])
-      | none => .ok (.tuple [.int 64 0#64, .err true])
+      | none => .ok (.tuple [.int 64 (BitVec.ofInt 64 ((atoiClamped x).getD 0)), .err true])
     | none => .panic .modelStuck
   | .strIndexByte, [s, .int _ b] =>
     match strBytes heap s with

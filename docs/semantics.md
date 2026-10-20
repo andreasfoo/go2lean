@@ -140,7 +140,7 @@ memory).
 | static call in the package | `call` | exact |
 | call into another package compiled together (`-deps`) | `xcall` (the driver links the models) | exact |
 | closures, function values, method values | `funcRef`/`xfuncRef` + `callv` (captured values first) | exact; nil func call panics; an unknown func takes the fallback |
-| generic functions | instances of package `slices` under `-deps`; other generic code is called unmodelled | partial |
+| generic functions | modelled per instance (`Must[int]`, concrete types); the generic function itself is not in the model; instances of package `slices` under `-deps` | partial |
 | call into a logging package (logrus, log, slog, zap) | results opaque, calls without results ignored | exact for the code under test |
 | `apijson.UnmarshalRoot` (the SDKs' `UnmarshalJSON`, unions' `As*` methods) | `jsonDecode` with the target type's description | as JSON decoding above |
 | call to an unmodelled function with a result | `havocInto`: scalars havoc; structs havoc field by field; pointers to a fresh struct of havoc fields; slices of 0–3 zero elements (assumption); interfaces/maps/funcs unknown | havoc / assumption |
@@ -157,6 +157,7 @@ memory).
 | Go | model | status |
 |---|---|---|
 | a variable nothing writes after init, initialised to a constant or a function | its value | exact (writes from `…ForTest` helpers ignored) |
+| a variable initialised to a constant expression over constants and such variables (`var mb = kb * 1024`) | its value, folded at compile time | exact (an expression that would wrap or divide by zero is not folded: havoc) |
 | a zero-valued variable no function writes | the zero value | exact |
 | any other load | havoc | havoc |
 | stores to globals | ignored | assumption |
@@ -183,6 +184,8 @@ Calls not listed here are unmodelled (§4.6).
 | `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell) |
 | `strconv.Atoi` | exact for decimal `int64` (sign, range error) |
 | `strconv.Itoa` | exact |
+| `math/rand` and `math/rand/v2` `Intn Int31n Int63n IntN Int32N Int64N UintN Uint32N Uint64N` (functions and `*Rand` methods) | any value in `[0, n)` (havoc); Go's panic for `n <= 0` |
+| `(*regexp.Regexp).FindStringSubmatch` on a `regexp.MustCompile` of a constant pattern | nil or exactly `1 + NumSubexp` strings, as a havoc match decides (the pattern's language is not modelled; the strings are `""`); the compiled regexp itself is an opaque value, `MustCompile` of a valid constant pattern does not panic |
 | `fmt.Sprintf` with `%s %d %v %t %%` on strings, integers and bools, no flags or widths | exact; any other format or argument: havoc string |
 | `fmt.Errorf`, `errors.New` | a non-nil error (message not modelled) |
 | `encoding/json.Unmarshal` into `*string`, `*bool`, `*interface{}`, `*map[string]interface{}`, `*[]interface{}` | exact (Go's rules for null, type errors, merging into a non-nil map; numbers are opaque floats; invalid UTF-8 → U+FFFD) |
@@ -221,7 +224,7 @@ writes the same value as a Go literal.
 | unexported fields of another package's struct | their zero value (a test cannot set them) |
 | SDK response types (with JSON metadata) | generated field by field plus a raw JSON object of one or two members keyed by strings the call tree compares with `==`, then written as the JSON document the harness builds for the value and decoded by the JSON model: typed fields, `RawJSON()`, per-member `respjson.Field` and `ExtraFields` agree as decoding makes them; the harness decodes the same document |
 | documented enums (`// Any of ...`) | one of the values three times in four; the values the call tree compares make half of the choices |
-| pointers to another package's struct that has a constructor (a handle) | opaque non-nil |
+| pointers to another package's struct with an unexported field, whose package exports a function returning one (a handle) | opaque non-nil; a struct of exported fields is generated field by field |
 | receiver of a method whose type has `NewT` | built by `NewT` (`T.M~NewT`) |
 
 ## 8. Not modelled (rejected functions)
@@ -229,7 +232,8 @@ writes the same value as a Go literal.
 Goroutines, `select` and channel operations (so `range` over a channel);
 `defer` of a modelled function; string orderings (`<` on strings);
 `unsafe` conversions; parameters of type `*testing.T` (test helpers);
-generic functions as targets (their instances are not targets either).
+generic functions as targets (their instances are not targets either:
+a harness cannot name them).
 
 Not rejected but worth knowing: `range` over an integer (Go 1.22) is an
 ordinary loop in go/ssa and exact; `range` over a function iterator (Go

@@ -28,6 +28,11 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 	for _, f := range report.Funcs {
 		byName[f.Name] = f
 	}
+	var names []string
+	for _, f := range report.Funcs {
+		names = append(names, f.Name)
+	}
+	key := contract.FuncKeys(names)
 	var out []*contract.Property
 	for _, f := range report.Funcs {
 		// Generic instances (Map[int]) are modelled for their callers; a
@@ -36,8 +41,8 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 			continue
 		}
 		out = append(out, &contract.Property{
-			ID:       PropertyID(contract.PackageKey(report.Package), f.Name, "nopanic"),
-			Target:   contract.TargetID(report.Package, f.Name),
+			ID:       PropertyID(contract.PackageKey(report.Package), key[f.Name], "nopanic"),
+			Target:   contract.TargetID(report.Package, key[f.Name]),
 			Kind:     contract.KindNoPanic,
 			NL:       fmt.Sprintf("%s does not panic on any input", f.Name),
 			Frontend: report.Frontend,
@@ -53,8 +58,8 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 			continue
 		}
 		out = append(out, &contract.Property{
-			ID:       PropertyID(contract.PackageKey(report.Package), f.SpecFor, f.Name),
-			Target:   contract.TargetID(report.Package, f.SpecFor),
+			ID:       PropertyID(contract.PackageKey(report.Package), key[f.SpecFor], key[f.Name]),
+			Target:   contract.TargetID(report.Package, key[f.SpecFor]),
 			Kind:     contract.KindPostcondition,
 			NL:       fmt.Sprintf("%s satisfies the spec-in-Go oracle %s", f.SpecFor, f.Name),
 			Spec:     &contract.SpecRef{GoFunc: f.Name, LeanDecl: fmt.Sprintf("%s.f%d", report.LeanModule, f.ID)},

@@ -993,7 +993,8 @@ def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : 
 /-- Try every input in the small domain. Prints a counterexample line, or
 `{"found": false, "exhaustive": true, ...}` when the whole domain holds, or
 `"exhaustive": false` when the domain exceeds `limit`. Havoc sites (if any)
-are not enumerated; they take seed-derived values. -/
+are not enumerated; they take seed-derived values (three per input), and
+`havoc_read` counts the inputs whose run read one. -/
 def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (maxLen limit fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
     (allowNil : Bool := true) (budgetMs : Nat := 0) : IO Unit := do
@@ -1012,6 +1013,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let or := oracleOf .mixed extra 0
   let mut fuelOuts := 0
   let mut moots := 0
+  let mut havocRuns := 0
   let mut i : Nat := 0
   let mut fallback : Option Json := none
   let mut exits : List (String × Nat) := []
@@ -1034,13 +1036,14 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
+    if s.log.size > 0 then havocRuns := havocRuns + 1
     i := i + 1
   if let some j := fallback then
     IO.println (j.setObjVal! "havoc_dependent" true).compress
     return
   IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
     ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
-    ("havoc_sites", p.havocWidths.size),
+    ("havoc_sites", p.havocWidths.size), ("havoc_read", havocRuns),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 
 end Go2Lean.Search

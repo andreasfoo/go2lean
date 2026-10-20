@@ -67,7 +67,9 @@ property and the Go oracle agree by construction. Two engines run per
 property: seeded random search (per-trial value profiles, plus the target's
 own integer literals so magic-constant branches are reachable), then
 exhaustive enumeration of a small domain (narrow signatures only), which
-records an `exhausted` certificate when it passes. A spec whose verdict
+records an `exhausted` certificate when it passes (`exhausted_havoc` when
+some inputs ran through values the model does not know, of which it tried
+only a few). A spec whose verdict
 depended on a havoc value (it looked inside an opaque value, or called
 something unmodelled) is reported as unknown, never as a counterexample
 or a certificate. Both run in `go2lean-search`, a native
@@ -150,6 +152,7 @@ Both run on every push.
 | `examples/maps` | `Pick` indexes `names[pos[want]-1]` with the position of a missing or first name; `Counter.Share` divides by a limit `NewCounter` accepts as 0 | both confirmed (`index out of range [-1]`; `integer divide by zero` through `Counter.Share~NewCounter`, the receiver built by the constructor); `Registry.Put` is targeted as `Registry.Put~NewRegistry` and certified (a registry no constructor made has a nil map: a misuse, not a target); `Distinct` (`len` of a built map) and `Sum` (`delete`, `range`) certified |
 | `examples/globals` | `At` indexes a package-level slice nothing fills; `Slot` indexes four slots with a generator the package initializer sets to one that yields 7 (only a `...ForTest` helper replaces it) | both confirmed (`index out of range`): a package-level variable nothing writes loads as its zero value, one only the initializer sets to a constant or function loads as that; `Blank` (`==` on `[4]byte` against such a variable) certified |
 | `examples/closures` | `Last` returns the last element a closure appended, and indexes `-1` when it never ran | confirmed (`index out of range [-1]`); `HasNeg` (a function passed as a value), `HasAbove` (a closure through `slices.ContainsFunc`) and `Total` (a closure updating a captured variable) certified; `anyOf` with a nil func confirmed as `nil_opaque_input` |
+| `examples/portable` | constructs that gave spurious or missed results on one-api and spf13/cast: `URL` slices the `BaseURL` of a `*meta.Meta` (a struct of exported fields from another package, which has a function returning one); `Pick` indexes with `rand.Intn(len(xs))`; `Parse` and `parse` (ids differ only in case) divide by `strconv.Atoi`'s result; `Port` calls the generic `Must`; `Unit` reads group 2 of a one-group regexp | `URL`, `Pick` (Go's own `invalid argument to Intn`), `Parse`, `parse` and `Port` (via `Must[int]`) confirmed; `Digit` (`rand.Intn` stays below its bound), `IntPart` (a one-group match has two elements), `PerMB` (`var mb = kb * 1024` folded), `PerMax` (`Atoi` of an out-of-range number is `MaxInt64`, not 0) certified; `Unit` is a real bug whose counterexample is spurious: the match is havoc, and the input the search paired with it does not match |
 
 ## On a real module
 

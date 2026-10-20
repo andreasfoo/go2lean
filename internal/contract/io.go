@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Workspace is a directory tree holding one JSON file per record:
@@ -194,8 +196,33 @@ func (w Workspace) ModelReportByKey(frontend, key string) (*ModelReport, error) 
 	return &r, err
 }
 
+// FuncKeys maps each function name of a package to the segment ids use
+// for it: the name itself (ids are lower-cased), and for names that only
+// differ from another in case (Parse and parse) the name followed by the
+// positions of its capitals, so that each keeps an id of its own.
+func FuncKeys(names []string) map[string]string {
+	byLower := map[string]int{}
+	for _, n := range names {
+		byLower[strings.ToLower(n)]++
+	}
+	keys := make(map[string]string, len(names))
+	for _, n := range names {
+		keys[n] = n
+		if byLower[strings.ToLower(n)] > 1 {
+			var caps []string
+			for i, r := range n {
+				if unicode.IsUpper(r) {
+					caps = append(caps, strconv.Itoa(i))
+				}
+			}
+			keys[n] = n + "_c" + strings.Join(caps, "c")
+		}
+	}
+	return keys
+}
+
 // TargetID is the workspace id of a function: package key and function
-// name (a method is "Type.Method").
+// key (FuncKeys; a method is "Type.Method").
 func TargetID(pkgPath, funcName string) string {
 	return ShortID("t_" + strings.ToLower(nonIdent.ReplaceAllString(PackageKey(pkgPath)+"_"+funcName, "_")))
 }

@@ -295,6 +295,116 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 	return out
 }
 
+// foldInit evaluates a package initializer's value when it is a constant
+// expression over constants and globals initialised to constants before it
+// (var mb = kb * 1024): the value the initializer stores, as a constant.
+// Package variables are initialised before any init function or other code
+// runs, so a later write to kb does not change mb. Arithmetic that would wrap in the global's type, or divide by zero, is
+// left alone (the run-time value differs from the exact one).
+func foldInit(v ssa.Value, inits map[*ssa.Global]ssa.Value) (*ssa.Const, bool) {
+	var eval func(v ssa.Value, depth int) (constant.Value, bool)
+	eval = func(v ssa.Value, depth int) (constant.Value, bool) {
+		if depth > 16 {
+			return nil, false
+		}
+		var r constant.Value
+		switch v := v.(type) {
+		case *ssa.Const:
+			if v.Value == nil {
+				return nil, false
+			}
+			r = v.Value
+		case *ssa.UnOp:
+			if g, ok := v.X.(*ssa.Global); ok && v.Op == token.MUL {
+				c, ok := inits[g].(*ssa.Const)
+				if !ok || c.Value == nil {
+					return nil, false
+				}
+				r = c.Value
+				break
+			}
+			if v.Op != token.SUB && v.Op != token.XOR {
+				return nil, false
+			}
+			x, ok := eval(v.X, depth+1)
+			if !ok {
+				return nil, false
+			}
+			r = constant.UnaryOp(v.Op, x, 0)
+		case *ssa.BinOp:
+			x, ok := eval(v.X, depth+1)
+			if !ok {
+				return nil, false
+			}
+			y, ok := eval(v.Y, depth+1)
+			if !ok {
+				return nil, false
+			}
+			switch v.Op {
+			case token.ADD, token.SUB, token.MUL, token.AND, token.OR, token.XOR, token.AND_NOT:
+				r = constant.BinaryOp(x, v.Op, y)
+			case token.QUO, token.REM:
+				if y.Kind() != constant.Int || constant.Sign(y) == 0 {
+					return nil, false
+				}
+				op := v.Op
+				if op == token.QUO {
+					op = token.QUO_ASSIGN // integer division
+				}
+				r = constant.BinaryOp(x, op, y)
+			case token.SHL, token.SHR:
+				n, ok := constant.Uint64Val(y)
+				if !ok || n > 64 {
+					return nil, false
+				}
+				r = constant.Shift(x, v.Op, uint(n))
+			default:
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+		b, ok := v.Type().Underlying().(*types.Basic)
+		if !ok || b.Info()&(types.IsInteger|types.IsString|types.IsBoolean) == 0 {
+			return nil, false
+		}
+		if b.Info()&types.IsInteger != 0 && !representable(r, b) {
+			return nil, false
+		}
+		return r, true
+	}
+	switch v.(type) {
+	case *ssa.BinOp, *ssa.UnOp:
+	default:
+		return nil, false
+	}
+	r, ok := eval(v, 0)
+	if !ok {
+		return nil, false
+	}
+	return ssa.NewConst(r, v.Type()), true
+}
+
+// representable says whether the integer constant c fits the basic type b.
+func representable(c constant.Value, b *types.Basic) bool {
+	if c.Kind() != constant.Int {
+		return false
+	}
+	size := map[types.BasicKind]uint{types.Int8: 8, types.Int16: 16, types.Int32: 32, types.Uint8: 8, types.Uint16: 16, types.Uint32: 32}[b.Kind()]
+	if size == 0 {
+		size = 64
+	}
+	if b.Info()&types.IsUnsigned != 0 {
+		if constant.Sign(c) < 0 {
+			return false
+		}
+		u, ok := constant.Uint64Val(c)
+		return ok && (size == 64 || u < 1<<size)
+	}
+	i, ok := constant.Int64Val(c)
+	return ok && (size == 64 || (i >= -(1<<(size-1)) && i < 1<<(size-1)))
+}
+
 // zeroGlobals returns the package-level variables whose value a load can
 // know: a variable no code writes holds its zero value (nil in the map), one
 // the package initializer sets to a constant or a function, or to a map it
@@ -326,7 +436,12 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 				if st, ok := in.(*ssa.Store); ok && pkgInit {
 					if g, ok := st.Addr.(*ssa.Global); ok && g.Pkg == f.Pkg {
 						known := false
-						switch v := st.Val.(type) {
+						if c, ok := foldInit(st.Val, inits); ok {
+							st := *st // the folded value, not the instructions computing it
+							st.Val = c
+							in = &st
+						}
+						switch v := in.(*ssa.Store).Val.(type) {
 						case *ssa.Const, *ssa.Function:
 							known = true
 						case *ssa.MakeMap:
@@ -341,7 +456,7 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 							if _, twice := inits[g]; twice {
 								touched[g] = true
 							}
-							inits[g] = st.Val
+							inits[g] = in.(*ssa.Store).Val
 							continue
 						}
 					}
@@ -682,12 +797,14 @@ func isStdlib(path string) bool {
 
 // candidates picks the functions a package's model holds (package-level
 // functions and the methods of the package's named types), in the order of
-// their FuncIds.
+// their FuncIds. A generic function is held per instance (Map[int], with
+// concrete types), not as itself: its body has type parameters no input
+// and no harness can stand for.
 func candidates(spkg *ssa.Package) []*ssa.Function {
 	var fns []*ssa.Function
 	seen := map[*ssa.Function]bool{}
 	add := func(f *ssa.Function) {
-		if f != nil && !seen[f] && f.Synthetic == "" && !isInit(f.Name()) && !isTestFunc(f.Name()) {
+		if f != nil && !seen[f] && f.Synthetic == "" && !isInit(f.Name()) && !isTestFunc(f.Name()) && f.TypeParams().Len() == 0 {
 			seen[f] = true
 			fns = append(fns, f)
 		}
@@ -1769,6 +1886,12 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
+		if _, ok := compiledPattern(x); ok {
+			// A compiled constant regexp: only its modelled methods look
+			// into it (regexpSubmatch).
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			return nil
+		}
 		if g, isGlobal := x.X.(*ssa.Global); isGlobal {
 			if init, known := t.prog.zeros[g]; known {
 				if mm, ok := init.(*ssa.MakeMap); ok {
@@ -2102,6 +2225,20 @@ func (t *fnState) call(x *ssa.Call) error {
 	}
 	if callee != nil && callee.String() == "errors.As" && len(x.Call.Args) == 2 {
 		if done, err := t.errorsAs(x); done || err != nil {
+			return err
+		}
+	}
+	if callee != nil {
+		if _, ok := compiledPattern(x); ok {
+			// regexp.MustCompile of a valid constant pattern: no panic, and
+			// a value only the modelled methods look into.
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			return nil
+		}
+		if done, err := t.randBounded(x, callee); done || err != nil {
+			return err
+		}
+		if done, err := t.regexpSubmatch(x, callee); done || err != nil {
 			return err
 		}
 	}
@@ -2578,6 +2715,145 @@ func (t *fnState) invoke(x *ssa.Call) (bool, error) {
 	return true, t.emitCall(x, ir.Term{Kind: ir.TermCallV, FV: fv}, x.Call.Method.Name())
 }
 
+// regexpSubmatch lowers FindStringSubmatch on a regexp compiled from a
+// constant pattern (regexp.MustCompile, in the function or in a package
+// variable's initializer): nil, or exactly 1+NumSubexp strings, as a havoc
+// match decides. Callers index the groups the pattern has (m[1]), which a
+// slice of unknown length would refute. The strings themselves are not
+// modelled ("", like other havoc strings).
+func (t *fnState) regexpSubmatch(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	if callee.String() != "(*regexp.Regexp).FindStringSubmatch" || len(x.Call.Args) != 2 {
+		return false, nil
+	}
+	re, ok := compiledPattern(x.Call.Args[0])
+	if !ok {
+		return false, nil
+	}
+	if _, err := t.val(x.Call.Args[1]); err != nil {
+		return true, err
+	}
+	t.issue("match of %s against %q is havoc (the pattern's groups are modelled, not its language)", x.Call.Args[1].Name(), re.String())
+	dst := t.def(x)
+	matched := t.fresh()
+	t.emit(ir.Instr{Dst: matched, HavocSite: t.prog.newHavoc(ir.HavocBool, t.f.Name()+": FindStringSubmatch matched", "unmodeled-call", "")})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: matched, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".re-match"}, ir.Block{Name: name + ".re-nomatch"}, ir.Block{Name: name + ".re-join"})
+	t.cur = &t.out.Blocks[yes]
+	n := t.fresh()
+	t.emit(ir.Instr{Dst: n, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: fmt.Sprint(re.NumSubexp() + 1)}}})
+	t.emit(ir.Instr{Dst: dst, Op: ir.MakeSlice{Zero: ir.EmptyStr{}}, Args: []ir.Var{n, n}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	nilSlice, _ := zeroVal(x.Type())
+	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: nilSlice}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return true, nil
+}
+
+// compiledPattern is the regexp v holds when regexpPattern finds its
+// constant pattern and the pattern compiles.
+func compiledPattern(v ssa.Value) (*regexp.Regexp, bool) {
+	pat, ok := regexpPattern(v)
+	if !ok {
+		return nil, false
+	}
+	re, err := regexp.Compile(pat)
+	return re, err == nil
+}
+
+// regexpPattern is the constant pattern a *regexp.Regexp was compiled
+// from by regexp.MustCompile: v is that call, or a load of a package
+// variable its package initializer sets to that call (assumed not to be
+// reassigned: a compiled pattern is a constant in all but name).
+func regexpPattern(v ssa.Value) (string, bool) {
+	if u, ok := v.(*ssa.UnOp); ok && u.Op == token.MUL {
+		g, ok := u.X.(*ssa.Global)
+		if !ok || g.Pkg == nil {
+			return "", false
+		}
+		initFn := g.Pkg.Func("init")
+		if initFn == nil {
+			return "", false
+		}
+		var init ssa.Value
+		for _, b := range initFn.Blocks {
+			for _, in := range b.Instrs {
+				if st, ok := in.(*ssa.Store); ok && st.Addr == g {
+					if init != nil {
+						return "", false // written twice
+					}
+					init = st.Val
+				}
+			}
+		}
+		v = init
+	}
+	c, ok := v.(*ssa.Call)
+	if !ok || len(c.Call.Args) != 1 {
+		return "", false
+	}
+	if f := c.Call.StaticCallee(); f == nil || f.String() != "regexp.MustCompile" {
+		return "", false
+	}
+	k, ok := c.Call.Args[0].(*ssa.Const)
+	if !ok || k.Value == nil || k.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(k.Value), true
+}
+
+// randBounded lowers the bounded draws of math/rand and math/rand/v2
+// (Intn(n) and the like): any value in [0, n), a havoc the search picks,
+// and the panic Go raises for n <= 0. The bound is what a caller relies on
+// (indexing a table of n entries), so a plain havoc would refute it.
+func (t *fnState) randBounded(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.String()
+	if strings.HasPrefix(name, "(*math/rand.Rand).") || strings.HasPrefix(name, "(*math/rand/v2.Rand).") {
+		name = name[strings.Index(name, ".Rand).")+len(".Rand)."):]
+	} else if p := callee.Pkg; p != nil && (p.Pkg.Path() == "math/rand" || p.Pkg.Path() == "math/rand/v2") {
+		name = callee.Name()
+	} else {
+		return false, nil
+	}
+	switch name {
+	case "Intn", "Int63n", "Int31n", "IntN", "Int64N", "Int32N", "UintN", "Uint64N", "Uint32N":
+	default:
+		return false, nil
+	}
+	args := x.Call.Args
+	if len(args) == 0 {
+		return false, nil
+	}
+	nArg := args[len(args)-1]
+	width, signed, ok := intWidth(nArg.Type())
+	if !ok {
+		return false, nil
+	}
+	n, err := t.val(nArg)
+	if err != nil {
+		return true, err
+	}
+	zero := t.fresh()
+	t.emit(ir.Instr{Dst: zero, Op: ir.Const{V: ir.IntVal{Width: width, Bits: "0"}}})
+	bad := t.fresh()
+	t.emit(ir.Instr{Dst: bad, Op: pick(signed, "sle", "ule"), Args: []ir.Var{n, zero}})
+	panicB := len(t.out.Blocks)
+	okB := panicB + 1
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: bad, T: panicB, F: okB}
+	name0 := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name0 + ".rand-bad"}, ir.Block{Name: name0 + ".rand-ok"})
+	t.out.Blocks[panicB].Term = ir.Term{Kind: ir.TermPanic, Panic: contract.PanicExplicit}
+	t.cur = &t.out.Blocks[okB]
+	raw := t.fresh()
+	t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(width, fmt.Sprintf("%s: %s", t.f.Name(), callee.Name()), "unmodeled-call", "")})
+	t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("urem"), Args: []ir.Var{raw, n}})
+	return true, nil
+}
+
 // opaqueLen binds dst to the length of a map or channel the model does
 // not look into: havoc, but kept below 16 so that `make([]T, 0, len(m))`
 // stays something the model materialises. Recorded as an assumption.
@@ -3019,15 +3295,26 @@ func isForeignOpaqueStruct(pkg *types.Package, t types.Type) bool {
 }
 
 // isHandle says whether t is a struct type of another package, outside
-// the standard library, whose package exports a function returning *t (a
-// constructor: gorm.Open, NewStore). Pointers to it are handles the
-// constructor builds, not data a caller fills in.
+// the standard library, with state of its own (an unexported field), whose
+// package exports a function returning *t (a constructor: gorm.Open,
+// NewStore). Pointers to it are handles the constructor builds, not data a
+// caller fills in. A struct of exported fields is data even when its
+// package has such a function (one-api's meta.GetByContext returns the
+// *Meta a request carries; callers also build one field by field).
 func isHandle(pkg *types.Package, t types.Type) bool {
 	n, ok := types.Unalias(t).(*types.Named)
 	if !ok || n.Obj().Pkg() == nil || n.Obj().Pkg() == pkg || isStdlib(n.Obj().Pkg().Path()) {
 		return false
 	}
-	if _, ok := n.Underlying().(*types.Struct); !ok {
+	st, ok := n.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	private := false
+	for i := 0; i < st.NumFields(); i++ {
+		private = private || !st.Field(i).Exported()
+	}
+	if !private {
 		return false
 	}
 	if v, ok := handleCache[n]; ok {

@@ -214,6 +214,10 @@ const (
 	// satisfies the property. Weaker than bounded_proved; Domain says what
 	// was covered.
 	ProofExhausted ProofStatus = "exhausted"
+	// ProofExhaustedHavoc: as exhausted, but some inputs ran through values
+	// the model does not know (havoc), of which only a few were tried: the
+	// property holds for those, not for every value they stand for.
+	ProofExhaustedHavoc ProofStatus = "exhausted_havoc"
 )
 
 // ProofResult records a proof attempt on a Property.
