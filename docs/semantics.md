@@ -134,6 +134,8 @@ yields UB or poison, Go panics. A run ends in one of:
 | call into another package compiled together (`-deps`) | `xcall` (the driver links the models) | exact |
 | closures, function values, method values | `funcRef`/`xfuncRef` + `callv` (captured values first) | exact; nil func call panics; an unknown func takes the fallback |
 | generic functions | instances of package `slices` under `-deps`; other generic code is called unmodelled | partial |
+| call into a logging package (logrus, log, slog, zap) | results opaque, calls without results ignored | exact for the code under test |
+| `apijson.UnmarshalRoot` (the SDKs' `UnmarshalJSON`, unions' `As*` methods) | `jsonDecode` with the target type's description | as JSON decoding above |
 | call to an unmodelled function with a result | `havocInto`: scalars havoc; structs havoc field by field; pointers to a fresh struct of havoc fields; slices of 0–3 zero elements (assumption); interfaces/maps/funcs unknown | havoc / assumption |
 | call to an unmodelled function without a result | ignored | assumption (its effects are lost) |
 | a modelled callee that gets stuck | the call's fallback binds a havoc result | havoc |
@@ -202,15 +204,16 @@ writes the same value as a Go literal.
 | integers | boundary values, small values, literals mined from the call tree (± 1), per-trial profiles |
 | bool, error | both values / nil and non-nil |
 | string | the literal pool and its neighbours, digits, random bytes; named string types and fields documented `// Any of "a", "b".` (Stainless SDKs) draw from their constants; length up to `-maxlen` or `go2lean:maxlen N` |
-| slices, arrays | up to `maxlen` elements, halved per nesting level |
-| structs | field by field; an SDK union (`Of<Variant>` fields) gets one variant |
+| slices, arrays | up to `maxlen` elements, halved per nesting level but at least one; a byte slice (`[]byte`, `json.RawMessage`) is a pool string a third of the time |
+| structs | field by field; an SDK union (`Of<Variant>` fields) gets one variant, three times in four one the call tree reads; the live variant's pointer costs no depth |
 | pointers | non-nil by default (nil with `-nil-inputs`); recursive types through a bounded type table |
 | maps | nil (with `-nil-inputs`) or up to `maxlen` entries, keys mostly from the strings the call tree uses as map keys |
 | `interface{}` | nil, string, bool, int, `map[string]interface{}`, `[]interface{}` |
 | interfaces with methods, funcs, channels, floats | their zero value (nil, 0) |
 | `context.Context` | `context.Background()` |
 | unexported fields of another package's struct | their zero value (a test cannot set them) |
-| SDK response types' raw JSON (`RawJSON()`) | an object of one or two members keyed by strings the call tree compares with `==`; `JSON.ExtraFields` is derived from it as decoding derives it (members no typed field reads, nil when none); the harness builds the value by decoding a JSON document |
+| SDK response types (with JSON metadata) | generated field by field plus a raw JSON object of one or two members keyed by strings the call tree compares with `==`, then written as the JSON document the harness builds for the value and decoded by the JSON model: typed fields, `RawJSON()`, per-member `respjson.Field` and `ExtraFields` agree as decoding makes them; the harness decodes the same document |
+| documented enums (`// Any of ...`) | one of the values three times in four; the values the call tree compares make half of the choices |
 | pointers to another package's struct that has a constructor (a handle) | opaque non-nil |
 | receiver of a method whose type has `NewT` | built by `NewT` (`T.M~NewT`) |
 
