@@ -2438,6 +2438,43 @@ func isForeignOpaqueStruct(pkg *types.Package, t types.Type) bool {
 	return true
 }
 
+// isHandle says whether t is a struct type of another package, outside
+// the standard library, whose package exports a function returning *t (a
+// constructor: gorm.Open, NewStore). Pointers to it are handles the
+// constructor builds, not data a caller fills in.
+func isHandle(pkg *types.Package, t types.Type) bool {
+	n, ok := types.Unalias(t).(*types.Named)
+	if !ok || n.Obj().Pkg() == nil || n.Obj().Pkg() == pkg || isStdlib(n.Obj().Pkg().Path()) {
+		return false
+	}
+	if _, ok := n.Underlying().(*types.Struct); !ok {
+		return false
+	}
+	if v, ok := handleCache[n]; ok {
+		return v
+	}
+	scope := n.Obj().Pkg().Scope()
+	found := false
+	for _, name := range scope.Names() {
+		fn, ok := scope.Lookup(name).(*types.Func)
+		if !ok || !fn.Exported() {
+			continue
+		}
+		res := fn.Type().(*types.Signature).Results()
+		if res.Len() == 0 {
+			continue
+		}
+		if pt, ok := res.At(0).Type().(*types.Pointer); ok && types.Identical(pt.Elem(), n) {
+			found = true
+			break
+		}
+	}
+	handleCache[n] = found
+	return found
+}
+
+var handleCache = map[*types.Named]bool{}
+
 // zeroLit is the Go literal of t's zero value where the harness needs one
 // for an opaque element: "0" for numbers, "nil" for everything else.
 func zeroLit(t types.Type, src string) string {
@@ -2850,6 +2887,15 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		}
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, Fields: fields}, nil
 	case *types.Pointer:
+		if isHandle(pkg, u.Elem()) {
+			// A handle another package builds (gorm.Open, NewClient): a
+			// non-nil pointer to a value the model does not look into, not
+			// one assembled field by field (whose internals a real one
+			// never has nil).
+			esrc, epath := spell(pkg, u.Elem())
+			pointee := contract.ABIParam{Go: name, GoType: esrc, TypePkg: epath, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(u.Elem(), esrc)}
+			return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIPtr, Pointee: &pointee}, nil
+		}
 		pointee, err := ab.param(name, u.Elem(), stack)
 		if err != nil {
 			return contract.ABIParam{}, err

@@ -27,8 +27,35 @@ def f0 : GoSSA.Func := {
       term := .jump 1 [] }
   ] }
 
-/-- func(part int, total int) int (status: complete) -/
+/-- func(l *github.com/andreasfoo/go2lean/examples/xpkg/money.Ledger, k string, v int) (status: complete) -/
 def f1 : GoSSA.Func := {
+  name := "Post", params := [0, 1, 2], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 3 (.const (.ptr 0 [])) [],
+                 .op 4 .eq [0, 3]],
+      term := .br 4 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 5 (.const .unit) []],
+      term := .ret 5 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[],
+      term := .xcall "gossa.github_com_andreasfoo_go2lean_examples_xpkg_money" 2 [0, 1, 2] 6 3 [] 4 },
+    -- 3: if.done.after-call
+    { params := [],
+      instrs := #[.op 7 (.const .unit) []],
+      term := .ret 7 },
+    -- 4: if.done.call-fallback
+    { params := [],
+      instrs := #[.op 6 (.const .unit) []],
+      term := .jump 3 [] }
+  ] }
+
+/-- func(part int, total int) int (status: complete) -/
+def f2 : GoSSA.Func := {
   name := "Share", params := [0, 1], nvals := 6, entry := 0,
   blocks := #[
     -- 0: entry
@@ -43,7 +70,7 @@ def f1 : GoSSA.Func := {
     -- 2: if.done
     { params := [],
       instrs := #[],
-      term := .xcall "gossa.github_com_andreasfoo_go2lean_examples_xpkg_money" 3 [0, 1] 5 3 [] 4 },
+      term := .xcall "gossa.github_com_andreasfoo_go2lean_examples_xpkg_money" 5 [0, 1] 5 3 [] 4 },
     -- 3: if.done.after-call
     { params := [],
       instrs := #[],
@@ -55,7 +82,7 @@ def f1 : GoSSA.Func := {
   ] }
 
 /-- func(v int, ret int) bool (status: complete) -/
-def f2 : GoSSA.Func := {
+def f3 : GoSSA.Func := {
   name := "SpecBoundedInRange", params := [0, 1], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
@@ -76,7 +103,7 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func(a github.com/andreasfoo/go2lean/examples/xpkg/money.Amount) int (status: complete) -/
-def f3 : GoSSA.Func := {
+def f4 : GoSSA.Func := {
   name := "Units", params := [0], nvals := 2, entry := 0,
   blocks := #[
     -- 0: entry
@@ -93,6 +120,6 @@ def f3 : GoSSA.Func := {
       term := .jump 1 [] }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[64, 64, 64] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4], havocWidths := #[64, 64, 64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_xpkg

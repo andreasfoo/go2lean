@@ -28,3 +28,15 @@ func NewAmount(units, scale int) Amount { return Amount{units, scale} }
 
 // PerScale divides the units by one more than the scale.
 func (a Amount) PerScale() int { return a.Units / (a.scale + 1) }
+
+// Ledger records amounts per account; only NewLedger makes a usable one.
+type Ledger struct {
+	Name    string
+	entries map[string]int
+}
+
+// NewLedger makes a ledger.
+func NewLedger(name string) *Ledger { return &Ledger{Name: name, entries: map[string]int{}} }
+
+// Add records v under account k.
+func (l *Ledger) Add(k string, v int) { l.entries[k] += v }

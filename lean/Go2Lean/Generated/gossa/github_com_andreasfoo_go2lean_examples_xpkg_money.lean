@@ -52,8 +52,45 @@ def f1 : GoSSA.Func := {
       term := .ret 0 }
   ] }
 
-/-- func(units int, scale int) github.com/andreasfoo/go2lean/examples/xpkg/money.Amount (status: complete) -/
+/-- func (l *github.com/andreasfoo/go2lean/examples/xpkg/money.Ledger) Add(k string, v int) (status: partial) -/
 def f2 : GoSSA.Func := {
+  name := "Ledger.Add", params := [0, 1, 2], nvals := 11, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 3 (.fieldAddr 1) [0],
+                 .op 4 .loadPath [3],
+                 .op 6 .nilKnown [4]],
+      term := .br 6 1 [] 2 [] },
+    -- 1: entry.known
+    { params := [],
+      instrs := #[.op 5 (.mapLookup false (.int 64 0#64)) [4, 1]],
+      term := .jump 3 [] },
+    -- 2: entry.unknown
+    { params := [],
+      instrs := #[.havoc 5 0],
+      term := .jump 3 [] },
+    -- 3: entry.known-join
+    { params := [],
+      instrs := #[.op 7 .add [5, 2],
+                 .op 8 .nilKnown [4]],
+      term := .br 8 4 [] 5 [] },
+    -- 4: entry.known-join.known
+    { params := [],
+      instrs := #[.op 9 .mapUpdate [4, 1, 7]],
+      term := .jump 6 [] },
+    -- 5: entry.known-join.unknown
+    { params := [],
+      instrs := #[],
+      term := .jump 6 [] },
+    -- 6: entry.known-join.known-join
+    { params := [],
+      instrs := #[.op 10 (.const .unit) []],
+      term := .ret 10 }
+  ] }
+
+/-- func(units int, scale int) github.com/andreasfoo/go2lean/examples/xpkg/money.Amount (status: complete) -/
+def f3 : GoSSA.Func := {
   name := "NewAmount", params := [0, 1], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
@@ -67,8 +104,23 @@ def f2 : GoSSA.Func := {
       term := .ret 7 }
   ] }
 
+/-- func(name string) *github.com/andreasfoo/go2lean/examples/xpkg/money.Ledger (status: complete) -/
+def f4 : GoSSA.Func := {
+  name := "NewLedger", params := [0], nvals := 7, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 (.alloc (.structv [(.str 0 0#64 0#64), .opaqueNil])) [],
+                 .op 2 (.fieldAddr 0) [1],
+                 .op 3 .storePath [2, 0],
+                 .op 4 (.fieldAddr 1) [1],
+                 .op 5 .makeMap [],
+                 .op 6 .storePath [4, 5]],
+      term := .ret 1 }
+  ] }
+
 /-- func(part int, total int) int (status: complete) -/
-def f3 : GoSSA.Func := {
+def f5 : GoSSA.Func := {
   name := "Pct", params := [0, 1], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -80,13 +132,13 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func() int via NewAmount (status: complete) -/
-def f4 : GoSSA.Func := {
+def f6 : GoSSA.Func := {
   name := "Amount.PerScale~NewAmount", params := [0, 1], nvals := 5, entry := 0,
   blocks := #[
     -- 0: ctor
     { params := [],
       instrs := #[],
-      term := .call 2 [0, 1] 2 1 [] 5 },
+      term := .call 3 [0, 1] 2 1 [] 5 },
     -- 1: recv
     { params := [],
       instrs := #[],
@@ -109,6 +161,36 @@ def f4 : GoSSA.Func := {
       term := .panic .other }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4], havocWidths := #[] }
+/-- func(k string, v int) via NewLedger (status: complete) -/
+def f7 : GoSSA.Func := {
+  name := "Ledger.Add~NewLedger", params := [0, 1, 2], nvals := 6, entry := 0,
+  blocks := #[
+    -- 0: ctor
+    { params := [],
+      instrs := #[],
+      term := .call 4 [0] 3 1 [] 5 },
+    -- 1: recv
+    { params := [],
+      instrs := #[],
+      term := .jump 2 [] },
+    -- 2: method
+    { params := [],
+      instrs := #[],
+      term := .call 2 [3, 1, 2] 4 3 [] 5 },
+    -- 3: ret
+    { params := [],
+      instrs := #[],
+      term := .ret 4 },
+    -- 4: ctor-error
+    { params := [],
+      instrs := #[.op 5 (.const .unit) []],
+      term := .ret 5 },
+    -- 5: stuck
+    { params := [],
+      instrs := #[],
+      term := .panic .other }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7], havocWidths := #[64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_xpkg_money
