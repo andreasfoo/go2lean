@@ -123,6 +123,10 @@ structure JTable where
   zeros : Array Val
   boxed : List (Nat × Nat) := []
   basic : List Nat := []
+  /-- Decoding an inline union variant: apijson is strict there, and a
+  member it coerces is invalid rather than valid (its value is the same;
+  the variant still decodes). -/
+  strict : Bool := false
   deriving Repr
 
 /-- A zero value in the frontend's zero-model JSON (`{"k": "int", "w": 64}`,
@@ -1702,8 +1706,11 @@ where
     return (vs, heap, err)
   /-- Members into fields as the SDKs' apijson decoder does: exact keys
   only; null leaves a field unchanged (an Opt becomes null); pointers and
-  maps are decoded afresh; a member that does not decode is where the
-  model gets stuck (apijson would coerce it or mark it invalid). Also the
+  maps are decoded afresh; a member of the wrong JSON type follows
+  apijson's loose rules for strings (a bool or an integer literal is
+  stringified, an object or array kept as raw text) and for slices (a
+  non-array leaves the field as it was), and gets the model stuck
+  otherwise. Also the
   status and source of each typed member, for the metadata. -/
   decApi (fields : List JField) (members : List (String × List Nat)) (kvs : Std.TreeMap.Raw String Lean.Json)
       (src : List Nat) (vs : List Val) (heap : Heap Val) :
@@ -1741,10 +1748,39 @@ where
               | some (.map ..) => .opaqueNil
               | _ => vs[f.idx]?.getD .unit
             let (v, heap', e) ← jDec t heap f.ty jv vsrc start
-            if e then .error ()
-            vs := vs.set f.idx v
-            heap := heap'
-            metas := metas ++ [(f.key, (3, vsrc))]
+            if !e then
+              vs := vs.set f.idx v
+              heap := heap'
+              metas := metas ++ [(f.key, (3, vsrc))]
+            else
+              -- A member of the wrong JSON type: apijson's loose rules
+              -- where they are simple, else the model is stuck.
+              let coerced := if t.strict then 2 else 3
+              match t.descs[f.ty]?, jv with
+              | some (.str _), .bool b =>
+                let (x, h) := strAlloc heap (asciiBytes (if b then "true" else "false"))
+                vs := vs.set f.idx x
+                heap := h
+                metas := metas ++ [(f.key, (coerced, vsrc))]
+              | some (.str _), .num _ =>
+                -- gjson prints an integer literal as written (others are
+                -- reformatted as floats: not modelled).
+                if !jIntLiteral (jTrim vsrc) then .error ()
+                let (x, h) := strAlloc heap (jTrim vsrc)
+                vs := vs.set f.idx x
+                heap := h
+                metas := metas ++ [(f.key, (coerced, vsrc))]
+              | some (.str _), .obj _ | some (.str _), .arr _ =>
+                -- The raw text is stored, and the member is invalid.
+                let (x, h) := strAlloc heap (jTrim vsrc)
+                vs := vs.set f.idx x
+                heap := h
+                metas := metas ++ [(f.key, (2, vsrc))]
+              | some (.slice _), .arr _ => .error () -- elements may be coerced
+              | some (.slice _), _ =>
+                -- Not an array: the field is left as it was, invalid.
+                metas := metas ++ [(f.key, (2, vsrc))]
+              | _, _ => .error ()
         | none => pure ()
     return (vs, heap, false, metas)
   /-- An inline union variant decoded strictly from the whole value
@@ -1753,7 +1789,7 @@ where
   inlineVariant (f : JField) (j : Lean.Json) (src : List Nat) (heap : Heap Val) :
       Except Unit (Val × Heap Val × Bool) :=
     let zero := t.zeros[f.ty]?.getD .unit
-    match jDec t heap f.ty j src zero with
+    match jDec { t with strict := true } heap f.ty j src zero with
     | .ok (v, heap, false) => .ok (v, heap, true)
     | .ok (_, heap, true) => .ok (zero, heap, false)
     | .error () => .error ()
@@ -2209,8 +2245,15 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | .panic k => .panic k
     | .outOfFuel => .outOfFuel
 
+/-- A stuck JSON decode names the text it was decoding. -/
+def stuckSite (heap : Heap Val) : Op → List Val → Option String
+  | .jsonDecode _ root, [.slice ref off len _, _] =>
+    (strBytes heap (.str ref off len)).map fun bs => s!"jsonDecode into entry {root}: {utf8Lossy (bs.take 240)}"
+  | _, _ => none
+
 instance : Dialect Op Val Oracle where
   denote := denote
+  stuckSite := stuckSite
   toBool
     | .bool b => some b
     | _ => none

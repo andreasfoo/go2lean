@@ -91,6 +91,9 @@ class Dialect (Op : Type) (Val Oracle : outParam Type) where
   toBool : Val → Option Bool
   /-- The function a func value calls. -/
   callee : Val → Callee Val := fun _ => .unknown
+  /-- Where an op got stuck, said better than its `repr` (which a large
+  operand, such as a JSON table, fills before the cut). -/
+  stuckSite : Heap Val → Op → List Val → Option String := fun _ _ _ => none
 
 inductive Instr (Op : Type) where
   /-- `dst := op args` -/
@@ -200,7 +203,9 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
     | .ok (v, heap) => execInstrs or h rest (env.set! dst v) { s with heap := heap }
     | .panic .modelStuck =>
       -- Record where (op and operand shapes, truncated) for the engines.
-      let site := (s!"{repr o} {repr vals}".take 160).toString
+      let site := match Dialect.stuckSite s.heap o vals with
+        | some d => (d.take 300).toString
+        | none => (s!"{repr o} {repr vals}".take 160).toString
       (.panic .modelStuck, { s with stuck := s.stuck <|> some site })
     | .panic k => (.panic k, s)
     | .outOfFuel => (.outOfFuel, s)

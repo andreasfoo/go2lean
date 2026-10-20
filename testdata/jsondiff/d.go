@@ -7,6 +7,8 @@ package jsondiff
 import (
 	"encoding/base64"
 	"encoding/json"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
 
 type Inner struct {
@@ -89,4 +91,22 @@ func Decode64(s string) string {
 		return "ERR"
 	}
 	return string(b)
+}
+
+// DecodeSchema decodes an SDK param type (apijson, which coerces or skips
+// a member of the wrong JSON type instead of failing).
+func DecodeSchema(s string) string {
+	var p anthropic.BetaToolInputSchemaParam
+	err := json.Unmarshal([]byte(s), &p)
+	out := string(p.Type) + "|"
+	for _, r := range p.Required {
+		out += r + ","
+	}
+	if _, ok := p.ExtraFields["x"]; ok {
+		out += "|x"
+	}
+	if err != nil {
+		out += "|ERR"
+	}
+	return out
 }

@@ -26,6 +26,12 @@ func SpecEncodeRawDiff(r []byte, ret string) bool {
 	return false
 }
 
+// go2lean:spec DecodeSchema
+func SpecDecodeSchemaDiff(s string, ret string) bool {
+	go2leanProbe("schema", ret)
+	return false
+}
+
 // go2lean:spec Decode64
 func SpecDecode64Diff(s string, ret string) bool {
 	go2leanProbe("b64", ret)
