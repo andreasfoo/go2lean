@@ -101,9 +101,12 @@ confirmed overflow_sum_specsum
 exhausted portable_count_nopanic
 exhausted_havoc portable_digit_nopanic
 exhausted portable_first_nopanic
+inconclusive portable_group_nopanic
 confirmed portable_head_nopanic
-exhausted_havoc portable_intpart_nopanic
+exhausted portable_intpart_nopanic
 exhausted portable_meta_get_nopanic
+confirmed portable_minor_nopanic
+exhausted portable_month_nopanic
 confirmed portable_parse_c0_nopanic
 confirmed portable_parse_c_nopanic
 confirmed portable_per_nopanic
@@ -111,7 +114,7 @@ exhausted portable_permax_nopanic
 exhausted portable_permb_nopanic
 confirmed portable_pick_nopanic
 confirmed portable_port_nopanic
-spurious portable_unit_nopanic
+confirmed portable_unit_nopanic
 confirmed portable_url_nopanic
 confirmed recs_dedup_nopanic
 confirmed recs_first_nopanic

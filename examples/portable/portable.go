@@ -81,7 +81,8 @@ func IntPart(s string) string {
 }
 
 // Unit is the unit of a size like "10kb". Bug: the pattern has one group,
-// and m[2] is out of range on every match.
+// and m[2] is out of range on every match (the model runs the pattern, and
+// the search draws strings it matches).
 func Unit(s string) string {
 	if m := regexp.MustCompile(`^\d+([a-z]+)$`).FindStringSubmatch(s); m != nil {
 		return m[2]
@@ -133,4 +134,37 @@ func Per(v any) int {
 		return len(x)
 	}
 	return -1
+}
+
+var (
+	verRe  = regexp.MustCompile(`^v(\d+)\.(\d+)$`)
+	dateRe = regexp.MustCompile(`^(\d{4})-(\d\d)$`)
+)
+
+// group is the n-th group of the first match of re in s, or "".
+func group(re *regexp.Regexp, s string, n int) string {
+	if m := re.FindStringSubmatch(s); m != nil && n < len(m) {
+		return m[n]
+	}
+	return ""
+}
+
+// Minor is a hundred over the minor version of "v1.2". Bug: "v1.0" (the
+// regexp reaches group through a parameter: picked at run time).
+func Minor(s string) int {
+	n, err := strconv.Atoi(group(verRe, s, 2))
+	if err != nil {
+		return 0
+	}
+	return 100 / n
+}
+
+// Month is the month of "2024-05" as an index into twelve names (holds:
+// the check covers both ends).
+func Month(s string) string {
+	n, err := strconv.Atoi(group(dateRe, s, 2))
+	if err != nil || n < 1 || n > 12 {
+		return ""
+	}
+	return "JFMAMJJASOND"[n-1 : n]
 }

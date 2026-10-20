@@ -103,6 +103,44 @@ type Boxed struct {
 
 func (b Boxed) Lean() string { return fmt.Sprintf("(.boxed %d %s)", b.Tag, b.V.Lean()) }
 
+// ReFind runs a compiled regexp on a string (the dialect's reFind): Insts
+// are the program's instructions rendered for Lean, Kind the method
+// (0 MatchString, 1 FindStringSubmatch, 2 FindString, 3 FindStringIndex).
+type ReFind struct {
+	Insts             []string
+	Start, NCap, Kind int
+}
+
+func (o ReFind) Lean() string {
+	return fmt.Sprintf("(.reFind [%s] %d %d %d)", strings.Join(o.Insts, ", "), o.Start, o.NCap, o.Kind)
+}
+
+// ReProg is a compiled regexp with the identity of its pattern.
+type ReProg struct {
+	ID   uint32
+	Prog ReFind
+}
+
+// ReFindIn is reFindIn: ReFind with the program of the regexp value it is
+// given, among Progs.
+type ReFindIn struct {
+	Progs []ReProg
+	Kind  int
+}
+
+func (o ReFindIn) Lean() string {
+	parts := make([]string, len(o.Progs))
+	for i, p := range o.Progs {
+		parts[i] = fmt.Sprintf("(%d, [%s], %d, %d)", p.ID, strings.Join(p.Prog.Insts, ", "), p.Prog.Start, p.Prog.NCap)
+	}
+	return fmt.Sprintf("(.reFindIn [%s] %d)", strings.Join(parts, ", "), o.Kind)
+}
+
+// ReIn is reIn: is this a regexp value with one of IDs?
+type ReIn struct{ IDs []string }
+
+func (o ReIn) Lean() string { return "(.reIn [" + strings.Join(o.IDs, ", ") + "])" }
+
 // ErrTagKnown is errTagKnown: is this error nil or boxed with Tag?
 type ErrTagKnown struct{ Tag uint32 }
 

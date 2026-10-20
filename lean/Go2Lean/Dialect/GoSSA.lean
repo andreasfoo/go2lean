@@ -206,6 +206,24 @@ in the program sees the same slice contents. -/
 structure Oracle where
   mem : Nat → BitVec 64 → BitVec 64
 
+/-- One instruction of a regexp compiled by Go's regexp/syntax (its Prog,
+after Simplify): `out` is the next instruction. A rune instruction lists
+the ranges it accepts, case folding already expanded by the frontend. -/
+inductive ReInst where
+  | rune (ranges : List (Nat × Nat)) (out : Nat)
+  /-- any rune; `nl`: newline too -/
+  | any (nl : Bool) (out : Nat)
+  /-- try `x`, then `y` (leftmost-first priority) -/
+  | alt (x y : Nat)
+  | cap (slot out : Nat)
+  /-- an empty-width assertion: syntax.EmptyOp bits (1 ^ line, 2 $ line,
+  4 ^ text, 8 $ text, 16 \b, 32 \B) -/
+  | empty (flags out : Nat)
+  | match
+  | fail
+  | nop (out : Nat)
+  deriving Repr
+
 inductive Op where
   | const (v : Val)
   -- integer arithmetic (same width on both operands)
@@ -397,6 +415,15 @@ inductive Op where
   | mapRange
   /-- Advance a map iterator: `(ok, key, value)`, zeros when done. -/
   | mapNext (zeroK zeroV : Val)
+  /-- A method of a `*regexp.Regexp` compiled from a constant pattern, run
+  on a string: kind 0 MatchString (bool), 1 FindStringSubmatch ([]string,
+  nil without a match), 2 FindString (string), 3 FindStringIndex ([]int). -/
+  | reFind (prog : List ReInst) (start ncap kind : Nat)
+  /-- `reFind` on a regexp value (`.boxed _ (.int _ id)`): the program of
+  `id` among these (id, program, start, ncap). -/
+  | reFindIn (progs : List (Nat × List ReInst × Nat × Nat)) (kind : Nat)
+  /-- Is this a regexp value whose id is among these? -/
+  | reIn (ids : List Nat)
   deriving Repr
 
 /-- Lift a width-polymorphic binary function to two `int` values of equal width. -/
@@ -789,6 +816,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .reflectIsZero, [.boxed _ v] =>
     match isZeroVal v with | some b => .ok (.bool b) | none => .panic .modelStuck
   | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
+  | .reIn ids, [x] => .ok (.bool (match x with | .boxed _ (.int _ id) => ids.contains id.toNat | _ => false))
   | .errKnown, [x] => .ok (.bool (match x with | .boxed .. | .err false => true | _ => false))
   | .errTagKnown tag, [x] => .ok (.bool (match x with | .boxed t _ => t == tag | .err false => true | _ => false))
   | .isNilOpaque, [x] => .ok (.bool (match x with | .opaqueNil => true | _ => false))
@@ -1039,6 +1067,78 @@ def allocStrSlice (heap : Heap Val) (parts : List (List Nat)) : Val × Heap Val 
   match p with
   | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 vals.length) (BitVec.ofNat 64 vals.length), heap)
   | _ => (.unit, heap)
+
+-- Regular expressions ------------------------------------------------------
+
+def isWordByte (b : Nat) : Bool :=
+  (48 ≤ b && b ≤ 57) || (65 ≤ b && b ≤ 90) || (97 ≤ b && b ≤ 122) || b == 95
+
+/-- Does an empty-width assertion hold at byte `pos`? -/
+def reEmptyOk (f : Nat) (bs : Array Nat) (pos : Nat) : Bool :=
+  let before := if pos == 0 then none else bs[pos - 1]?
+  let after := bs[pos]?
+  let wb := (before.map isWordByte).getD false != (after.map isWordByte).getD false
+  ((f &&& 1) == 0 || pos == 0 || before == some 10) &&
+  ((f &&& 2) == 0 || pos == bs.size || after == some 10) &&
+  ((f &&& 4) == 0 || pos == 0) &&
+  ((f &&& 8) == 0 || pos == bs.size) &&
+  ((f &&& 16) == 0 || wb) &&
+  ((f &&& 32) == 0 || !wb)
+
+/-- Go's backtracking matcher (regexp/backtrack.go) from instruction `pc`
+at byte `pos`: the first match in priority order (leftmost-first), with
+the capture slots it set. A (pc, pos) pair is tried once: `seen` is shared
+by all start positions, so the work stays linear. `none`: out of fuel. -/
+def reBT (prog : Array ReInst) (bs : Array Nat) : Nat → Nat → Nat → Array (Option Nat) → Array Bool →
+    Option (Option (Array (Option Nat)) × Array Bool)
+  | 0, _, _, _, _ => none
+  | fuel + 1, pc, pos, caps, seen =>
+    let key := pc * (bs.size + 1) + pos
+    if seen[key]?.getD true then some (none, seen) else
+    let seen := seen.set! key true
+    match prog[pc]? with
+    | none | some .fail => some (none, seen)
+    | some .match => some (some (if 1 < caps.size then caps.set! 1 (some pos) else caps), seen)
+    | some (.nop o) => reBT prog bs fuel o pos caps seen
+    | some (.cap slot o) =>
+      reBT prog bs fuel o pos (if slot < caps.size then caps.set! slot (some pos) else caps) seen
+    | some (.empty f o) =>
+      if reEmptyOk f bs pos then reBT prog bs fuel o pos caps seen else some (none, seen)
+    | some (.alt x y) =>
+      match reBT prog bs fuel x pos caps seen with
+      | none => none
+      | some (some r, seen) => some (some r, seen)
+      | some (none, seen) => reBT prog bs fuel y pos caps seen
+    | some (.rune rs o) =>
+      if pos < bs.size then
+        let (r, n) := decodeRuneA bs pos
+        if rs.any (fun (lo, hi) => lo ≤ r && r ≤ hi) then reBT prog bs fuel o (pos + n) caps seen
+        else some (none, seen)
+      else some (none, seen)
+    | some (.any nl o) =>
+      if pos < bs.size then
+        let (r, n) := decodeRuneA bs pos
+        if nl || r != 10 then reBT prog bs fuel o (pos + n) caps seen else some (none, seen)
+      else some (none, seen)
+
+/-- Unanchored search, as Go's regexp: start positions left to right (by
+rune), the first that matches. The capture slots of the match (group 0 is
+the whole match), `some none` without a match, `none` out of fuel. -/
+def reSearch (prog : Array ReInst) (start ncap : Nat) (bs : Array Nat) : Option (Option (Array (Option Nat))) :=
+  let fuel := prog.size * (bs.size + 1) + 2
+  let rec go : Nat → Nat → Array Bool → Option (Option (Array (Option Nat)))
+    | 0, _, _ => some none
+    | k + 1, pos, seen =>
+      -- Group 0 has no capture instructions: its start is the start
+      -- position, its end where the match instruction is reached.
+      let caps := (Array.replicate (max ncap 2) none).set! 0 (some pos)
+      match reBT prog bs fuel start pos caps seen with
+      | none => none
+      | some (some caps, _) => some (some caps)
+      | some (none, seen) =>
+        if pos ≥ bs.size then some none
+        else go k (pos + (decodeRuneA bs pos).2) seen
+  go (bs.size + 2) 0 (Array.replicate (prog.size * (bs.size + 1)) false)
 
 /-- `bytes` as a string, invalid UTF-8 sequences replaced by U+FFFD. -/
 def utf8Lossy (bytes : List Nat) : String := Id.run do
@@ -1989,6 +2089,44 @@ def sdkNormalize (t : JTable) (d : Nat) (heap : Heap Val) (v : Val) : Option (Va
   | .ok (v', heap', false) => some (v', heap')
   | _ => none
 
+/-- Run a compiled regexp on string `s` for one of the methods `reFind`
+models (see there). -/
+def reFindRun (heap : Heap Val) (prog : List ReInst) (start ncap kind : Nat) (s : Val) : Res (Val × Heap Val) :=
+  match s, strBytes heap s with
+  | .str ref off _, some x =>
+    let sub (a b : Nat) : Val := if b ≤ a then .str 0 0#64 0#64 else .str ref (off + BitVec.ofNat 64 a) (BitVec.ofNat 64 (b - a))
+    match reSearch prog.toArray start ncap x.toArray with
+    | none => .panic .modelStuck
+    | some m =>
+      match kind, m with
+      | 0, _ => .ok (.bool m.isSome, heap)
+      | 1, none => .ok (.slice 0 0#64 0#64 0#64, heap)
+      | 1, some caps =>
+        let groups := (List.range (ncap / 2)).map fun g =>
+          match caps[2 * g]?, caps[2 * g + 1]? with
+          | some (some a), some (some b) => sub a b
+          | _, _ => .str 0 0#64 0#64
+        let (p, heap) := heapAlloc heap (.arr groups)
+        match p with
+        | .ptr r _ => .ok (.slice r 0#64 (BitVec.ofNat 64 groups.length) (BitVec.ofNat 64 groups.length), heap)
+        | _ => .panic .modelStuck
+      | 2, none => .ok (.str 0 0#64 0#64, heap)
+      | 2, some caps =>
+        match caps[0]?, caps[1]? with
+        | some (some a), some (some b) => .ok (sub a b, heap)
+        | _, _ => .panic .modelStuck
+      | 3, none => .ok (.slice 0 0#64 0#64 0#64, heap)
+      | 3, some caps =>
+        match caps[0]?, caps[1]? with
+        | some (some a), some (some b) =>
+          let (p, heap) := heapAlloc heap (.arr [.int 64 (BitVec.ofNat 64 a), .int 64 (BitVec.ofNat 64 b)])
+          match p with
+          | .ptr r _ => .ok (.slice r 0#64 2#64 2#64, heap)
+          | _ => .panic .modelStuck
+        | _, _ => .panic .modelStuck
+      | _, _ => .panic .modelStuck
+  | _, _ => .panic .modelStuck
+
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
@@ -2262,6 +2400,11 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
         if n.toNat * x.length > 4096 then .panic .modelStuck
         else .ok (strAlloc heap ((List.replicate n.toNat x).flatten))
       | none => .panic .modelStuck
+  | .reFind prog start ncap kind, [s] => reFindRun heap prog start ncap kind s
+  | .reFindIn progs kind, [.boxed _ (.int _ id), s] =>
+    match progs.find? (fun (i, _) => i == id.toNat) with
+    | some (_, prog, start, ncap) => reFindRun heap prog start ncap kind s
+    | none => .panic .modelStuck
   | .strSplit, [s, sep] =>
     match strBytes heap s, strBytes heap sep with
     | some x, some y => .ok (allocStrSlice heap (splitBytes x y))

@@ -19,11 +19,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
@@ -941,6 +943,8 @@ type progState struct {
 	boxed []types.Type
 	// json describes the types the package encodes or decodes.
 	json *jsonTable
+	// regexps caches packageRegexps.
+	regexps map[*ssa.Package][]string
 }
 
 // maxImplementers bounds the boxed types an interface assertion or a
@@ -1899,10 +1903,10 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
 			return nil
 		}
-		if _, ok := compiledPattern(x); ok {
+		if re, ok := compiledPattern(x); ok {
 			// A compiled constant regexp: only its modelled methods look
-			// into it (regexpSubmatch).
-			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			// into it (regexpCall).
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: regexpValue(re.String())}})
 			return nil
 		}
 		if g, isGlobal := x.X.(*ssa.Global); isGlobal {
@@ -2247,16 +2251,16 @@ func (t *fnState) call(x *ssa.Call) error {
 		}
 	}
 	if callee != nil {
-		if _, ok := compiledPattern(x); ok {
+		if re, ok := compiledPattern(x); ok {
 			// regexp.MustCompile of a valid constant pattern: no panic, and
 			// a value only the modelled methods look into.
-			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: regexpValue(re.String())}})
 			return nil
 		}
 		if done, err := t.randBounded(x, callee); done || err != nil {
 			return err
 		}
-		if done, err := t.regexpSubmatch(x, callee); done || err != nil {
+		if done, err := t.regexpCall(x, callee); done || err != nil {
 			return err
 		}
 	}
@@ -2733,43 +2737,308 @@ func (t *fnState) invoke(x *ssa.Call) (bool, error) {
 	return true, t.emitCall(x, ir.Term{Kind: ir.TermCallV, FV: fv}, x.Call.Method.Name())
 }
 
-// regexpSubmatch lowers FindStringSubmatch on a regexp compiled from a
-// constant pattern (regexp.MustCompile, in the function or in a package
-// variable's initializer): nil, or exactly 1+NumSubexp strings, as a havoc
-// match decides. Callers index the groups the pattern has (m[1]), which a
-// slice of unknown length would refute. The strings themselves are not
-// modelled ("", like other havoc strings).
-func (t *fnState) regexpSubmatch(x *ssa.Call, callee *ssa.Function) (bool, error) {
-	if callee.String() != "(*regexp.Regexp).FindStringSubmatch" || len(x.Call.Args) != 2 {
+// regexpCall lowers the methods of a *regexp.Regexp compiled from a
+// constant pattern (MatchString, FindStringSubmatch, FindString,
+// FindStringIndex), and regexp.MatchString of a constant pattern, to the
+// dialect's matcher, which runs the program regexp/syntax compiles the
+// pattern to (Go's own instructions and leftmost-first semantics).
+func (t *fnState) regexpCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	kinds := map[string]int{"MatchString": 0, "FindStringSubmatch": 1, "FindString": 2, "FindStringIndex": 3}
+	var pat string
+	var subject ssa.Value
+	pkgFunc := false
+	switch name := callee.String(); {
+	case name == "regexp.MatchString" && len(x.Call.Args) == 2:
+		k, ok := x.Call.Args[0].(*ssa.Const)
+		if !ok || k.Value == nil || k.Value.Kind() != constant.String {
+			return false, nil
+		}
+		pat, subject, pkgFunc = constant.StringVal(k.Value), x.Call.Args[1], true
+	case strings.HasPrefix(name, "(*regexp.Regexp).") && len(x.Call.Args) == 2:
+		if _, ok := kinds[callee.Name()]; !ok {
+			return false, nil
+		}
+		p, ok := regexpPattern(x.Call.Args[0])
+		if !ok {
+			// A regexp passed in (a helper's parameter): one of the
+			// package's constant patterns, picked at run time.
+			return t.regexpDynamic(x, callee, kinds[callee.Name()])
+		}
+		pat, subject = p, x.Call.Args[1]
+	default:
 		return false, nil
 	}
-	re, ok := compiledPattern(x.Call.Args[0])
+	prog, ok := compileRegexp(pat)
 	if !ok {
 		return false, nil
 	}
-	if _, err := t.val(x.Call.Args[1]); err != nil {
+	// Strings the pattern matches join the search's pool: random strings
+	// rarely match, and the code behind a match is what to explore.
+	for _, sample := range regexpSamples(pat) {
+		if !slices.Contains(t.out.StrConsts, sample) {
+			t.out.StrConsts = append(t.out.StrConsts, sample)
+		}
+	}
+	sv, err := t.val(subject)
+	if err != nil {
 		return true, err
 	}
-	t.issue("match of %s against %q is havoc (the pattern's groups are modelled, not its language)", x.Call.Args[1].Name(), re.String())
+	kind := kinds[callee.Name()]
+	if pkgFunc {
+		kind = 0
+	}
+	prog.Kind = kind
+	if !pkgFunc {
+		t.emit(ir.Instr{Dst: t.def(x), Op: prog, Args: []ir.Var{sv}})
+		return true, nil
+	}
+	// regexp.MatchString(pattern, s): (matched, nil) for a valid pattern.
+	m := t.fresh()
+	t.emit(ir.Instr{Dst: m, Op: prog, Args: []ir.Var{sv}})
+	nilErr := t.fresh()
+	t.emit(ir.Instr{Dst: nilErr, Op: ir.Const{V: ir.ErrVal{}}})
+	t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: []ir.Var{m, nilErr}})
+	return true, nil
+}
+
+// regexpSamples writes up to two strings the pattern matches: the
+// shortest (repetitions their minimum, the first alternative, the low end
+// of a class: "0" for \d), and one taking each optional part once, the
+// second alternative and the high end of a class.
+func regexpSamples(pat string) []string {
+	re, err := syntax.Parse(pat, syntax.Perl)
+	if err != nil {
+		return nil
+	}
+	re = re.Simplify()
+	compiled, err := regexp.Compile(pat)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, more := range []bool{false, true} {
+		var b strings.Builder
+		var gen func(r *syntax.Regexp)
+		gen = func(r *syntax.Regexp) {
+			if b.Len() > 64 {
+				return
+			}
+			switch r.Op {
+			case syntax.OpLiteral:
+				for _, c := range r.Rune {
+					b.WriteRune(c)
+				}
+			case syntax.OpCharClass:
+				if len(r.Rune) >= 2 {
+					c := r.Rune[0]
+					if more {
+						c = r.Rune[1]
+					}
+					b.WriteRune(c)
+				}
+			case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
+				b.WriteByte('a')
+			case syntax.OpCapture, syntax.OpPlus:
+				gen(r.Sub[0])
+			case syntax.OpStar, syntax.OpQuest:
+				if more {
+					gen(r.Sub[0])
+				}
+			case syntax.OpRepeat:
+				n := r.Min
+				if more && (r.Max < 0 || r.Max > n) {
+					n++
+				}
+				for i := 0; i < n && i < 8; i++ {
+					gen(r.Sub[0])
+				}
+			case syntax.OpConcat:
+				for _, sub := range r.Sub {
+					gen(sub)
+				}
+			case syntax.OpAlternate:
+				if more && len(r.Sub) > 1 {
+					gen(r.Sub[1])
+				} else {
+					gen(r.Sub[0])
+				}
+			}
+		}
+		gen(re)
+		if s := b.String(); compiled.MatchString(s) && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// regexpTag tags the model of a *regexp.Regexp.
+var regexpTag = func() uint32 {
+	h := fnv.New32a()
+	h.Write([]byte("*regexp.Regexp"))
+	return h.Sum32()
+}()
+
+// regexpID identifies a constant pattern.
+func regexpID(pat string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(pat))
+	return h.Sum32()
+}
+
+// regexpValue is the model of a regexp compiled from a constant pattern:
+// boxed with the identity of its pattern, so that a method called where
+// the pattern is not known statically can pick its program at run time.
+func regexpValue(pat string) ir.Val {
+	return ir.Boxed{Tag: regexpTag, V: ir.IntVal{Width: 64, Bits: fmt.Sprint(regexpID(pat))}}
+}
+
+// maxRegexps bounds the programs a call on an unknown regexp embeds.
+const maxRegexps = 12
+
+// packageRegexps lists the constant patterns the package compiles with
+// regexp.MustCompile (in its functions and its initializer).
+func (s *progState) packageRegexps(pkg *ssa.Package) []string {
+	if pats, ok := s.regexps[pkg]; ok {
+		return pats
+	}
+	var pats []string
+	for f := range ssautil.AllFunctions(s.sprog) {
+		if f.Pkg != pkg {
+			continue
+		}
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				if c, ok := in.(*ssa.Call); ok {
+					if p, ok := regexpPattern(c); ok && !slices.Contains(pats, p) {
+						pats = append(pats, p)
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(pats)
+	if s.regexps == nil {
+		s.regexps = map[*ssa.Package][]string{}
+	}
+	s.regexps[pkg] = pats
+	return pats
+}
+
+// regexpDynamic lowers a method call on a regexp the call site does not
+// know: when it is one of the package's constant patterns (at most
+// maxRegexps), that pattern's program runs; otherwise (a pattern built at
+// run time) the result is havoc.
+func (t *fnState) regexpDynamic(x *ssa.Call, callee *ssa.Function, kind int) (bool, error) {
+	if t.f.Pkg == nil {
+		return false, nil
+	}
+	pats := t.prog.packageRegexps(t.f.Pkg)
+	if len(pats) == 0 || len(pats) > maxRegexps {
+		return false, nil
+	}
+	op := ir.ReFindIn{Kind: kind}
+	var ids []string
+	for _, p := range pats {
+		prog, ok := compileRegexp(p)
+		if !ok {
+			return false, nil
+		}
+		prog.Kind = kind
+		op.Progs = append(op.Progs, ir.ReProg{ID: regexpID(p), Prog: prog})
+		ids = append(ids, fmt.Sprint(regexpID(p)))
+		for _, sample := range regexpSamples(p) {
+			if !slices.Contains(t.out.StrConsts, sample) {
+				t.out.StrConsts = append(t.out.StrConsts, sample)
+			}
+		}
+	}
+	re, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	sv, err := t.val(x.Call.Args[1])
+	if err != nil {
+		return true, err
+	}
 	dst := t.def(x)
-	matched := t.fresh()
-	t.emit(ir.Instr{Dst: matched, HavocSite: t.prog.newHavoc(ir.HavocBool, t.f.Name()+": FindStringSubmatch matched", "unmodeled-call", "")})
+	known := t.fresh()
+	t.emit(ir.Instr{Dst: known, Op: ir.ReIn{IDs: ids}, Args: []ir.Var{re}})
 	yes := len(t.out.Blocks)
 	no, join := yes+1, yes+2
-	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: matched, T: yes, F: no}
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: known, T: yes, F: no}
 	name := t.cur.Name
-	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".re-match"}, ir.Block{Name: name + ".re-nomatch"}, ir.Block{Name: name + ".re-join"})
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".re-known"}, ir.Block{Name: name + ".re-unknown"}, ir.Block{Name: name + ".re-join"})
 	t.cur = &t.out.Blocks[yes]
-	n := t.fresh()
-	t.emit(ir.Instr{Dst: n, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: fmt.Sprint(re.NumSubexp() + 1)}}})
-	t.emit(ir.Instr{Dst: dst, Op: ir.MakeSlice{Zero: ir.EmptyStr{}}, Args: []ir.Var{n, n}})
+	t.emit(ir.Instr{Dst: dst, Op: op, Args: []ir.Var{re, sv}})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[no]
-	nilSlice, _ := zeroVal(x.Type())
-	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: nilSlice}})
+	t.issue("%s on a regexp that may not be one of the package's constant patterns is havoc", callee.Name())
+	if err := t.havocResult(dst, x, callee.Name(), "unmodeled-call"); err != nil {
+		return true, err
+	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]
 	return true, nil
+}
+
+// compileRegexp compiles a pattern as regexp.Compile does (Perl syntax,
+// simplified) into the dialect's instructions; a rune with case folding
+// lists its whole fold orbit.
+func compileRegexp(pat string) (ir.ReFind, bool) {
+	re, err := syntax.Parse(pat, syntax.Perl)
+	if err != nil {
+		return ir.ReFind{}, false
+	}
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		return ir.ReFind{}, false
+	}
+	out := ir.ReFind{Start: prog.Start, NCap: prog.NumCap}
+	for _, in := range prog.Inst {
+		var li string
+		switch in.Op {
+		case syntax.InstAlt, syntax.InstAltMatch:
+			li = fmt.Sprintf(".alt %d %d", in.Out, in.Arg)
+		case syntax.InstCapture:
+			li = fmt.Sprintf(".cap %d %d", in.Arg, in.Out)
+		case syntax.InstEmptyWidth:
+			li = fmt.Sprintf(".empty %d %d", in.Arg, in.Out)
+		case syntax.InstMatch:
+			li = ".match"
+		case syntax.InstFail:
+			li = ".fail"
+		case syntax.InstNop:
+			li = fmt.Sprintf(".nop %d", in.Out)
+		case syntax.InstRuneAny:
+			li = fmt.Sprintf(".any true %d", in.Out)
+		case syntax.InstRuneAnyNotNL:
+			li = fmt.Sprintf(".any false %d", in.Out)
+		case syntax.InstRune, syntax.InstRune1:
+			var ranges []string
+			if len(in.Rune) == 1 {
+				r0 := in.Rune[0]
+				rs := []rune{r0}
+				if in.Op == syntax.InstRune && syntax.Flags(in.Arg)&syntax.FoldCase != 0 {
+					for r := unicode.SimpleFold(r0); r != r0; r = unicode.SimpleFold(r) {
+						rs = append(rs, r)
+					}
+				}
+				for _, r := range rs {
+					ranges = append(ranges, fmt.Sprintf("(%d, %d)", r, r))
+				}
+			} else {
+				for i := 0; i+1 < len(in.Rune); i += 2 {
+					ranges = append(ranges, fmt.Sprintf("(%d, %d)", in.Rune[i], in.Rune[i+1]))
+				}
+			}
+			li = fmt.Sprintf(".rune [%s] %d", strings.Join(ranges, ", "), in.Out)
+		default:
+			return ir.ReFind{}, false
+		}
+		out.Insts = append(out.Insts, li)
+	}
+	return out, true
 }
 
 // compiledPattern is the regexp v holds when regexpPattern finds its
