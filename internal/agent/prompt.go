@@ -43,20 +43,21 @@ Rules for a spec function:
 - Return true when the property is vacuously satisfied (the inputs do not meet
   its precondition). Return false only when the result is wrong.
 - Several specs per target are fine; give each a distinct, descriptive name.
-- Stay inside the modelled subset: integers of any width, bools, strings
-  (len, indexing, slicing, ==, +, range over runes, []byte/[]rune
-  conversions, the common strings.* functions, strconv.Atoi/Itoa), structs
-  and pointers to them (field reads and writes, nil checks), arrays, slices
-  of any such type (index, len/cap, element assignment, make, append, copy,
-  == nil), error values compared with nil, multiple results, if/for,
-  arithmetic, comparisons, calls to other functions and methods of the same
-  package (including the target itself). Maps, interfaces, funcs, channels
-  and floats are opaque: they may be passed around but a spec must not look
-  inside them (no map lookups, type assertions, interface method calls or
-  float arithmetic: those become unknown values and make the spec useless).
-  No closures, fmt, panics, or other standard-library calls. A spec may read
-  fields of struct and pointer arguments after the call, so it can state
-  what a method did to its receiver.
+- Stay inside the modelled subset (docs/semantics.md has the full list):
+  integers of any width, bools, strings (len, indexing, slicing, ==, +,
+  range over runes, []byte/[]rune conversions, the common strings.*
+  functions, strconv.Atoi/Itoa, fmt.Sprintf with %s %d %v %t), structs,
+  pointers, arrays, slices (index, len/cap, make, append, copy), maps
+  (lookups, updates, delete, len, range), interface values (type
+  assertions and type switches, method calls), closures and func values,
+  errors compared with nil, encoding/json Marshal and Unmarshal (structs,
+  maps, slices, interface{}; the OpenAI and Anthropic SDK types included),
+  calls to functions and methods of the package and of the packages it
+  imports. Floats are opaque (no float arithmetic or comparisons in a
+  spec); goroutines, channels and select are not modelled; time.Now, I/O
+  and the network give unknown values.
+- A spec may call unexported functions of the package and build its own
+  helper values (a converter struct literal, a replayed event sequence).
 - A loop is fine; the model runs it with bounded fuel.
 - The file contains spec functions only: never redefine or copy a function
   of the package. Import only the packages that the parameter and result
@@ -68,7 +69,30 @@ Good properties are ones a real bug could violate: results inside a range,
 sign and overflow behaviour on large inputs, off-by-one at boundaries
 (empty slice, length 1, index == len), relations to other functions of the
 package (inverses, idempotence, monotonicity), and that documented
-preconditions really protect the function.
+preconditions really protect the function. For code that converts or
+transforms data, the strongest properties are relations:
+- conservation: everything the input carries that the output format can
+  carry reaches the output (every message, tool call, parameter, flag);
+- agreement: two paths that should give the same answer do (streaming and
+  non-streaming, a round trip back to the input format, the typed and the
+  raw view of a value);
+- protocol shape: the output obeys its format's grammar (event order, one
+  open block at a time, ids that pair up, required fields present).
+
+How to write a spec that finds bugs rather than one that passes:
+- State the general property; never encode a particular trigger value.
+  The search finds the inputs.
+- Make the variation an input. When the input can arrive in several legal
+  shapes (a value split into deltas or sent whole, events in different
+  orders), derive the shape from a generated field (for example the bits
+  of an integer field) instead of replaying one fixed shape.
+- Normalise instead of skipping. If a generated field would put an input
+  outside the property (a random finish reason, a stray flag), clear or
+  fix that field and still check the input; returning true early for most
+  inputs leaves the search nothing to check.
+- When a constructor calls code the model cannot follow (tokenizers,
+  network clients), build the value the constructor would build in its
+  fallback path with a struct literal.
 
 Output exactly one fenced Go code block containing the complete contents of a
 file named go2lean_specs_test.go, starting with the package clause of the
