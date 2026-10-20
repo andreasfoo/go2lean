@@ -510,7 +510,21 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		tag, _ := obj["tag"].(float64)
 		for _, a := range p.Alts {
 			if float64(a.Tag) == tag {
-				return literal(abi, a, obj["v"])
+				lit, err := literal(abi, a, obj["v"])
+				if err != nil {
+					return "", err
+				}
+				// An untyped constant takes its default type in an
+				// interface: int64(5), not 5, for an int64 alternative.
+				switch {
+				case a.Kind == contract.ABIInt && a.GoType != "int",
+					a.Kind == contract.ABIString && a.GoType != "string",
+					a.Kind == contract.ABIBool && a.GoType != "bool":
+					if !strings.HasPrefix(lit, a.GoType+"(") {
+						lit = a.GoType + "(" + lit + ")"
+					}
+				}
+				return lit, nil
 			}
 		}
 		return "", fmt.Errorf("%s: no alternative with type tag %v", p.Go, obj["tag"])

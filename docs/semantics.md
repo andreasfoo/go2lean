@@ -219,7 +219,7 @@ writes the same value as a Go literal.
 | structs | field by field; an SDK union (`Of<Variant>` fields) gets one variant, three times in four one the call tree reads; the live variant's pointer costs no depth |
 | pointers | non-nil by default (nil with `-nil-inputs`); recursive types through a bounded type table |
 | maps | nil (with `-nil-inputs`) or up to `maxlen` entries, keys mostly from the strings the call tree uses as map keys |
-| `interface{}` | nil, string, bool, int, `map[string]interface{}`, `[]interface{}` |
+| `interface{}` | nil, string, bool, int, `map[string]interface{}`, `[]interface{}`, and (at the top level) up to six concrete types the function's call tree asserts empty interfaces to (`x.(int64)`, a type switch's cases), so that every case can be taken; the PoC writes them typed (`uint8(0)`) |
 | interfaces with methods, funcs, channels, floats | their zero value (nil, 0) |
 | `context.Context` | `context.Background()` |
 | unexported fields of another package's struct | their zero value (a test cannot set them) |

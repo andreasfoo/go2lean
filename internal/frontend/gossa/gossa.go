@@ -3642,7 +3642,7 @@ func abiOf(f *ssa.Function, json *jsonTable) (*contract.ABI, error) {
 		abi.Method = f.Name()
 	}
 	pkg := funcPkg(f)
-	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}, fset: f.Prog.Fset, json: json}
+	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}, fset: f.Prog.Fset, json: json, asserted: assertedTypes(f)}
 	for _, p := range f.Params {
 		if isTestingType(p.Type()) {
 			return nil, fmt.Errorf("test helper: parameter %s has type %s", p.Name(), p.Type())
@@ -3684,6 +3684,9 @@ type abiBuilder struct {
 	// json is the package's JSON table, for SDK response types (nil: no
 	// JSON descriptions).
 	json *jsonTable
+	// asserted are the concrete types the function's call tree asserts
+	// empty interfaces to: more values an interface input may hold.
+	asserted []types.Type
 }
 
 // register adds a recursive named struct type to the table.
@@ -4032,14 +4035,67 @@ func (ab *abiBuilder) mapParam(name string, m *types.Map, src, ipath string, ext
 		Kind: contract.ABIMap, Key: &key, Value: &val, Zero: "nil"}, true
 }
 
+// assertedTypes lists the concrete types (at most 6) that f and the
+// functions it calls, three calls deep, assert empty interfaces to: x.(T)
+// and the cases of type switches. Interface types, floats and channels are
+// left out, as are types the model cannot generate (anyParam skips them).
+func assertedTypes(f *ssa.Function) []types.Type {
+	var out []types.Type
+	seen := map[*ssa.Function]bool{}
+	var walk func(f *ssa.Function, depth int)
+	walk = func(f *ssa.Function, depth int) {
+		if f == nil || seen[f] || depth > 3 || len(out) >= 6 || (f.Pkg != nil && isStdlib(f.Pkg.Pkg.Path())) {
+			return
+		}
+		seen[f] = true
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				switch in := in.(type) {
+				case *ssa.TypeAssert:
+					it, ok := in.X.Type().Underlying().(*types.Interface)
+					if !ok || !it.Empty() || types.IsInterface(in.AssertedType) {
+						continue
+					}
+					switch u := in.AssertedType.Underlying().(type) {
+					case *types.Basic:
+						if u.Info()&(types.IsInteger|types.IsString|types.IsBoolean) == 0 {
+							continue
+						}
+					case *types.Chan, *types.Signature:
+						continue
+					}
+					if len(out) < 6 && !slices.ContainsFunc(out, func(t types.Type) bool { return types.Identical(t, in.AssertedType) }) {
+						out = append(out, in.AssertedType)
+					}
+				case ssa.CallInstruction:
+					walk(in.Common().StaticCallee(), depth+1)
+				}
+			}
+		}
+		for _, af := range f.AnonFuncs {
+			walk(af, depth)
+		}
+	}
+	walk(f, 0)
+	return out
+}
+
 // anyParam describes an empty interface input: nil, or a string, bool or
 // int, or (outside another interface's contents) a map[string]interface{}
-// or []interface{} of such values, the shapes decoded JSON has.
+// or []interface{} of such values, the shapes decoded JSON has, or a value
+// of a type the function's call tree asserts to (ab.asserted).
 func (ab *abiBuilder) anyParam(name, src, ipath string, extra []string, stack []*types.Named) contract.ABIParam {
 	alts := []types.Type{types.Typ[types.String], types.Typ[types.Bool], types.Typ[types.Int]}
 	if ab.anyDepth == 0 {
 		empty := types.NewInterfaceType(nil, nil)
 		alts = append(alts, types.NewMap(types.Typ[types.String], empty), types.NewSlice(empty))
+		// The types the code asserts to (a type switch's int64, uint8 or
+		// json.Number cases), so that every case can be taken.
+		for _, at := range ab.asserted {
+			if !slices.ContainsFunc(alts, func(t types.Type) bool { return types.Identical(t, at) }) {
+				alts = append(alts, at)
+			}
+		}
 	}
 	ab.anyDepth++
 	defer func() { ab.anyDepth-- }()

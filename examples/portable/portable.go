@@ -116,3 +116,21 @@ func Head(xs []int) int {
 	}
 	return 100 / v
 }
+
+// Per is a hundred over a count of any integer type, cast-style. Bug: a
+// uint8 count of 0 (an input of type any reaches every case the switch
+// names).
+func Per(v any) int {
+	switch x := v.(type) {
+	case int64:
+		if x == 0 {
+			return 0
+		}
+		return int(100 / x)
+	case uint8:
+		return 100 / int(x)
+	case string:
+		return len(x)
+	}
+	return -1
+}

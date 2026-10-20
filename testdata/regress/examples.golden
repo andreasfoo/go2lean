@@ -106,6 +106,7 @@ exhausted_havoc portable_intpart_nopanic
 exhausted portable_meta_get_nopanic
 confirmed portable_parse_c0_nopanic
 confirmed portable_parse_c_nopanic
+confirmed portable_per_nopanic
 exhausted portable_permax_nopanic
 exhausted portable_permb_nopanic
 confirmed portable_pick_nopanic
