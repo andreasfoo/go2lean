@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/andreasfoo/go2lean/internal/contract"
 	"strings"
 	"testing"
 )
@@ -50,5 +51,20 @@ func TestNormalizeSpec(t *testing.T) {
 	}
 	if got := normalizeSpec("func F() {}\n", "oob"); !strings.HasPrefix(got, "package oob\n") {
 		t.Fatalf("missing clause not added: %q", got)
+	}
+}
+
+func TestEntryPoints(t *testing.T) {
+	r := &contract.ModelReport{Funcs: []contract.ModelFunc{
+		{ID: 0, Name: "Convert", Calls: []int{1, 2}},
+		{ID: 1, Name: "helper"},
+		{ID: 2, Name: "Exported"},                   // called by Convert: not an entry point
+		{ID: 3, Name: "conv.Next", Calls: []int{3}}, // reached through an interface
+		{ID: 4, Name: "SpecConvertOK", SpecFor: "Convert"},
+		{ID: 5, Name: "Broken", Status: "rejected"},
+	}}
+	got := entryPoints(r)
+	if strings.Join(got, ",") != "Convert,conv.Next" {
+		t.Errorf("entry points %v, want [Convert conv.Next]", got)
 	}
 }

@@ -79,6 +79,14 @@ transforms data, the strongest properties are relations:
 - protocol shape: the output obeys its format's grammar (event order, one
   open block at a time, ids that pair up, required fields present).
 
+Where to spend the specs: on the entry points first (the model report
+lists them: exported functions nothing else in the package calls, such as
+the converter of a whole request, response or stream). Most bugs are in
+how an entry point combines its helpers (a field it never copies, a case
+it never routes, a helper it skips), and a property of a small helper
+alone cannot see them. Write at least one conservation or agreement spec
+for every entry point before writing specs for helpers.
+
 How to write a spec that finds bugs rather than one that passes:
 - State the general property; never encode a particular trigger value.
   The search finds the inputs.
@@ -186,6 +194,9 @@ func packageSource(dir string) (string, error) {
 func reportSummary(r *contract.ModelReport) string {
 	const maxIssues = 3
 	var b strings.Builder
+	if eps := entryPoints(r); len(eps) > 0 {
+		fmt.Fprintf(&b, "Entry points (exported, called by nothing else in the package): %s\n\n", strings.Join(eps, ", "))
+	}
 	for _, f := range r.Funcs {
 		fmt.Fprintf(&b, "- %s: %s (%s)", f.Name, f.GoSig, f.Status)
 		if f.SpecFor != "" {
@@ -207,6 +218,31 @@ func reportSummary(r *contract.ModelReport) string {
 		}
 	}
 	return b.String()
+}
+
+// entryPoints lists the modelled exported functions and methods that no
+// other function of the package calls (specs excluded).
+func entryPoints(r *contract.ModelReport) []string {
+	called := map[int]bool{}
+	for _, f := range r.Funcs {
+		for _, c := range f.Calls {
+			if c != f.ID {
+				called[c] = true
+			}
+		}
+	}
+	var eps []string
+	for _, f := range r.Funcs {
+		name := f.Name
+		if i := strings.LastIndex(name, "."); i >= 0 {
+			name = name[i+1:]
+		}
+		if f.SpecFor != "" || f.Status == "rejected" || called[f.ID] || name == "" || name[0] < 'A' || name[0] > 'Z' || strings.HasPrefix(name, "Spec") {
+			continue
+		}
+		eps = append(eps, f.Name)
+	}
+	return eps
 }
 
 func proposePrompt(pkgPath, pkgName, source string, r *contract.ModelReport) string {
