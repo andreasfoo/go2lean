@@ -12,8 +12,65 @@ set_option maxRecDepth 100000
 def jsonTable : GoSSA.JTable :=
   { descs := #[], zeros := #[] }
 
-/-- func(level string) bool (status: partial) -/
+/-- func(level string) int (status: partial) -/
 def f0 : GoSSA.Func := {
+  name := "Half", params := [0], nvals := 27, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 .makeMap [],
+                 .op 2 (.strConst [108, 111, 119]) [],
+                 .op 3 (.const (.int 64 1024#64)) [],
+                 .op 4 .mapUpdate [1, 2, 3],
+                 .op 5 (.strConst [109, 101, 100, 105, 117, 109]) [],
+                 .op 6 (.const (.int 64 4096#64)) [],
+                 .op 7 .mapUpdate [1, 5, 6],
+                 .op 8 (.strConst [104, 105, 103, 104]) [],
+                 .op 9 (.const (.int 64 16384#64)) [],
+                 .op 10 .mapUpdate [1, 8, 9],
+                 .op 12 .nilKnown [1]],
+      term := .br 12 5 [] 6 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 17 (.strConst [111, 100, 100, 32, 98, 117, 100, 103, 101, 116]) [],
+                 .op 18 (.box 398550328) [17]],
+      term := .panic .explicit },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 19 (.const (.int 64 2#64)) [],
+                 .op 20 .sdiv [15, 19]],
+      term := .ret 20 },
+    -- 3: cond.true
+    { params := [],
+      instrs := #[.op 21 (.const (.int 64 2048#64)) [],
+                 .op 22 .slt [15, 21]],
+      term := .br 22 1 [] 2 [] },
+    -- 4: cond.true
+    { params := [],
+      instrs := #[.op 23 (.const (.int 64 3#64)) [],
+                 .op 24 .srem [15, 23],
+                 .op 25 (.const (.int 64 0#64)) [],
+                 .op 26 .ne [24, 25]],
+      term := .br 26 3 [] 2 [] },
+    -- 5: entry.known
+    { params := [],
+      instrs := #[.op 11 (.mapLookup true (.int 64 0#64)) [1, 0]],
+      term := .jump 7 [] },
+    -- 6: entry.unknown
+    { params := [],
+      instrs := #[.havoc 13 0,
+                 .havoc 14 1,
+                 .op 11 .mkTuple [13, 14]],
+      term := .jump 7 [] },
+    -- 7: entry.known-join
+    { params := [],
+      instrs := #[.op 15 (.extract 0) [11],
+                 .op 16 (.extract 1) [11]],
+      term := .br 16 4 [] 2 [] }
+  ] }
+
+/-- func(level string) bool (status: partial) -/
+def f1 : GoSSA.Func := {
   name := "Known", params := [0], nvals := 17, entry := 0,
   blocks := #[
     -- 0: entry
@@ -36,8 +93,8 @@ def f0 : GoSSA.Func := {
       term := .jump 3 [] },
     -- 2: entry.unknown
     { params := [],
-      instrs := #[.havoc 13 0,
-                 .havoc 14 1,
+      instrs := #[.havoc 13 2,
+                 .havoc 14 3,
                  .op 11 .mkTuple [13, 14]],
       term := .jump 3 [] },
     -- 3: entry.known-join
@@ -48,7 +105,7 @@ def f0 : GoSSA.Func := {
   ] }
 
 /-- func(level string, max int) int (status: partial) -/
-def f1 : GoSSA.Func := {
+def f2 : GoSSA.Func := {
   name := "Share", params := [0, 1], nvals := 34, entry := 0,
   blocks := #[
     -- 0: entry
@@ -90,8 +147,8 @@ def f1 : GoSSA.Func := {
       term := .jump 5 [] },
     -- 4: entry.unknown
     { params := [],
-      instrs := #[.havoc 14 2,
-                 .havoc 15 3,
+      instrs := #[.havoc 14 4,
+                 .havoc 15 5,
                  .op 12 .mkTuple [14, 15]],
       term := .jump 5 [] },
     -- 5: entry.known-join
@@ -105,7 +162,7 @@ def f1 : GoSSA.Func := {
       term := .jump 8 [] },
     -- 7: if.done.unknown
     { params := [],
-      instrs := #[.havoc 30 4],
+      instrs := #[.havoc 30 6],
       term := .jump 8 [] },
     -- 8: if.done.known-join
     { params := [],
@@ -114,6 +171,6 @@ def f1 : GoSSA.Func := {
       term := .ret 33 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1], havocWidths := #[64, 1, 64, 1, 64] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2], havocWidths := #[64, 1, 64, 1, 64, 1, 64] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_tables

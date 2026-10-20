@@ -150,6 +150,9 @@ def alphabet : Array Nat := #[97, 98, 99, 65, 66, 48, 49, 57, 32, 45, 95, 46, 47
 /-- The depth budget a top-level argument starts with. -/
 def topDepth : Nat := 4
 
+/-- The depth the exhaustive engine starts at (its domains stay small). -/
+def enumTop : Nat := 2
+
 /-- The field name a generator stands for. -/
 def Gen.name : Gen → String
   | .hot inner => inner.name
@@ -358,8 +361,12 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     -- Like a slice: halved bounds per level, empty at depth zero. Keys
     -- equal to an earlier one are dropped (a map holds each once).
     let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else max (min maxLen 1) (maxLen / 2 ^ (topDepth - depth))
+    -- Nil one time in five. Below the top a map is nil even without
+    -- allowNil: a field the client left out decodes as a nil map, and
+    -- reading one is safe in Go (no trivial counterexample, as a nil
+    -- pointer would be), while writing into one is a real bug.
     let (roll, g) := randNat g 0 4
-    if allowNil && roll == 0 then (.opaqueNil, g, heap) else
+    if (allowNil || depth < topDepth) && roll == 0 then (.opaqueNil, g, heap) else
     let (len, g) := randNat g 0 maxLen
     let (entries, g, heap) := (List.range len).foldl (fun (acc, g, heap) _ =>
       let (k, g, heap) := genVal pf extra g heap pool table (depth - 1) allowNil key
@@ -865,8 +872,9 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
       let (vs, heap) := build heap
       (.arr vs, heap)
   | .mapOf _ key val _ =>
-    -- nil (when allowed), empty, and every map of one entry.
-    (if allowNil then [fun heap => (.opaqueNil, heap)] else []) ++
+    -- nil (when allowed, and always below the top, as in genVal), empty,
+    -- and every map of one entry.
+    (if allowNil || depth < enumTop then [fun heap => (.opaqueNil, heap)] else []) ++
     [fun heap => let (p, heap) := heapAlloc heap (mapObj []); (.boxed 1 p, heap)] ++
     (if depth == 0 then [] else
       (enumList extra maxLen pool table (depth - 1) allowNil [key, val]).map fun build heap =>
@@ -979,7 +987,7 @@ def domainSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens 
 built one at a time inside the engine's budget. -/
 def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : List Gen)
     (table : TypeTable := #[]) (allowNil : Bool := true) : List (Heap Val → List Val × Heap Val) :=
-  enumGen.enumList extra maxLen pool table 2 allowNil gens
+  enumGen.enumList extra maxLen pool table enumTop allowNil gens
 
 /-- Try every input in the small domain. Prints a counterexample line, or
 `{"found": false, "exhaustive": true, ...}` when the whole domain holds, or

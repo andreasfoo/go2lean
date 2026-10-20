@@ -309,6 +309,7 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 	touched := map[*ssa.Global]bool{}
 	inits := map[*ssa.Global]ssa.Value{}
 	loads := map[*ssa.Global][]*ssa.UnOp{}
+	alias := map[*ssa.Global]*ssa.Global{} // var B = A, set by an initializer
 	for f := range ssautil.AllFunctions(sprog) {
 		if testHelper(f) {
 			continue
@@ -330,6 +331,11 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 							known = true
 						case *ssa.MakeMap:
 							known = constMapEntries(v) != nil
+						case *ssa.UnOp:
+							if a, ok := v.X.(*ssa.Global); ok && v.Op == token.MUL && alias[g] == nil {
+								alias[g] = a
+								continue
+							}
 						}
 						if known {
 							if _, twice := inits[g]; twice {
@@ -348,7 +354,20 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 			}
 		}
 	}
-	// A lookup table stays one only while every load just reads it.
+	// An alias of a lookup table (var B = A) is the same table; one that
+	// another initializer also writes is not.
+	for b, a := range alias {
+		if _, ok := inits[a].(*ssa.MakeMap); ok {
+			if _, twice := inits[b]; twice {
+				touched[b] = true
+			}
+			inits[b] = inits[a]
+		} else {
+			touched[b] = true
+		}
+	}
+	// A lookup table stays one only while every load just reads it (or
+	// sets an alias).
 	for g, init := range inits {
 		if _, ok := init.(*ssa.MakeMap); !ok {
 			continue
@@ -357,6 +376,10 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 			for _, r := range *u.Referrers() {
 				switch r := r.(type) {
 				case *ssa.Lookup, *ssa.Range:
+				case *ssa.Store:
+					if b, ok := r.Addr.(*ssa.Global); !ok || alias[b] != g {
+						touched[g] = true
+					}
 				case *ssa.Call:
 					if b, ok := r.Call.Value.(*ssa.Builtin); !ok || b.Name() != "len" {
 						touched[g] = true
@@ -364,6 +387,15 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 				default:
 					touched[g] = true
 				}
+			}
+		}
+	}
+	// A table and its aliases share one map: a write through one spoils all.
+	for changed := true; changed; {
+		changed = false
+		for b, a := range alias {
+			if _, table := inits[a].(*ssa.MakeMap); table && touched[a] != touched[b] {
+				touched[a], touched[b], changed = true, true, true
 			}
 		}
 	}
