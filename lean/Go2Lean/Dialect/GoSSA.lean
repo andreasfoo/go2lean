@@ -365,6 +365,14 @@ inductive Op where
   | unbox (tag : Nat) (commaOk : Bool) (zero : Val)
   /-- Is it known whether this func/map/channel/interface value is nil? -/
   | nilKnown
+  /-- Is this error value one whose identity the model knows: nil, a
+  sentinel (`.boxed` with the tag of `*errors.errorString`) or another boxed
+  error? An anonymous `.err true` (made by the standard library, or havoc)
+  may or may not be a given sentinel. -/
+  | errKnown
+  /-- As `errKnown` for `errors.Is`: nil or a value with this tag (a
+  sentinel); another boxed error may wrap one (its `Unwrap` or `Is`). -/
+  | errTagKnown (tag : Nat)
   /-- Is this func/map/channel/interface value nil? (Only on known values.) -/
   | isNilOpaque
   -- maps the program builds: `.boxed 1 p`, `p` pointing at an `.arr` of
@@ -425,6 +433,9 @@ def eqVal : Val → Val → Option Bool
   | .structv as, .structv bs => eqVals as bs
   | .bool a, .bool b => some (a == b)
   | .err a, .err b => some (a == b)
+  -- A nil error is no boxed one (a sentinel, a value of an error type).
+  | .err false, .boxed .. => some false
+  | .boxed .., .err false => some false
   | .ptr r p, .ptr r' p' => some (r == r' && p == p')
   | .boxed t v, .boxed t' v' => if t == t' then eqVal v v' else some false
   | .opaqueNil, .opaqueNil => some true
@@ -778,6 +789,8 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .reflectIsZero, [.boxed _ v] =>
     match isZeroVal v with | some b => .ok (.bool b) | none => .panic .modelStuck
   | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
+  | .errKnown, [x] => .ok (.bool (match x with | .boxed .. | .err false => true | _ => false))
+  | .errTagKnown tag, [x] => .ok (.bool (match x with | .boxed t _ => t == tag | .err false => true | _ => false))
   | .isNilOpaque, [x] => .ok (.bool (match x with | .opaqueNil => true | _ => false))
   | .add, args => binInt (· + ·) args
   | .sub, args => binInt (· - ·) args
@@ -891,6 +904,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | _ => .panic .modelStuck
   | .isNil, [.ptr r _] => .ok (.bool (r == 0))
   | .isNil, [.err nonNil] => .ok (.bool !nonNil)
+  | .isNil, [.boxed ..] => .ok (.bool false)
   | .strLen, [.str _ _ len] => .ok (.int 64 len)
   | .strIndex, [s@(.str _ _ len), i] =>
     match asIndex i, strBytes heap s with

@@ -4,6 +4,7 @@
 package portable
 
 import (
+	"errors"
 	"math/rand"
 	"regexp"
 	"strconv"
@@ -86,4 +87,32 @@ func Unit(s string) string {
 		return m[2]
 	}
 	return ""
+}
+
+// ErrEmpty is a sentinel error.
+var ErrEmpty = errors.New("empty")
+
+func first(xs []int) (int, error) {
+	if len(xs) == 0 {
+		return 0, ErrEmpty
+	}
+	return xs[0], nil
+}
+
+// Count is ten over the length: the sentinel check covers the empty slice
+// (holds; errors.Is on a sentinel the model returned is exact).
+func Count(xs []int) int {
+	if _, err := first(xs); errors.Is(err, ErrEmpty) {
+		return 0
+	}
+	return 10 / len(xs)
+}
+
+// Head is a hundred over the first element. Bug: a first element of 0.
+func Head(xs []int) int {
+	v, err := first(xs)
+	if err == ErrEmpty {
+		return -1
+	}
+	return 100 / v
 }

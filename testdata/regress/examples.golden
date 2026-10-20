@@ -12,7 +12,7 @@ exhausted builder_parse_specparseemptyfails
 exhausted builder_parse_specparseerrzero
 exhausted builder_tag_nopanic
 exhausted builder_tag_spectaglen
-exhausted_havoc checked_double_nopanic
+exhausted checked_double_nopanic
 confirmed checked_double_specdoublehalves
 exhausted checked_half_nopanic
 exhausted checked_half_spechalfnoerror
@@ -98,7 +98,10 @@ exhausted opaque_describe_nopanic
 confirmed opaque_lookup_nopanic
 exhausted overflow_sum_nopanic
 confirmed overflow_sum_specsum
+exhausted portable_count_nopanic
 exhausted_havoc portable_digit_nopanic
+exhausted portable_first_nopanic
+confirmed portable_head_nopanic
 exhausted_havoc portable_intpart_nopanic
 exhausted portable_meta_get_nopanic
 confirmed portable_parse_c0_nopanic
@@ -127,7 +130,7 @@ confirmed strs_hextag_nopanic
 exhausted strs_isadmin_nopanic
 exhausted strs_label_nopanic
 exhausted strs_label_speclabelformat
-exhausted_havoc strs_parseport_nopanic
+exhausted strs_parseport_nopanic
 confirmed strs_parseport_specparseportrange
 confirmed strs_scheme_nopanic
 confirmed strs_short_nopanic

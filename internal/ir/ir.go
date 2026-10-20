@@ -95,6 +95,19 @@ type OpaqueNonNil struct{}
 
 func (OpaqueNonNil) Lean() string { return "(.boxed 0 .unit)" }
 
+// Boxed is a value stored in an interface with the tag of its type.
+type Boxed struct {
+	Tag uint32
+	V   Val
+}
+
+func (b Boxed) Lean() string { return fmt.Sprintf("(.boxed %d %s)", b.Tag, b.V.Lean()) }
+
+// ErrTagKnown is errTagKnown: is this error nil or boxed with Tag?
+type ErrTagKnown struct{ Tag uint32 }
+
+func (o ErrTagKnown) Lean() string { return fmt.Sprintf("(.errTagKnown %d)", o.Tag) }
+
 // EmptyStr is the empty string value.
 type EmptyStr struct{}
 

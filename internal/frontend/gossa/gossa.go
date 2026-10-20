@@ -1270,6 +1270,15 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		return fmt.Errorf("unsupported binary operator %s", x.Op)
 	}
 	eqOp := x.Op == token.EQL || x.Op == token.NEQ
+	if eqOp && isError(x.X.Type()) {
+		for _, pair := range [][2]ssa.Value{{x.X, x.Y}, {x.Y, x.X}} {
+			if s, ok := sentinelErr(pair[1]); ok {
+				if _, isNil := pair[0].(*ssa.Const); !isNil {
+					return t.sentinelCompare(t.def(x), pair[0], s, x.Op == token.NEQ, x.Op.String()+" "+pair[1].Name())
+				}
+			}
+		}
+	}
 	if isString(x.X.Type()) {
 		switch x.Op {
 		case token.ADD:
@@ -1886,6 +1895,10 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
+		if s, ok := sentinelErr(x); ok {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
+			return nil
+		}
 		if _, ok := compiledPattern(x); ok {
 			// A compiled constant regexp: only its modelled methods look
 			// into it (regexpSubmatch).
@@ -2221,6 +2234,11 @@ func (t *fnState) call(x *ssa.Call) error {
 		// the As* methods of unions): the JSON model's SDK decoding.
 		if done, err := t.jsonDecode(x); done || err != nil {
 			return err
+		}
+	}
+	if callee != nil && callee.String() == "errors.Is" && len(x.Call.Args) == 2 {
+		if s, ok := sentinelErr(x.Call.Args[1]); ok {
+			return t.sentinelCompare(t.def(x), x.Call.Args[0], s, false, "errors.Is")
 		}
 	}
 	if callee != nil && callee.String() == "errors.As" && len(x.Call.Args) == 2 {
@@ -2765,31 +2783,105 @@ func compiledPattern(v ssa.Value) (*regexp.Regexp, bool) {
 	return re, err == nil
 }
 
+// loadedInit is the value a package initializer stores in the package
+// variable v loads, when it stores one exactly once.
+func loadedInit(v ssa.Value) (ssa.Value, bool) {
+	u, ok := v.(*ssa.UnOp)
+	if !ok || u.Op != token.MUL {
+		return nil, false
+	}
+	g, ok := u.X.(*ssa.Global)
+	if !ok || g.Pkg == nil {
+		return nil, false
+	}
+	initFn := g.Pkg.Func("init")
+	if initFn == nil {
+		return nil, false
+	}
+	var init ssa.Value
+	for _, b := range initFn.Blocks {
+		for _, in := range b.Instrs {
+			if st, ok := in.(*ssa.Store); ok && st.Addr == g {
+				if init != nil {
+					return nil, false // written twice
+				}
+				init = st.Val
+			}
+		}
+	}
+	return init, init != nil
+}
+
+// sentinelErr is the identity of a sentinel error: v loads a package
+// variable its initializer sets to errors.New or fmt.Errorf of a constant
+// (io.EOF, context.Canceled, ErrNotFound), assumed not to be reassigned.
+// Its model is a boxed *errors.errorString whose payload is the identity.
+func sentinelErr(v ssa.Value) (ir.Val, bool) {
+	init, ok := loadedInit(v)
+	if !ok {
+		return nil, false
+	}
+	c, ok := init.(*ssa.Call)
+	if !ok || len(c.Call.Args) != 1 {
+		return nil, false
+	}
+	if f := c.Call.StaticCallee(); f == nil || (f.String() != "errors.New" && f.String() != "fmt.Errorf") {
+		return nil, false
+	}
+	if k, ok := c.Call.Args[0].(*ssa.Const); !ok || k.Value == nil || k.Value.Kind() != constant.String {
+		return nil, false
+	}
+	h := fnv.New32a()
+	h.Write([]byte(v.(*ssa.UnOp).X.(*ssa.Global).String()))
+	return ir.Boxed{Tag: sentinelTag, V: ir.IntVal{Width: 64, Bits: fmt.Sprint(h.Sum32())}}, true
+}
+
+// sentinelTag tags sentinel errors: errors.New returns an *errors.errorString.
+var sentinelTag = func() uint32 {
+	h := fnv.New32a()
+	h.Write([]byte("*errors.errorString"))
+	return h.Sum32()
+}()
+
+// sentinelCompare lowers err == S, err != S and errors.Is(err, S) for a
+// sentinel S: decided when err is known (nil, a sentinel, or for == another
+// boxed error; errors.Is would call an error type's Unwrap or Is), havoc
+// when it is an error the standard library made or the model knows nothing
+// about, which may be, or wrap, S.
+func (t *fnState) sentinelCompare(dst ir.Var, errV ssa.Value, s ir.Val, neg bool, what string) error {
+	e, err := t.val(errV)
+	if err != nil {
+		return err
+	}
+	sv := t.fresh()
+	t.emit(ir.Instr{Dst: sv, Op: ir.Const{V: s}})
+	known := t.fresh()
+	var check ir.Op = ir.Simple("errKnown")
+	if what == "errors.Is" {
+		check = ir.ErrTagKnown{Tag: sentinelTag}
+	}
+	t.emit(ir.Instr{Dst: known, Op: check, Args: []ir.Var{e}})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: known, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".err-known"}, ir.Block{Name: name + ".err-unknown"}, ir.Block{Name: name + ".err-join"})
+	t.cur = &t.out.Blocks[yes]
+	t.emit(ir.Instr{Dst: dst, Op: pick(!neg, "eq", "ne"), Args: []ir.Var{e, sv}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	t.emit(ir.Instr{Dst: dst, HavocSite: t.prog.newHavoc(ir.HavocBool, t.f.Name()+": "+what, "opaque-op", "")})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
+}
+
 // regexpPattern is the constant pattern a *regexp.Regexp was compiled
 // from by regexp.MustCompile: v is that call, or a load of a package
 // variable its package initializer sets to that call (assumed not to be
 // reassigned: a compiled pattern is a constant in all but name).
 func regexpPattern(v ssa.Value) (string, bool) {
-	if u, ok := v.(*ssa.UnOp); ok && u.Op == token.MUL {
-		g, ok := u.X.(*ssa.Global)
-		if !ok || g.Pkg == nil {
-			return "", false
-		}
-		initFn := g.Pkg.Func("init")
-		if initFn == nil {
-			return "", false
-		}
-		var init ssa.Value
-		for _, b := range initFn.Blocks {
-			for _, in := range b.Instrs {
-				if st, ok := in.(*ssa.Store); ok && st.Addr == g {
-					if init != nil {
-						return "", false // written twice
-					}
-					init = st.Val
-				}
-			}
-		}
+	if init, ok := loadedInit(v); ok {
 		v = init
 	}
 	c, ok := v.(*ssa.Call)
