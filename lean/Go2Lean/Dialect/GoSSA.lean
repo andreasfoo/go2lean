@@ -1,6 +1,5 @@
 import Go2Lean.SSA.Core
-import Lean.Data.Json.Parser
-import Lean.Data.Json.Printer
+import Lean.Data.Json
 
 /-!
 # GoSSA dialect
@@ -117,6 +116,75 @@ structure JTable where
   boxed : List (Nat × Nat) := []
   basic : List Nat := []
   deriving Repr
+
+/-- A zero value in the frontend's zero-model JSON (`{"k": "int", "w": 64}`,
+`{"k": "struct", "fields": [...]}`, ...). -/
+partial def zeroOfJson (j : Lean.Json) : Val :=
+  match (j.getObjValAs? String "k").toOption with
+  | some "int" => .int ((j.getObjValAs? Nat "w").toOption.getD 64) 0
+  | some "bool" => .bool false
+  | some "err" => .err false
+  | some "str" => .str 0 0#64 0#64
+  | some "nil" => .opaqueNil
+  | some "ptr" => .ptr 0 []
+  | some "slice" => .slice 0 0#64 0#64 0#64
+  | some "struct" => .structv (((j.getObjValAs? (Array Lean.Json) "fields").toOption.getD #[]).toList.map zeroOfJson)
+  | some "arr" => .arr (((j.getObjValAs? (Array Lean.Json) "elems").toOption.getD #[]).toList.map zeroOfJson)
+  | _ => .unit
+
+def jBytesOf (j : Lean.Json) (key : String) : List Nat :=
+  ((j.getObjValAs? String key).toOption.getD "").toUTF8.toList.map (·.toNat)
+
+def jNatOf (j : Lean.Json) (key : String) : Nat := (j.getObjValAs? Nat key).toOption.getD 0
+
+def jFieldOfJson (j : Lean.Json) : JField :=
+  { key := jBytesOf j "key", idx := jNatOf j "idx", ty := jNatOf j "ty",
+    omitEmpty := (j.getObjValAs? Bool "oe").toOption.getD false,
+    omitZero := (j.getObjValAs? Bool "oz").toOption.getD false,
+    inline := (j.getObjValAs? Bool "in").toOption.getD false }
+
+def jDescOfJson (j : Lean.Json) : JDesc :=
+  let fields (key : String) : List JField :=
+    ((j.getObjValAs? (Array Lean.Json) key).toOption.getD #[]).toList.map jFieldOfJson
+  match (j.getObjValAs? String "k").toOption with
+  | some "str" => .str (jBytesOf j "dflt")
+  | some "bool" => .bool
+  | some "int" => .int (jNatOf j "w") ((j.getObjValAs? Bool "s").toOption.getD true)
+  | some "float" => .float
+  | some "bytes" => .bytes
+  | some "raw" => .raw
+  | some "slice" => .slice (jNatOf j "e")
+  | some "arr" => .arr (jNatOf j "n") (jNatOf j "e")
+  | some "ptr" => .ptr (jNatOf j "e")
+  | some "map" => .map (jNatOf j "key") (jNatOf j "val")
+  | some "iface" => .iface
+  | some "strct" =>
+    let md : Option JMeta := (j.getObjVal? "meta").toOption.bind fun m =>
+      if m matches .null then none else
+      some { field := jNatOf m "field", raw := jNatOf m "raw",
+             extra := (m.getObjValAs? Nat "extra").toOption,
+             members := ((m.getObjValAs? (Array Lean.Json) "members").toOption.getD #[]).toList.filterMap fun x =>
+               match x with
+               | .arr #[.str k, .num n] => some (k.toUTF8.toList.map (·.toNat), n.mantissa.toNat)
+               | _ => none }
+    .strct (fields "fields") md
+  | some "union" => .union (fields "variants")
+  | some "opt" => .opt (jNatOf j "e")
+  | _ => .opaque
+
+/-- The table from the frontend's JSON (a string in the generated module:
+a literal of thousands of descriptions is too slow to elaborate). -/
+def JTable.ofJsonString (s : String) : JTable :=
+  match Lean.Json.parse s with
+  | .ok j =>
+    { descs := ((j.getObjValAs? (Array Lean.Json) "descs").toOption.getD #[]).map jDescOfJson,
+      zeros := ((j.getObjValAs? (Array Lean.Json) "zeros").toOption.getD #[]).map zeroOfJson,
+      boxed := ((j.getObjValAs? (Array Lean.Json) "boxed").toOption.getD #[]).toList.filterMap fun x =>
+        match x with
+        | .arr #[.num t, .num d] => some (t.mantissa.toNat, d.mantissa.toNat)
+        | _ => none,
+      basic := ((j.getObjValAs? (Array Nat) "basic").toOption.getD #[]).toList }
+  | .error _ => { descs := #[], zeros := #[] }
 
 /-- Read-only memory: backing array `ref`, element index → 64-bit value. Loads
 of narrower element types truncate. Fixed for a whole run, so every function

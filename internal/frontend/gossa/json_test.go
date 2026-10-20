@@ -1,7 +1,6 @@
 package gossa
 
 import (
-	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
@@ -54,46 +53,58 @@ func TestJSONStructDescription(t *testing.T) {
 	pkg := checkJSONSrc(t)
 	j := newJSONTable(nil)
 	root := j.desc(pkg.Scope().Lookup("Node").Type())
-	got := j.descs[root]
-	for _, want := range []string{
-		"key := [110, 97, 109, 101]",            // "name"
-		"key := [45]",                           // `json:"-,"` is the key "-"
-		"key := [78], idx := 4",                 // N: no name in the tag, the field name
-		"omitZero := true",                      // N
-		"key := [110, 101, 120, 116], idx := 7", // "next"
-		"omitEmpty := true",                     // next
-		"inline := true",                        // the embedded Inner
+	d := j.descs[root]
+	if d["k"] != "strct" {
+		t.Fatalf("Node: %v", d)
+	}
+	byKey := map[string]map[string]any{}
+	for _, f := range d["fields"].([]any) {
+		m := f.(map[string]any)
+		byKey[m["key"].(string)] = m
+	}
+	for key, want := range map[string]map[string]any{
+		"name":  {"idx": 0},
+		"-":     {"idx": 2},             // `json:"-,"` is the key "-"
+		"N":     {"idx": 4, "oz": true}, // no name in the tag: the field name
+		"next":  {"idx": 7, "oe": true},
+		"Inner": {"idx": 11, "in": true}, // embedded
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Node description lacks %q:\n%s", want, got)
+		f, ok := byKey[key]
+		if !ok {
+			t.Errorf("no field with key %q in %v", key, d)
+			continue
+		}
+		for k, v := range want {
+			if f[k] != v {
+				t.Errorf("field %q: %s = %v, want %v", key, k, f[k], v)
+			}
 		}
 	}
-	for _, unwanted := range []string{"idx := 1,", "idx := 3,"} { // Skip, hidden
-		if strings.Contains(got, unwanted) {
-			t.Errorf("Node description has %q:\n%s", unwanted, got)
+	for _, f := range byKey {
+		if idx := f["idx"]; idx == 1 || idx == 3 {
+			t.Errorf("field %v (Skip or hidden) described", f)
 		}
 	}
-	kinds := map[string]string{}
+	kinds := map[string]map[string]any{}
 	for k, i := range j.index {
 		kinds[k] = j.descs[i]
 	}
 	for typ, want := range map[string]string{
-		"[]byte":             ".bytes",
-		"any":                ".iface",
-		"error":              ".opaque",
-		"time.Time":          ".opaque", // a custom MarshalJSON the model does not follow
-		"*p.Node":            fmt.Sprintf("(.ptr %d)", root),
-		"map[string]*p.Node": "(.map ",
-		"int8":               "(.int 8 true)",
+		"[]byte": "bytes", "any": "iface", "error": "opaque", "time.Time": "opaque",
+		"*p.Node": "ptr", "map[string]*p.Node": "map", "int8": "int",
 	} {
-		if d, ok := kinds[typ]; !ok || !strings.HasPrefix(d, want) {
-			t.Errorf("%s: description %q, want prefix %q", typ, d, want)
+		if kinds[typ]["k"] != want {
+			t.Errorf("%s: description %v, want kind %s", typ, kinds[typ], want)
 		}
+	}
+	if kinds["*p.Node"]["e"] != root {
+		t.Errorf("*p.Node points at %v, want %d", kinds["*p.Node"]["e"], root)
 	}
 	if len(j.zeros) != len(j.descs) {
 		t.Errorf("%d zero values for %d descriptions", len(j.zeros), len(j.descs))
 	}
-	if !strings.Contains(j.lean(nil), "descs := #[") {
-		t.Errorf("table renders without descs")
+	lean := j.lean(nil)
+	if !strings.HasPrefix(lean, "GoSSA.JTable.ofJsonString \"{") || strings.Count(lean, "\n") > 0 {
+		t.Errorf("table term: %.80s", lean)
 	}
 }

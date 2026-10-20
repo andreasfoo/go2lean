@@ -10,28 +10,7 @@ set_option maxRecDepth 100000
 
 /-- The JSON descriptions of the types this package encodes or decodes. -/
 def jsonTable : GoSSA.JTable :=
-  { descs := #[(.str []),
-      (.strct [{ key := [109, 97, 120], idx := 0, ty := 2, omitEmpty := true, omitZero := false, inline := false }] none),
-      (.int 64 true),
-      (.strct [{ key := [114, 111, 108, 101], idx := 0, ty := 0, omitEmpty := false, omitZero := false, inline := false }, { key := [99, 111, 110, 116, 101, 110, 116], idx := 1, ty := 0, omitEmpty := true, omitZero := false, inline := false }, { key := [110], idx := 2, ty := 2, omitEmpty := false, omitZero := false, inline := false }, { key := [116, 97, 103, 115], idx := 3, ty := 4, omitEmpty := true, omitZero := false, inline := false }, { key := [109, 101, 116, 97], idx := 4, ty := 5, omitEmpty := true, omitZero := false, inline := false }, { key := [114, 101, 112, 108, 121], idx := 5, ty := 6, omitEmpty := true, omitZero := false, inline := false }] none),
-      (.slice 0),
-      (.map 0 0),
-      (.ptr 3),
-      (.strct [{ key := [83], idx := 0, ty := 2, omitEmpty := false, omitZero := false, inline := false }] none),
-      (.ptr 9),
-      (.strct [{ key := [87], idx := 0, ty := 2, omitEmpty := false, omitZero := false, inline := false }, { key := [72], idx := 1, ty := 2, omitEmpty := false, omitZero := false, inline := false }] none),
-      (.strct [{ key := [86], idx := 0, ty := 0, omitEmpty := false, omitZero := false, inline := false }, { key := [83, 101, 116], idx := 1, ty := 11, omitEmpty := false, omitZero := false, inline := false }] none),
-      .bool,
-      (.ptr 13),
-      (.strct [{ key := [83], idx := 0, ty := 0, omitEmpty := false, omitZero := false, inline := false }] none),
-      (.ptr 15),
-      (.map 0 16),
-      .iface,
-      (.ptr 0),
-      (.ptr 1)],
-    zeros := #[(.str 0 0#64 0#64), (.structv [(.int 64 0#64)]), (.int 64 0#64), (.structv [(.str 0 0#64 0#64), (.str 0 0#64 0#64), (.int 64 0#64), (.slice 0 0#64 0#64 0#64), .opaqueNil, (.ptr 0 []), (.str 0 0#64 0#64)]), (.slice 0 0#64 0#64 0#64), .opaqueNil, (.ptr 0 []), (.structv [(.int 64 0#64)]), (.ptr 0 []), (.structv [(.int 64 0#64), (.int 64 0#64)]), (.structv [(.str 0 0#64 0#64), (.bool false)]), (.bool false), (.ptr 0 []), (.structv [(.str 0 0#64 0#64)]), (.ptr 0 []), .opaqueNil, .opaqueNil, (.ptr 0 []), (.ptr 0 [])],
-    boxed := [(398550328, 0), (1728985994, 7), (947494092, 8), (2842685759, 10), (2515107422, 2), (907606219, 12), (35469445, 14), (4128492752, 17), (4148553980, 1), (1373013076, 18), (1850045306, 3), (2493357346, 6)],
-    basic := [398550328, 3365180733, 2090339911, 1353108765, 849577316] }
+  GoSSA.JTable.ofJsonString "{\"basic\":[398550328,3365180733,2090339911,1353108765,849577316],\"boxed\":[],\"descs\":[{\"k\":\"str\"},{\"fields\":[{\"idx\":0,\"in\":false,\"key\":\"max\",\"oe\":true,\"oz\":false,\"ty\":2}],\"k\":\"strct\",\"meta\":null},{\"k\":\"int\",\"s\":true,\"w\":64},{\"fields\":[{\"idx\":0,\"in\":false,\"key\":\"role\",\"oe\":false,\"oz\":false,\"ty\":0},{\"idx\":1,\"in\":false,\"key\":\"content\",\"oe\":true,\"oz\":false,\"ty\":0},{\"idx\":2,\"in\":false,\"key\":\"n\",\"oe\":false,\"oz\":false,\"ty\":2},{\"idx\":3,\"in\":false,\"key\":\"tags\",\"oe\":true,\"oz\":false,\"ty\":4},{\"idx\":4,\"in\":false,\"key\":\"meta\",\"oe\":true,\"oz\":false,\"ty\":5},{\"idx\":5,\"in\":false,\"key\":\"reply\",\"oe\":true,\"oz\":false,\"ty\":6}],\"k\":\"strct\",\"meta\":null},{\"e\":0,\"k\":\"slice\"},{\"k\":\"map\",\"key\":0,\"val\":0},{\"e\":3,\"k\":\"ptr\"}],\"zeros\":[{\"k\":\"str\"},{\"fields\":[{\"k\":\"int\",\"w\":64}],\"k\":\"struct\"},{\"k\":\"int\",\"w\":64},{\"fields\":[{\"k\":\"str\"},{\"k\":\"str\"},{\"k\":\"int\",\"w\":64},{\"k\":\"slice\"},{\"k\":\"nil\"},{\"k\":\"ptr\"},{\"k\":\"str\"}],\"k\":\"struct\"},{\"k\":\"slice\"},{\"k\":\"nil\"},{\"k\":\"ptr\"}]}"
 
 /-- func(s string) string (status: complete) -/
 def f0 : GoSSA.Func := {

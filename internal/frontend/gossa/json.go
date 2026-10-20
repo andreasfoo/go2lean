@@ -1,7 +1,7 @@
 package gossa
 
 import (
-	"fmt"
+	"encoding/json"
 	"go/constant"
 	"go/types"
 	"reflect"
@@ -17,27 +17,22 @@ import (
 // its interfaces may hold. The Lean module gets it as `jsonTable`; the
 // jsonMarshal / jsonDecode ops refer to entries by index.
 type jsonTable struct {
-	descs []string // Lean JDesc terms
-	zeros []string // Lean Val terms: the zero value of each entry's type
+	descs []map[string]any // JDesc entries as Lean's JTable.ofJsonString reads them
+	zeros []any            // the zero value of each entry's type (zero-model JSON)
 	index map[string]int
 	sprog *ssa.Program
 	// keys are the JSON keys of the struct fields described: decoding
 	// inputs need them.
 	keys []string
+	// ifaces records that some description is an interface, which needs
+	// the boxed types' descriptions.
+	ifaces bool
 }
 
 func newJSONTable(sprog *ssa.Program) *jsonTable {
 	return &jsonTable{index: map[string]int{}, sprog: sprog}
 }
 
-// leanBytes spells a string as the List Nat of its bytes.
-func leanBytes(s string) string {
-	parts := make([]string, len(s))
-	for i := 0; i < len(s); i++ {
-		parts[i] = fmt.Sprint(s[i])
-	}
-	return "[" + strings.Join(parts, ", ") + "]"
-}
 
 // sdkPkg says whether path is (inside) the OpenAI or Anthropic Go SDK,
 // whose types encode by their own rules (param objects, unions, Opt,
@@ -101,78 +96,89 @@ func (j *jsonTable) desc(t types.Type) int {
 	}
 	i := len(j.descs)
 	j.index[key] = i
-	j.descs = append(j.descs, ".opaque")
-	zero := ".unit"
+	j.descs = append(j.descs, opaqueDesc)
+	var zero any = map[string]any{"k": "unit"}
 	if z, ok := zeroVal(t); ok {
-		zero = z.Lean()
+		zero = zeroModel(z)
 	} else if isNilable(t) {
-		zero = ir.OpaqueNil{}.Lean()
+		zero = zeroModel(ir.OpaqueNil{})
 	}
 	j.zeros = append(j.zeros, zero)
 	j.descs[i] = j.build(t)
 	return i
 }
 
-func (j *jsonTable) build(t types.Type) string {
+var opaqueDesc = map[string]any{"k": "opaque"}
+
+func kind(k string, kv ...any) map[string]any {
+	m := map[string]any{"k": k}
+	for i := 0; i+1 < len(kv); i += 2 {
+		m[kv[i].(string)] = kv[i+1]
+	}
+	return m
+}
+
+func (j *jsonTable) build(t types.Type) map[string]any {
 	t = types.Unalias(t)
 	switch {
 	case namedIn(t, "/packages/param", "Opt"):
-		return fmt.Sprintf("(.opt %d)", j.desc(t.(*types.Named).TypeArgs().At(0)))
+		return kind("opt", "e", j.desc(t.(*types.Named).TypeArgs().At(0)))
 	case namedIn(t, "encoding/json", "RawMessage"):
-		return ".raw"
+		return kind("raw")
 	}
 	n, named := t.(*types.Named)
 	inSDK := named && n.Obj().Pkg() != nil && sdkPkg(n.Obj().Pkg().Path())
 	if st, ok := t.Underlying().(*types.Struct); ok && inSDK && hasMethod(t, "MarshalJSON") && isUnionStruct(st) {
-		var vs []string
+		vs := []any{}
 		for i := 0; i < st.NumFields(); i++ {
 			f := st.Field(i)
 			if f.Exported() && strings.HasPrefix(f.Name(), "Of") {
-				vs = append(vs, fmt.Sprintf("{ key := [], idx := %d, ty := %d }", i, j.desc(f.Type())))
+				vs = append(vs, map[string]any{"key": "", "idx": i, "ty": j.desc(f.Type())})
 			}
 		}
-		return "(.union [" + strings.Join(vs, ", ") + "])"
+		return kind("union", "variants", vs)
 	}
 	if isString(t) && inSDK && hasMethod(t, "Default") {
-		return fmt.Sprintf("(.str %s)", leanBytes(j.constDefault(t)))
+		return kind("str", "dflt", j.constDefault(t))
 	}
 	if !inSDK && (hasMethod(t, "MarshalJSON") || hasMethod(t, "UnmarshalJSON")) {
-		return ".opaque" // a custom encoding the model does not follow
+		return opaqueDesc // a custom encoding the model does not follow
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		switch {
 		case u.Info()&types.IsString != 0:
-			return "(.str [])"
+			return kind("str")
 		case u.Info()&types.IsBoolean != 0:
-			return ".bool"
+			return kind("bool")
 		case u.Info()&types.IsInteger != 0:
 			w, signed, _ := intWidth(t)
-			return fmt.Sprintf("(.int %d %v)", w, signed)
+			return kind("int", "w", w, "s", signed)
 		case u.Info()&types.IsFloat != 0:
-			return ".float"
+			return kind("float")
 		}
 	case *types.Slice:
 		if isByteSlice(t) {
-			return ".bytes"
+			return kind("bytes")
 		}
-		return fmt.Sprintf("(.slice %d)", j.desc(u.Elem()))
+		return kind("slice", "e", j.desc(u.Elem()))
 	case *types.Array:
-		return fmt.Sprintf("(.arr %d %d)", u.Len(), j.desc(u.Elem()))
+		return kind("arr", "n", u.Len(), "e", j.desc(u.Elem()))
 	case *types.Pointer:
-		return fmt.Sprintf("(.ptr %d)", j.desc(u.Elem()))
+		return kind("ptr", "e", j.desc(u.Elem()))
 	case *types.Map:
 		if _, _, isInt := intWidth(u.Key()); isString(u.Key()) || isInt {
-			return fmt.Sprintf("(.map %d %d)", j.desc(u.Key()), j.desc(u.Elem()))
+			return kind("map", "key", j.desc(u.Key()), "val", j.desc(u.Elem()))
 		}
 	case *types.Interface:
 		if !isError(t) {
-			return ".iface"
+			j.ifaces = true
+			return kind("iface")
 		}
 	case *types.Struct:
 		return j.structDesc(u)
 	}
-	return ".opaque"
+	return opaqueDesc
 }
 
 // isUnionStruct says whether st is an SDK union: its exported fields are
@@ -192,9 +198,9 @@ func isUnionStruct(st *types.Struct) bool {
 	return seen
 }
 
-func (j *jsonTable) structDesc(st *types.Struct) string {
-	var fields []string
-	meta := "none"
+func (j *jsonTable) structDesc(st *types.Struct) map[string]any {
+	fields := []any{}
+	var meta any
 	jsonKeys := map[string]string{} // Go field name -> JSON key
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
@@ -227,36 +233,37 @@ func (j *jsonTable) structDesc(st *types.Struct) string {
 		if !contains(j.keys, key) {
 			j.keys = append(j.keys, key)
 		}
-		fields = append(fields, fmt.Sprintf("{ key := %s, idx := %d, ty := %d, omitEmpty := %v, omitZero := %v, inline := %v }",
-			leanBytes(key), i, j.desc(f.Type()), contains(optList, "omitempty"), contains(optList, "omitzero"), inline))
+		fields = append(fields, map[string]any{"key": key, "idx": i, "ty": j.desc(f.Type()),
+			"oe": contains(optList, "omitempty"), "oz": contains(optList, "omitzero"), "in": inline})
 	}
-	return "(.strct [" + strings.Join(fields, ", ") + "] " + meta + ")"
+	return kind("strct", "fields", fields, "meta", meta)
 }
 
 // metaDesc describes the JSON metadata field (index fi) of an SDK response
 // type: where its raw text, ExtraFields and per-member respjson.Field go.
 // It is called after the typed fields before it were seen; members are
 // matched by Go field name.
-func (j *jsonTable) metaDesc(fi int, mst *types.Struct, jsonKeys map[string]string) string {
-	raw, extra := -1, "none"
-	var members []string
+func (j *jsonTable) metaDesc(fi int, mst *types.Struct, jsonKeys map[string]string) any {
+	raw := -1
+	var extra any
+	members := []any{}
 	for k := 0; k < mst.NumFields(); k++ {
 		f := mst.Field(k)
 		switch {
 		case f.Name() == "raw":
 			raw = k
 		case f.Name() == "ExtraFields":
-			extra = fmt.Sprintf("(some %d)", k)
+			extra = k
 		default:
 			if key, ok := jsonKeys[f.Name()]; ok {
-				members = append(members, fmt.Sprintf("(%s, %d)", leanBytes(key), k))
+				members = append(members, []any{key, k})
 			}
 		}
 	}
 	if raw < 0 {
-		return "none"
+		return nil
 	}
-	return fmt.Sprintf("(some { field := %d, raw := %d, extra := %s, members := [%s] })", fi, raw, extra, strings.Join(members, ", "))
+	return map[string]any{"field": fi, "raw": raw, "extra": extra, "members": members}
 }
 
 func contains(xs []string, x string) bool {
@@ -268,23 +275,36 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
-// lean renders the table, with the descriptions of the given boxed types
-// for encoding interface values, or "" when no JSON op uses it.
+// lean renders the table as the Lean term that parses it, with the
+// descriptions of the boxed types (for encoding interface values) when
+// some description is an interface, or "" when no JSON op uses it.
 func (j *jsonTable) lean(boxed []types.Type) string {
 	if len(j.descs) == 0 {
 		return ""
 	}
-	var bx []string
-	for _, t := range boxed {
-		bx = append(bx, fmt.Sprintf("(%d, %d)", typeTag(t), j.desc(t)))
+	bx := []any{}
+	if j.ifaces {
+		for _, t := range boxed {
+			if i := j.desc(t); j.descs[i]["k"] != "opaque" {
+				bx = append(bx, []any{typeTag(t), i})
+			}
+		}
 	}
 	empty := types.NewInterfaceType(nil, nil)
-	basic := []types.Type{types.Typ[types.String], types.Typ[types.Bool], types.Typ[types.Float64],
-		types.NewMap(types.Typ[types.String], empty), types.NewSlice(empty)}
-	var bs []string
-	for _, t := range basic {
-		bs = append(bs, fmt.Sprint(typeTag(t)))
+	basic := []any{}
+	for _, t := range []types.Type{types.Typ[types.String], types.Typ[types.Bool], types.Typ[types.Float64],
+		types.NewMap(types.Typ[types.String], empty), types.NewSlice(empty)} {
+		basic = append(basic, typeTag(t))
 	}
-	return fmt.Sprintf("{ descs := #[%s],\n    zeros := #[%s],\n    boxed := [%s],\n    basic := [%s] }",
-		strings.Join(j.descs, ",\n      "), strings.Join(j.zeros, ", "), strings.Join(bx, ", "), strings.Join(bs, ", "))
+	b, err := json.Marshal(map[string]any{"descs": j.descs, "zeros": j.zeros, "boxed": bx, "basic": basic})
+	if err != nil {
+		return ""
+	}
+	return "GoSSA.JTable.ofJsonString " + leanString(string(b))
+}
+
+// leanString is s as a Lean string literal (s is JSON: escape the
+// backslashes and quotes, nothing else).
+func leanString(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
