@@ -1317,6 +1317,7 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
           let extras := kvs.toList.filter fun (k, _) => !known.contains (asciiBytes k)
           let (ms, heap) := match mt.extra with
             | some ei =>
+              if extras.isEmpty then (ms, heap) else
               let (es, heap) := extras.foldl (fun (acc, heap) (k, jv) =>
                 let (kv, heap) := strAlloc heap (asciiBytes k)
                 let (f, heap) := respField heap jv

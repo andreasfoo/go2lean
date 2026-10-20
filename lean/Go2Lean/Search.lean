@@ -215,6 +215,35 @@ def jsonValues (vals : List (List Nat)) : List (List Nat) :=
 def jsonObject (members : List (List Nat × List Nat)) : List Nat :=
   [123] ++ ((members.map fun (k, v) => jsonQuote k ++ [58] ++ v).intersperse [44]).flatten ++ [125]
 
+/-- An SDK response type's JSON metadata keeps, in `ExtraFields`, a
+`respjson.Field` for each member of its raw JSON that no typed field
+reads; decoding sets it, so a generated metadata struct derives it from
+its generated raw text (nil when there is none, as the SDK leaves it). -/
+def deriveExtraFields (heap : Heap Val) (fields : List Gen) (vs : List Val) : List Val × Heap Val :=
+  let ri := fields.findIdx? fun | .jsonText .. => true | _ => false
+  let ei := fields.findIdx? fun g => g.name == "ExtraFields"
+  match ri, ei with
+  | some ri, some ei =>
+    match vs[ri]? >>= strBytes heap with
+    | some bs =>
+      match String.fromUTF8? (ByteArray.mk (bs.map UInt8.ofNat).toArray) >>= (Lean.Json.parse · |>.toOption) with
+      | some (.obj kvs) =>
+        -- Members a typed field reads are not extra: the metadata struct
+        -- names those fields (ToolCalls for tool_calls).
+        let norm (s : String) : String := (s.toList.filter (· != '_')).asString.toLower
+        let typed := fields.map fun g => norm g.name
+        let kvs := kvs.toList.filter fun (k, _) => !typed.contains (norm k)
+        if kvs.isEmpty then (vs, heap) else
+        let (es, heap) := kvs.foldl (fun (acc, heap) (k, jv) =>
+          let (kv, heap) := strAlloc heap (k.toUTF8.toList.map (·.toNat))
+          let (f, heap) := respField heap jv
+          (acc ++ [(kv, f)], heap)) ([], heap)
+        let (p, heap) := heapAlloc heap (mapObj es)
+        (vs.set ei (.boxed 1 p), heap)
+      | _ => (vs, heap)
+    | none => (vs, heap)
+  | _, _ => (vs, heap)
+
 /-- Generate one value. Slices and pointees are materialised on the heap,
 so stores through them are exact and the report can dump them. -/
 partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap Val)
@@ -254,6 +283,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
   | .structv _ fields =>
     let (fields, g) := chooseFields table g fields
     let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
+    let (vs, heap) := deriveExtraFields heap fields vs
     (.structv vs, g, heap)
   | .ptr _ pointee =>
     -- With `allowNil` off (the default) a pointer is nil only once the
@@ -278,6 +308,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | some fields =>
       let (fields, g) := chooseFields table g fields
       let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
+      let (vs, heap) := deriveExtraFields heap fields vs
       (.structv vs, g, heap)
     | none => (.unit, g, heap)
   | .nilptr _ => (.ptr 0 [], g, heap)
