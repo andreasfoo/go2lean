@@ -145,6 +145,12 @@ inductive Op where
   | eqDeep | neDeep
   /-- `hex.EncodeToString(b)`: two lowercase hex digits per byte. -/
   | hexEncode
+  /-- `fmt.Sprintf(format, args...)` for the verbs `%s %d %v %t %%` without
+  flags or widths on strings, integers and bools the program boxed; any
+  other format or value gets the model stuck (the call is then unmodelled). -/
+  | sprintf
+  /-- Can `sprintf` format these arguments? -/
+  | sprintfOk
   /-- `reflect.ValueOf(x)`: the interface value itself. -/
   | reflectOf
   /-- `reflect.ValueOf(x).IsZero()` on a value the program boxed. -/
@@ -447,6 +453,29 @@ where
       | some false, _ => some false
       | some true, r => r
       | none, _ => none
+
+/-- The bytes `%v` (and `%s`, `%d`, `%t`) prints for a value the program
+boxed, or `none`. Integers print signed: the model does not keep the
+signedness of a boxed integer, so a large unsigned value would print
+wrong; formats of those are rare in the code this models. -/
+def fmtArg (heap : Heap Val) (verb : Nat) : Val → Option (List Nat)
+  | .boxed _ (.str r o l) => if verb == 115 || verb == 118 then strBytes heap (.str r o l) else none
+  | .boxed _ (.int _ v) => if verb == 100 || verb == 118 then some (itoaBytes v.toInt) else none
+  | .boxed _ (.bool b) =>
+    if verb == 116 || verb == 118 then some (if b then [116, 114, 117, 101] else [102, 97, 108, 115, 101]) else none
+  | _ => none
+
+/-- Format `fmt` with `args` (see `Op.sprintf`). -/
+def sprintfBytes (heap : Heap Val) : List Nat → List Val → Option (List Nat)
+  | [], [] => some []
+  | [], _ :: _ => none -- Go appends %!(EXTRA ...): not modelled
+  | 37 :: 37 :: rest, args => (37 :: ·) <$> sprintfBytes heap rest args
+  | 37 :: verb :: rest, a :: args =>
+    match fmtArg heap verb a, sprintfBytes heap rest args with
+    | some x, some y => some (x ++ y)
+    | _, _ => none
+  | 37 :: _, _ => none -- a missing argument or a bare % at the end
+  | c :: rest, args => (c :: ·) <$> sprintfBytes heap rest args
 
 /-- Key equality for maps: strings by their bytes, the rest by `eqVal`. -/
 def keyEq (heap : Heap Val) (a b : Val) : Bool :=
@@ -875,6 +904,17 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | some r => .ok (.bool r, heap) | none => .panic .modelStuck
   | .neDeep, [a, b] => match eqDeep heap a b with
     | some r => .ok (.bool !r, heap) | none => .panic .modelStuck
+  | .sprintfOk, [f, args] =>
+    match strBytes heap f, sliceElems heap args with
+    | some fb, some xs => .ok (.bool ((sprintfBytes heap fb xs).isSome), heap)
+    | _, _ => .ok (.bool false, heap)
+  | .sprintf, [f, args] =>
+    match strBytes heap f, sliceElems heap args with
+    | some fb, some xs =>
+      match sprintfBytes heap fb xs with
+      | some r => if r.length > strLimit then .panic .modelStuck else .ok (strAlloc heap r)
+      | none => .panic .modelStuck
+    | _, _ => .panic .modelStuck
   | .hexEncode, [.slice ref off len _] =>
     match strBytes heap (.str ref off len) with
     | some x =>

@@ -32,7 +32,7 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 	for _, f := range report.Funcs {
 		// Generic instances (Map[int]) are modelled for their callers; a
 		// harness cannot name them.
-		if f.Status == contract.ModelRejected || f.SpecFor != "" || f.Closure || f.WrappedBy != "" || strings.Contains(f.Name, "[") {
+		if f.Status == contract.ModelRejected || f.SpecFor != "" || f.Closure || f.WrappedBy != "" || f.TestFile || strings.Contains(f.Name, "[") {
 			continue
 		}
 		out = append(out, &contract.Property{
@@ -58,6 +58,7 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 			Kind:     contract.KindPostcondition,
 			NL:       fmt.Sprintf("%s satisfies the spec-in-Go oracle %s", f.SpecFor, f.Name),
 			Spec:     &contract.SpecRef{GoFunc: f.Name, LeanDecl: fmt.Sprintf("%s.f%d", report.LeanModule, f.ID)},
+			MaxLen:   f.SpecMaxLen,
 			Frontend: report.Frontend,
 			Source:   "template",
 		})

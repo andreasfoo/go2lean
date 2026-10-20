@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -33,6 +34,10 @@ import (
 const Frontend = "gossa"
 
 var specRe = regexp.MustCompile(`go2lean:spec\s+([\w.]+)`)
+
+// maxLenRe is a spec's `go2lean:maxlen N`: its property searches inputs
+// up to N long instead of the run's -maxlen.
+var maxLenRe = regexp.MustCompile(`go2lean:maxlen\s+(\d+)`)
 
 // Translate loads the single package matching pattern (relative to dir) and
 // lowers every top-level function. It returns the program and the Go module
@@ -407,6 +412,7 @@ func addCtorWrappers(p *ir.Prog, fns []*ssa.Function) {
 		if err != nil {
 			continue
 		}
+		w.TestFile = p.Funcs[ids[m]].TestFile || p.Funcs[ids[ctor]].TestFile
 		p.Funcs[ids[m]].WrappedBy = w.Name
 		p.Funcs = append(p.Funcs, w)
 	}
@@ -527,6 +533,18 @@ func ctorWrapper(p *ir.Prog, ctor, m *ssa.Function, ctorID, mID int, deref bool)
 	w.Blocks[5] = ir.Block{Name: "stuck", Term: ir.Term{Kind: ir.TermPanic, Panic: contract.PanicOther}}
 	w.NVals = v
 	return w, nil
+}
+
+// inTestFile says whether f (or the function enclosing a closure) is
+// declared in a _test.go file.
+func inTestFile(f *ssa.Function) bool {
+	for f.Parent() != nil {
+		f = f.Parent()
+	}
+	if f.Prog == nil || !f.Pos().IsValid() {
+		return false
+	}
+	return strings.HasSuffix(f.Prog.Fset.Position(f.Pos()).Filename, "_test.go")
 }
 
 // withAnon appends the anonymous functions of fns (and theirs, nested)
@@ -786,12 +804,18 @@ func (t *fnState) translate() error {
 	}
 	t.out.ABI = *abi
 	t.out.SpecFor = t.prog.specFor(f)
+	if decl, ok := f.Syntax().(*ast.FuncDecl); ok && decl.Doc != nil && t.out.SpecFor != "" {
+		if m := maxLenRe.FindStringSubmatch(decl.Doc.Text()); m != nil {
+			t.out.SpecMaxLen, _ = strconv.Atoi(m[1])
+		}
+	}
 	if f.Blocks == nil {
 		return fmt.Errorf("no body")
 	}
 	// A closure receives its captured values before its parameters, as
 	// funcRef stores them.
 	t.out.Closure = f.Parent() != nil
+	t.out.TestFile = inTestFile(f)
 	for _, fv := range f.FreeVars {
 		v := t.fresh()
 		t.vars[fv] = v
@@ -1890,6 +1914,9 @@ func (t *fnState) call(x *ssa.Call) error {
 			return nil
 		}
 	}
+	if callee != nil && callee.String() == "fmt.Sprintf" && len(x.Call.Args) == 2 {
+		return t.sprintf(x)
+	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
 		if op, ok := ir.StdlibOps[callee.String()]; ok {
@@ -2039,6 +2066,41 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	t.cur = &t.out.Blocks[other]
 	t.issue("type assertion %s on an interface value the model did not build is havoc", x.Name())
 	if err := t.havocResult(dst, x, "type assertion", "opaque-assert"); err != nil {
+		return err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
+}
+
+// sprintf lowers fmt.Sprintf: the formatted string when the model can
+// format it (plain %s %d %v %t %% on strings, integers and bools the
+// program boxed), else the havoc string an unmodelled call gives.
+func (t *fnState) sprintf(x *ssa.Call) error {
+	f, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return err
+	}
+	args, err := t.val(x.Call.Args[1])
+	if err != nil {
+		return err
+	}
+	dst := t.def(x)
+	ok := t.fresh()
+	t.emit(ir.Instr{Dst: ok, Op: ir.Simple("sprintfOk"), Args: []ir.Var{f, args}})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: ok, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".sprintf"},
+		ir.Block{Name: name + ".sprintf-unknown"},
+		ir.Block{Name: name + ".sprintf-join"})
+	t.cur = &t.out.Blocks[yes]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("sprintf"), Args: []ir.Var{f, args}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	if err := t.havocInto(dst, x.Type(), t.f.Name()+": call fmt.Sprintf", "unmodeled-call", ""); err != nil {
 		return err
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}

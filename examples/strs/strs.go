@@ -2,6 +2,7 @@
 package strs
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -39,4 +40,17 @@ func SpecParsePortRange(s string, ret0 int, ret1 error) bool {
 // IsAdmin is correct: only the exact name matches.
 func IsAdmin(name string) bool {
 	return strings.TrimSpace(name) == "admin"
+}
+
+// Label names an item by kind and number.
+func Label(kind string, n int) string { return fmt.Sprintf("%s-%d", kind, n) }
+
+// Short is the first eight bytes of the label. Bug: a short kind and a
+// small number make a label under eight bytes, and the slice panics.
+func Short(kind string, n int) string { return Label(kind, n)[:8] }
+
+// go2lean:spec Label
+// SpecLabelFormat: the kind, a dash, the number in decimal.
+func SpecLabelFormat(kind string, n int, ret string) bool {
+	return ret == kind+"-"+strconv.Itoa(n)
 }

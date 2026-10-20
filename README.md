@@ -133,7 +133,7 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 | `examples/magic` | `Decode` indexes an empty payload only when `tag == 0x5EC4E7` | confirmed — reachable because literals are mined into the value pool |
 | `examples/checked` | `Double` returns `(int, error)` and misses overflow for negative inputs | `SpecDoubleHalves` violated; confirmed |
 | `examples/alias` | `Deposit(*Account, int)` overshoots its limit; `Withdraw` accepts negative amounts; `Fill([]int, int)` misses the last element | all confirmed; specs observe the mutated struct and slice. Nil receivers and pointer arguments are tried only with `-nil-inputs` |
-| `examples/strs` | `Scheme` slices with an unchecked `strings.Index`; `ParsePort` has no upper bound | both confirmed (`"port:2147483648"`) |
+| `examples/strs` | `Scheme` slices with an unchecked `strings.Index`; `ParsePort` has no upper bound | both confirmed (`"port:2147483648"`); `Short` slices a `fmt.Sprintf("%s-%d", ...)` label to 8 bytes: confirmed (`slice bounds out of range [:8] with length 6`), and a spec on `Label` (the formatted string) certified |
 | `examples/list` | `Sum(*Node)` skips the head cell of a linked list | confirmed with a materialised `&Node{...}` |
 | `examples/recs` | `First`/`Longest`/`Dedup` index slices of structs and strings without a length check | all confirmed with `[]Item{...}` literals; `Total`, `Names` (built with `append`) and `Push` satisfy their specs |
 | `examples/opaque` | `(*Cache).Share` divides by a struct field next to a map; `Lookup(ctx, map, keys)` indexes `keys[0]` | both confirmed: the map and the context are opaque to the model and the test passes `context.Background()` and a nil map |

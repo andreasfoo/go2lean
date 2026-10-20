@@ -300,6 +300,9 @@ func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []in
 // one-line summary. When the exhaustive engine covers its whole domain
 // without a counterexample, a ProofResult with status "exhausted" is written.
 func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts SearchOptions) (*contract.Counterexample, string, error) {
+	if prop.MaxLen > 0 {
+		opts.MaxLen = prop.MaxLen
+	}
 	opts = opts.withDefaults()
 	target, err := ws.Target(prop.Target)
 	if err != nil {

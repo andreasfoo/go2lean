@@ -402,12 +402,15 @@ type Func struct {
 	SpecFor   string
 	Closure   bool
 	WrappedBy string
-	Consts    []string         // integer literals, see contract.ModelFunc.Consts
-	StrConsts []string         // string literals
-	Calls     []int            // callees within the program, by function id
-	XCalls    []contract.XCall // callees in other packages of the same compile
-	Exits     []contract.ExitSite
-	ABI       contract.ABI
+	TestFile  bool
+	// SpecMaxLen is the spec's go2lean:maxlen directive (0: none).
+	SpecMaxLen int
+	Consts     []string         // integer literals, see contract.ModelFunc.Consts
+	StrConsts  []string         // string literals
+	Calls      []int            // callees within the program, by function id
+	XCalls     []contract.XCall // callees in other packages of the same compile
+	Exits      []contract.ExitSite
+	ABI        contract.ABI
 }
 
 // Prog is one package's worth of functions. Func indices are the Lean FuncIds.

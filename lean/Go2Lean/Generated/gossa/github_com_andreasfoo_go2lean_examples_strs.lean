@@ -20,8 +20,43 @@ def f0 : GoSSA.Func := {
       term := .ret 3 }
   ] }
 
-/-- func(s string) (int, error) (status: partial) -/
+/-- func(kind string, n int) string (status: complete) -/
 def f1 : GoSSA.Func := {
+  name := "Label", params := [0, 1], nvals := 17, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 2 (.alloc (.arr (List.replicate 2 .opaqueNil))) [],
+                 .op 3 (.const (.int 64 0#64)) [],
+                 .op 4 .indexAddr [2, 3],
+                 .op 5 (.box 398550328) [0],
+                 .op 6 .storePath [4, 5],
+                 .op 7 (.const (.int 64 1#64)) [],
+                 .op 8 .indexAddr [2, 7],
+                 .op 9 (.box 2515107422) [1],
+                 .op 10 .storePath [8, 9],
+                 .op 11 (.const (.int 64 0#64)) [],
+                 .op 12 .strLen [2],
+                 .op 13 .reslice [2, 11, 12],
+                 .op 14 (.strConst [37, 115, 45, 37, 100]) [],
+                 .op 16 .sprintfOk [14, 13]],
+      term := .br 16 1 [] 2 [] },
+    -- 1: entry.sprintf
+    { params := [],
+      instrs := #[.op 15 .sprintf [14, 13]],
+      term := .jump 3 [] },
+    -- 2: entry.sprintf-unknown
+    { params := [],
+      instrs := #[.havoc 15 0],
+      term := .jump 3 [] },
+    -- 3: entry.sprintf-join
+    { params := [],
+      instrs := #[],
+      term := .ret 15 }
+  ] }
+
+/-- func(s string) (int, error) (status: partial) -/
+def f2 : GoSSA.Func := {
   name := "ParsePort", params := [0], nvals := 20, entry := 0,
   blocks := #[
     -- 0: entry
@@ -31,7 +66,7 @@ def f1 : GoSSA.Func := {
       term := .br 2 2 [] 1 [] },
     -- 1: if.then
     { params := [],
-      instrs := #[.havoc 3 0,
+      instrs := #[.havoc 3 1,
                  .op 4 (.const (.int 64 0#64)) [],
                  .op 5 .mkTuple [4, 3]],
       term := .ret 5 },
@@ -47,7 +82,7 @@ def f1 : GoSSA.Func := {
       term := .br 12 3 [] 5 [] },
     -- 3: if.then
     { params := [],
-      instrs := #[.havoc 13 1,
+      instrs := #[.havoc 13 2,
                  .op 14 (.const (.int 64 0#64)) [],
                  .op 15 .mkTuple [14, 13]],
       term := .ret 15 },
@@ -64,7 +99,7 @@ def f1 : GoSSA.Func := {
   ] }
 
 /-- func(u string) string (status: complete) -/
-def f2 : GoSSA.Func := {
+def f3 : GoSSA.Func := {
   name := "Scheme", params := [0], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -76,8 +111,42 @@ def f2 : GoSSA.Func := {
       term := .ret 4 }
   ] }
 
+/-- func(kind string, n int) string (status: complete) -/
+def f4 : GoSSA.Func := {
+  name := "Short", params := [0, 1], nvals := 6, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[],
+      term := .call 1 [0, 1] 2 1 [] 2 },
+    -- 1: entry.after-call
+    { params := [],
+      instrs := #[.op 3 (.const (.int 64 0#64)) [],
+                 .op 4 (.const (.int 64 8#64)) [],
+                 .op 5 .strSlice [2, 3, 4]],
+      term := .ret 5 },
+    -- 2: entry.call-fallback
+    { params := [],
+      instrs := #[.havoc 2 3],
+      term := .jump 1 [] }
+  ] }
+
+/-- func(kind string, n int, ret string) bool (status: complete) -/
+def f5 : GoSSA.Func := {
+  name := "SpecLabelFormat", params := [0, 1, 2], nvals := 8, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 3 (.strConst [45]) [],
+                 .op 4 .strConcat [0, 3],
+                 .op 5 .strItoa [1],
+                 .op 6 .strConcat [4, 5],
+                 .op 7 .eq [2, 6]],
+      term := .ret 7 }
+  ] }
+
 /-- func(s string, ret0 int, ret1 error) bool (status: complete) -/
-def f3 : GoSSA.Func := {
+def f6 : GoSSA.Func := {
   name := "SpecParsePortRange", params := [0, 1, 2], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
@@ -106,6 +175,6 @@ def f3 : GoSSA.Func := {
       term := .ret 3 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3], havocWidths := #[0, 0] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[2, 0, 0, 2] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_strs

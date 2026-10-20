@@ -58,6 +58,9 @@ type Property struct {
 	NL           string       `json:"nl"`
 	Precondition *GoLean      `json:"precondition,omitempty"`
 	Spec         *SpecRef     `json:"spec,omitempty"`
+	// MaxLen overrides the search's bound on generated strings and slices
+	// (a spec's `go2lean:maxlen N`, for properties about long inputs).
+	MaxLen int `json:"max_len,omitempty"`
 	// ExpectedPanic restricts a no_panic property to one panic category
 	// (see PanicKind). Empty means any panic counts.
 	ExpectedPanic PanicKind `json:"expected_panic,omitempty"`
@@ -403,6 +406,11 @@ type ModelFunc struct {
 	// WrappedBy names the constructor wrapper that targets this method in
 	// its place (T.M~NewT).
 	WrappedBy string `json:"wrapped_by,omitempty"`
+	// TestFile marks a function declared in a _test.go file: modelled for
+	// the specs and tests that call it, never a target itself.
+	TestFile bool `json:"test_file,omitempty"`
+	// SpecMaxLen is a spec's `go2lean:maxlen N` directive.
+	SpecMaxLen int `json:"spec_max_len,omitempty"`
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`
