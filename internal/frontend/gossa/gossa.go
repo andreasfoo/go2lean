@@ -297,7 +297,9 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 
 // zeroGlobals returns the package-level variables whose value a load can
 // know: a variable no code writes holds its zero value (nil in the map), one
-// the package initializer sets to a constant or a function and nothing else
+// the package initializer sets to a constant or a function, or to a map it
+// fills with constants only (a lookup table, the *ssa.MakeMap: each load
+// rebuilds it) that every load only reads, and nothing else
 // writes holds that value. Writes from test helpers (functions named
 // ...ForTest or ...ForTesting, and their closures) do not count. With bodies
 // for every package (deps) that covers every variable; otherwise only the
@@ -306,6 +308,7 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.Global]ssa.Value {
 	touched := map[*ssa.Global]bool{}
 	inits := map[*ssa.Global]ssa.Value{}
+	loads := map[*ssa.Global][]*ssa.UnOp{}
 	for f := range ssautil.AllFunctions(sprog) {
 		if testHelper(f) {
 			continue
@@ -314,12 +317,21 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
 				if u, ok := in.(*ssa.UnOp); ok && u.Op == token.MUL {
+					if g, ok := u.X.(*ssa.Global); ok {
+						loads[g] = append(loads[g], u)
+					}
 					continue
 				}
 				if st, ok := in.(*ssa.Store); ok && pkgInit {
 					if g, ok := st.Addr.(*ssa.Global); ok && g.Pkg == f.Pkg {
-						switch st.Val.(type) {
+						known := false
+						switch v := st.Val.(type) {
 						case *ssa.Const, *ssa.Function:
+							known = true
+						case *ssa.MakeMap:
+							known = constMapEntries(v) != nil
+						}
+						if known {
 							if _, twice := inits[g]; twice {
 								touched[g] = true
 							}
@@ -332,6 +344,25 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 					if g, ok := (*op).(*ssa.Global); ok {
 						touched[g] = true
 					}
+				}
+			}
+		}
+	}
+	// A lookup table stays one only while every load just reads it.
+	for g, init := range inits {
+		if _, ok := init.(*ssa.MakeMap); !ok {
+			continue
+		}
+		for _, u := range loads[g] {
+			for _, r := range *u.Referrers() {
+				switch r := r.(type) {
+				case *ssa.Lookup, *ssa.Range:
+				case *ssa.Call:
+					if b, ok := r.Call.Value.(*ssa.Builtin); !ok || b.Name() != "len" {
+						touched[g] = true
+					}
+				default:
+					touched[g] = true
 				}
 			}
 		}
@@ -356,6 +387,31 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 		}
 	}
 	return out
+}
+
+// constMapEntries returns the updates that fill the map mm makes, when
+// they all put a constant under a constant key and mm is used for nothing
+// else but being stored; nil otherwise.
+func constMapEntries(mm *ssa.MakeMap) []*ssa.MapUpdate {
+	var ups []*ssa.MapUpdate
+	for _, r := range *mm.Referrers() {
+		switch r := r.(type) {
+		case *ssa.MapUpdate:
+			_, kc := r.Key.(*ssa.Const)
+			_, vc := r.Value.(*ssa.Const)
+			if !kc || !vc {
+				return nil
+			}
+			ups = append(ups, r)
+		case *ssa.Store:
+		default:
+			return nil
+		}
+	}
+	if ups == nil {
+		return []*ssa.MapUpdate{}
+	}
+	return ups
 }
 
 // testHelper says whether f exists for tests only: named ...ForTest or
@@ -1679,6 +1735,24 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 	case token.MUL: // load through a pointer
 		if g, isGlobal := x.X.(*ssa.Global); isGlobal {
 			if init, known := t.prog.zeros[g]; known {
+				if mm, ok := init.(*ssa.MakeMap); ok {
+					// A lookup table: built afresh from its constants.
+					m := t.def(x)
+					t.emit(ir.Instr{Dst: m, Op: ir.Simple("makeMap")})
+					for _, up := range constMapEntries(mm) {
+						t.mapKey(up.Key)
+						k, err := t.val(up.Key)
+						if err != nil {
+							return err
+						}
+						v, err := t.val(up.Value)
+						if err != nil {
+							return err
+						}
+						t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapUpdate"), Args: []ir.Var{m, k, v}})
+					}
+					return nil
+				}
 				if init != nil {
 					v, err := t.val(init)
 					if err != nil {

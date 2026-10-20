@@ -9,6 +9,7 @@
 package contract
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -104,7 +105,9 @@ type ModelOutput struct {
 }
 
 // FlexValue is a rendered model value: a single value as a string, or
-// several results (a tuple) as a JSON array, read as "[v0, v1, ...]".
+// several results (a tuple) as a JSON array, read as "[v0, v1, ...]". Any
+// other JSON (an object the driver printed for a boxed value) is kept as
+// its compact text, so a value it cannot read does not lose the search.
 type FlexValue string
 
 func (v *FlexValue) UnmarshalJSON(b []byte) error {
@@ -115,7 +118,12 @@ func (v *FlexValue) UnmarshalJSON(b []byte) error {
 	}
 	var parts []FlexValue
 	if err := json.Unmarshal(b, &parts); err != nil {
-		return err
+		var buf bytes.Buffer
+		if cerr := json.Compact(&buf, b); cerr != nil {
+			return err
+		}
+		*v = FlexValue(buf.String())
+		return nil
 	}
 	strs := make([]string, len(parts))
 	for i, p := range parts {

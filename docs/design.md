@@ -793,6 +793,67 @@ Changes made for the misses (each with a ground-truth example, `examples/inputs`
   one and a write into a panic the model did not have (an inconclusive
   verdict for the first Chat -> Anthropic stream counterexample).
 
+**Rounds 3 and 4** (findings 21-43, all found by reading code) brought
+the benchmark to 34 specs. They moved the generator towards the values
+real SDK traffic has:
+- SDK response values are generated as the documents the harness decodes
+  them from (`sdkDoc`: render with `jDoc`, decode with `jDec`), so typed
+  fields, raw JSON and metadata agree.
+- Union variants are weighted by the ones the call tree reads (`hot`),
+  and documented enums likewise.
+- Byte slices are drawn from the JSON texts of the pool.
+- `apijson.UnmarshalRoot` is lowered to the JSON decoder.
+- Logging calls are not followed.
+- A counterexample that read havoc is kept only as a fallback while the
+  search looks for one that did not.
+
+Then two experiments without hand-found specs:
+- **Blind specs.** A Claude subagent that had not seen the findings
+  wrote 75 general specs. go2lean and `go test` confirmed 39
+  counterexamples: 17 hit 13 known findings, 17 were new bugs (12 root
+  causes, findings 44-56), and 5 came from wrong specs. Every spurious
+  one named a model gap: base64, `RawMessage` rendering, a JSON round
+  trip in a callee, havoc map lookups.
+- **The M2 agent** with Claude Opus 5.5 confirmed 25 spec
+  counterexamples on the request and non-stream packages: 12 hit known
+  findings, 8 were new (findings 57-60), and 4 came from wrong specs.
+  MiniMax-M3 had found 2 new bugs and none of the hand-found ones.
+
+Gaps closed on the way:
+- **Agent output.** The agent's output budget is 64000 tokens; a spec
+  block cut off at the end keeps its complete declarations.
+- **apijson's loose decoding.** A member of the wrong JSON type is not
+  an error: strings take bools and integer literals stringified, and
+  objects and arrays as raw text (invalid). Bools take gjson's `Bool()`.
+  A slice member that is not an array leaves the field as it was. Other
+  mismatches stay stuck. Inline union variants decode strictly, where a
+  coerced member is invalid.
+- **SDK documents that agree with the harness.** `jDoc` keeps the later
+  of two typed members with one key, as the harness's map does (an inline
+  variant's `type` after the union's own). It writes the basic types an
+  `any` holds after decoding, and writes a float64 (whose value the model
+  does not know) as null, as the harness does. Before, normalisation
+  failed about 29000 times in one hunt and kept a value the real run
+  never saw; now it fails 82 times.
+- **Lookup tables.** A package-level map that the initializer fills with
+  constants, and that every load only reads, is rebuilt from those
+  constants at each load. Its keys join the key pool. Before, every
+  lookup was havoc (`thinking.BudgetMapping` tainted every trial of the
+  Chat -> Anthropic request converter). `examples/tables`.
+- **Standard library.** `base64` Encode/DecodeString of the four
+  standard encodings; `fmt.Sprintf` `%x` of strings and byte slices.
+- **Diagnostics.** A dialect can describe where it got stuck: a stuck JSON
+  decode names the text, which pointed at each of the decoding gaps above.
+
+Regression with all of these: 40 of 40 confirmed (`Share` new), 85
+certificates; json-diff 108 of 108 identical. With these, **31 of 34**
+benchmark cases are confirmed (go2lean
+`8fe99b3` with the document fixes). The three open cases:
+- KeepsTools: the lookup table above, since fixed.
+- The non-stream reasoning summary: stuck in `json.Marshal`.
+- The Gemini schema filter: its search output (a map result printed as
+  an object) could not be read back; fixed.
+
 ## 10. Milestones
 
 - **Done — end-to-end PoC slice.** Contract and workspace; Lean SSA core;
