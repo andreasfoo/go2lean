@@ -32,7 +32,19 @@ type Node struct {
 	When   time.Time         ` + "`json:\"when\"`" + `
 	Inner
 	C      *Custom           ` + "`json:\"c\"`" + `
+	T      Texty             ` + "`json:\"t\"`" + `
+	Q      int               ` + "`json:\"q,string\"`" + `
+	St     interface{ String() string } ` + "`json:\"st\"`" + `
+	hidden2
 }
+
+type hidden2 struct {
+	X int ` + "`json:\"x\"`" + `
+}
+
+type Texty struct{}
+
+func (Texty) MarshalText() ([]byte, error) { return nil, nil }
 
 type Custom struct{}
 
@@ -68,11 +80,12 @@ func TestJSONStructDescription(t *testing.T) {
 		byKey[m["key"].(string)] = m
 	}
 	for key, want := range map[string]map[string]any{
-		"name":  {"idx": 0},
-		"-":     {"idx": 2},             // `json:"-,"` is the key "-"
-		"N":     {"idx": 4, "oz": true}, // no name in the tag: the field name
-		"next":  {"idx": 7, "oe": true},
-		"Inner": {"idx": 11, "in": true}, // embedded
+		"name":    {"idx": 0},
+		"-":       {"idx": 2},             // `json:"-,"` is the key "-"
+		"N":       {"idx": 4, "oz": true}, // no name in the tag: the field name
+		"next":    {"idx": 7, "oe": true},
+		"Inner":   {"idx": 11, "in": true}, // embedded
+		"hidden2": {"idx": 16, "in": true}, // unexported embedded struct: members promoted
 	} {
 		f, ok := byKey[key]
 		if !ok {
@@ -99,6 +112,7 @@ func TestJSONStructDescription(t *testing.T) {
 		"*p.Node": "ptr", "map[string]*p.Node": "map", "int8": "int",
 		// a pointer has its element's methods; the element is the opaque one
 		"*p.Custom": "ptr", "p.Custom": "opaque",
+		"p.Texty": "opaque", "interface{String() string}": "opaque",
 	} {
 		if kinds[typ]["k"] != want {
 			t.Errorf("%s: description %v, want kind %s", typ, kinds[typ], want)
@@ -106,6 +120,9 @@ func TestJSONStructDescription(t *testing.T) {
 	}
 	if kinds["*p.Node"]["e"] != root {
 		t.Errorf("*p.Node points at %v, want %d", kinds["*p.Node"]["e"], root)
+	}
+	if q := byKey["q"]; q == nil || j.descs[q["ty"].(int)]["k"] != "opaque" {
+		t.Errorf("a `,string` field must be opaque: %v", q)
 	}
 	if len(j.zeros) != len(j.descs) {
 		t.Errorf("%d zero values for %d descriptions", len(j.zeros), len(j.descs))

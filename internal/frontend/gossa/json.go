@@ -33,7 +33,6 @@ func newJSONTable(sprog *ssa.Program) *jsonTable {
 	return &jsonTable{index: map[string]int{}, sprog: sprog}
 }
 
-
 // sdkPkg says whether path is (inside) the OpenAI or Anthropic Go SDK,
 // whose types encode by their own rules (param objects, unions, Opt,
 // constants) and decode with JSON metadata.
@@ -141,7 +140,8 @@ func (j *jsonTable) build(t types.Type) map[string]any {
 	if isString(t) && inSDK && hasMethod(t, "Default") {
 		return kind("str", "dflt", j.constDefault(t))
 	}
-	if named && !inSDK && (hasMethod(t, "MarshalJSON") || hasMethod(t, "UnmarshalJSON")) {
+	if named && !inSDK && (hasMethod(t, "MarshalJSON") || hasMethod(t, "UnmarshalJSON") ||
+		hasMethod(t, "MarshalText") || hasMethod(t, "UnmarshalText") || namedIn(t, "encoding/json", "Number")) {
 		// A custom encoding the model does not follow (a pointer has its
 		// element's methods: its description is the element's).
 		return opaqueDesc
@@ -173,13 +173,15 @@ func (j *jsonTable) build(t types.Type) map[string]any {
 			return kind("map", "key", j.desc(u.Key()), "val", j.desc(u.Elem()))
 		}
 	case *types.Interface:
-		if !isError(t) {
+		// Only an empty interface decodes (Go cannot pick a type for
+		// another); one holding a value encodes by its dynamic type.
+		if u.Empty() {
 			j.ifaces = true
 			return kind("iface")
 		}
 	case *types.Struct:
 		// The SDKs' types decode with their own apijson decoder.
-		return j.structDesc(u, inSDK && hasMethod(t, "UnmarshalJSON"))
+		return j.structDesc(u, inSDK, inSDK && hasMethod(t, "UnmarshalJSON"))
 	}
 	return opaqueDesc
 }
@@ -201,13 +203,20 @@ func isUnionStruct(st *types.Struct) bool {
 	return seen
 }
 
-func (j *jsonTable) structDesc(st *types.Struct, api bool) map[string]any {
+func (j *jsonTable) structDesc(st *types.Struct, sdk, api bool) map[string]any {
 	fields := []any{}
 	var meta any
 	jsonKeys := map[string]string{} // Go field name -> JSON key
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
 		tag := reflect.StructTag(st.Tag(i)).Get("json")
+		if sdk && ((!f.Exported() && f.Anonymous()) || strings.Contains(reflect.StructTag(st.Tag(i)).Get("api"), "extrafields")) {
+			// The SDKs' paramObj metadata (SetExtraFields, overrides,
+			// null) and typed ExtraFields change the encoding: the model
+			// follows it only while they are zero.
+			fields = append(fields, map[string]any{"key": "", "idx": i, "ty": 0, "guard": true})
+			continue
+		}
 		name, opts, _ := strings.Cut(tag, ",")
 		optList := strings.Split(opts, ",")
 		if f.Name() == "JSON" && name == "-" {
@@ -224,9 +233,9 @@ func (j *jsonTable) structDesc(st *types.Struct, api bool) map[string]any {
 			continue
 		}
 		if !f.Exported() && f.Anonymous() {
-			// An unexported embedded struct (the SDKs' paramObj) holds
-			// metadata, not members.
-			continue
+			if _, isStruct := derefStruct(f.Type()); !isStruct {
+				continue // an unexported embedded non-struct is ignored
+			}
 		}
 		key := name
 		if key == "" {
@@ -236,7 +245,11 @@ func (j *jsonTable) structDesc(st *types.Struct, api bool) map[string]any {
 		if !contains(j.keys, key) {
 			j.keys = append(j.keys, key)
 		}
-		fields = append(fields, map[string]any{"key": key, "idx": i, "ty": j.desc(f.Type()),
+		ty := j.desc(f.Type())
+		if contains(optList, "string") {
+			ty = j.desc(types.NewSignatureType(nil, nil, nil, nil, nil, false)) // `,string`: not modelled
+		}
+		fields = append(fields, map[string]any{"key": key, "idx": i, "ty": ty,
 			"oe": contains(optList, "omitempty"), "oz": contains(optList, "omitzero"), "in": inline})
 	}
 	return kind("strct", "fields", fields, "meta", meta, "api", api)
@@ -267,6 +280,15 @@ func (j *jsonTable) metaDesc(fi int, mst *types.Struct, jsonKeys map[string]stri
 		return nil
 	}
 	return map[string]any{"field": fi, "raw": raw, "extra": extra, "members": members}
+}
+
+// derefStruct is t's struct type, through one pointer.
+func derefStruct(t types.Type) (*types.Struct, bool) {
+	if p, ok := t.Underlying().(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	st, ok := t.Underlying().(*types.Struct)
+	return st, ok
 }
 
 func contains(xs []string, x string) bool {

@@ -59,6 +59,9 @@ structure JField where
   /-- An embedded struct or an SDK `json:",inline"` field: its members are
   the struct's own. -/
   inline : Bool := false
+  /-- Not a member: SDK metadata (paramObj, typed `ExtraFields`) that
+  changes the encoding when set; the model follows only its zero value. -/
+  guard : Bool := false
   deriving Repr
 
 /-- The JSON metadata an OpenAI/Anthropic SDK response type keeps (its
@@ -143,7 +146,8 @@ def jFieldOfJson (j : Lean.Json) : JField :=
   { key := jBytesOf j "key", idx := jNatOf j "idx", ty := jNatOf j "ty",
     omitEmpty := (j.getObjValAs? Bool "oe").toOption.getD false,
     omitZero := (j.getObjValAs? Bool "oz").toOption.getD false,
-    inline := (j.getObjValAs? Bool "in").toOption.getD false }
+    inline := (j.getObjValAs? Bool "in").toOption.getD false,
+    guard := (j.getObjValAs? Bool "guard").toOption.getD false }
 
 def jDescOfJson (j : Lean.Json) : JDesc :=
   let fields (key : String) : List JField :=
@@ -1089,6 +1093,8 @@ def goJsonQuote (bs : List Nat) : List Nat := Id.run do
       else if b == 10 then out := out ++ #[92, 110]
       else if b == 13 then out := out ++ #[92, 114]
       else if b == 9 then out := out ++ #[92, 116]
+      else if b == 8 then out := out ++ #[92, 98]
+      else if b == 12 then out := out ++ #[92, 102]
       else if b < 32 || b == 60 || b == 62 || b == 38 then out := out ++ u4 b
       else out := out.push b
       i := i + 1
@@ -1205,7 +1211,7 @@ where
   byFields (fields : List JField) (vs : List Val) : Option Bool :=
     let flags := vs.zipIdx.map fun (x, i) =>
       match fields.find? (·.idx == i) with
-      | some f => jIsZero t f.ty x
+      | some f => if f.guard then isZeroVal x else jIsZero t f.ty x
       | none => isZeroVal x
     if flags.any (· == some false) then some false
     else if flags.all (· == some true) then some true else none
@@ -1289,6 +1295,8 @@ where
     let mut out := []
     for f in fields do
       let x := vs[f.idx]?.getD .unit
+      if f.guard then
+        if isZeroVal x == some true then continue else .error false
       if f.inline then
         let inner := match x with
           | .ptr 0 _ => none
@@ -1492,6 +1500,9 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (src :
     | .structv vs => do
       let members := jObjMembers src
       if members.length != kvs.size then .error () else
+      -- Keys no field reads go to a typed ExtraFields (or SDK metadata).
+      let known := knownKeys fields
+      if fields.any (·.guard) && members.any (fun (k, _) => !known.contains (asciiBytes k)) then .error () else
       let (vs, heap, err, metas) ←
         if api then decApi fields members kvs vs heap else do
           let (vs, heap, err) ← decStruct fields members kvs vs heap
@@ -1557,6 +1568,7 @@ where
   /-- The keys the struct's fields (inline ones included) decode. -/
   knownKeys (fields : List JField) : List (List Nat) :=
     fields.flatMap fun f =>
+      if f.guard then [] else
       if f.inline then
         match t.descs[f.ty]? with
         | some (.strct fs _ _) => knownKeys fs
@@ -1571,6 +1583,7 @@ where
     let mut heap := heap
     let mut err := false
     for f in fields do
+      if f.guard then continue
       if f.inline then
         let (v, heap', e) ← jDec t heap f.ty (.obj kvs) (wholeObject members) (vs[f.idx]?.getD .unit)
         vs := vs.set f.idx v
@@ -1600,6 +1613,7 @@ where
     let mut heap := heap
     let mut metas := []
     for f in fields do
+      if f.guard then continue
       if f.inline then
         match t.descs[f.ty]? with
         | some (.strct ..) =>

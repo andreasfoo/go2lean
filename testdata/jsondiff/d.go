@@ -22,6 +22,12 @@ type Doc struct {
 	Any   any             `json:"any"`
 	Raw   []byte          `json:"raw,omitempty"`
 	Inner
+	hid
+}
+
+// hid is unexported and embedded: Go promotes its exported fields.
+type hid struct {
+	H string `json:"h,omitempty"`
 }
 
 func Encode(d Doc) string {
