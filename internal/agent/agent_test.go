@@ -45,6 +45,18 @@ func TestExtractGoIndentedFence(t *testing.T) {
 	}
 }
 
+func TestExtractGoTruncated(t *testing.T) {
+	resp := "fix:\n```go\nfunc Last() {}\n```\nspecs:\n```go\npackage p\n\n// go2lean:spec F\nfunc SpecF(ret int) bool {\n\treturn true\n}\n\n// go2lean:spec G\nfunc SpecG(ret int) bool {\n\tif ret"
+	got := extractGo(resp)
+	if !strings.HasSuffix(got, "func SpecF(ret int) bool {\n\treturn true\n}\n") || strings.Contains(got, "SpecG") {
+		t.Fatalf("truncated block not cut at the last declaration: %q", got)
+	}
+	closed := "```go\npackage p\n\n// go2lean:spec F\nfunc SpecF(ret int) bool { return true }\n```\n"
+	if got := extractGo(closed); !strings.Contains(got, "SpecF") {
+		t.Fatalf("closed block lost: %q", got)
+	}
+}
+
 func TestNormalizeSpec(t *testing.T) {
 	got := normalizeSpec("// header\npackage yourpkg\n\nfunc F() {}\n", "oob")
 	if !strings.Contains(got, "package oob\n") || strings.Contains(got, "yourpkg") {

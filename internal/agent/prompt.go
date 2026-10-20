@@ -134,12 +134,25 @@ the block if nothing should change.`
 // keeps an indented fix snippet from swallowing the spec block after it.
 var goBlock = regexp.MustCompile("(?ms)^[ \\t]*```go[ \\t]*$\\n(.*?)\\n[ \\t]*```[ \\t]*$")
 
+// goFence matches the opening fence of a Go block.
+var goFence = regexp.MustCompile("(?m)^[ \\t]*```go[ \\t]*$\\n")
+
 // extractGo returns the spec file in a response: the last fenced Go block
 // that carries a go2lean:spec comment, so that fix suggestions in other Go
 // blocks are not mistaken for it. Without such a block it falls back to the
-// first Go block; "" when there is none.
+// first Go block; "" when there is none. A spec block cut off at the end of
+// the response keeps its complete top-level declarations.
 func extractGo(resp string) string {
 	blocks := goBlock.FindAllStringSubmatch(resp, -1)
+	if fences := goFence.FindAllStringIndex(resp, -1); len(fences) > 0 {
+		// The text after the last opening fence, when no fence closes it.
+		rest := resp[fences[len(fences)-1][1]:]
+		if strings.Contains(rest, "go2lean:spec") && !strings.Contains("\n"+rest, "\n```") {
+			if i := strings.LastIndex(rest, "\n}\n"); i >= 0 {
+				blocks = append(blocks, []string{"", rest[:i+2]})
+			}
+		}
+	}
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if strings.Contains(blocks[i][1], "go2lean:spec") {
 			return strings.TrimSpace(blocks[i][1]) + "\n"

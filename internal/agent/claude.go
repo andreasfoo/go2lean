@@ -17,6 +17,9 @@ type ClaudeConfig struct {
 	Model    string
 	BaseURL  string
 	Thinking bool
+	// MaxTokens is the output budget, thinking included (default 64000:
+	// a large package's spec file after adaptive thinking overran 32000).
+	MaxTokens int64
 }
 
 // Claude calls the Anthropic Messages API. Credentials come from the
@@ -34,6 +37,9 @@ func NewClaudeWith(cfg ClaudeConfig) *Claude {
 	if cfg.Model == "" {
 		cfg.Model = "claude-opus-5-5"
 	}
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = 64000
+	}
 	var opts []option.RequestOption
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
@@ -46,7 +52,7 @@ func (c *Claude) Name() string { return c.cfg.Model }
 func (c *Claude) Complete(ctx context.Context, system, user string) (string, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.cfg.Model),
-		MaxTokens: 32000,
+		MaxTokens: c.cfg.MaxTokens,
 		System:    []anthropic.TextBlockParam{{Text: system}},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(user)),
