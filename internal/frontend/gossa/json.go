@@ -207,8 +207,8 @@ func (j *jsonTable) structDesc(st *types.Struct) string {
 			}
 			continue
 		}
-		if name == "-" && opts == "" {
-			continue
+		if tag == "-" {
+			continue // `json:"-,"` is the key "-"
 		}
 		inline := (f.Anonymous() && name == "") || (name == "" && contains(optList, "inline"))
 		if !f.Exported() && !inline {

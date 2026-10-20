@@ -210,7 +210,7 @@ writes the same value as a Go literal.
 | interfaces with methods, funcs, channels, floats | their zero value (nil, 0) |
 | `context.Context` | `context.Background()` |
 | unexported fields of another package's struct | their zero value (a test cannot set them) |
-| SDK response types' raw JSON (`RawJSON()`) | an object of one or two members keyed by strings the call tree compares with `==`; the harness builds the value by decoding a JSON document |
+| SDK response types' raw JSON (`RawJSON()`) | an object of one or two members keyed by strings the call tree compares with `==`; `JSON.ExtraFields` is derived from it as decoding derives it (members no typed field reads, nil when none); the harness builds the value by decoding a JSON document |
 | pointers to another package's struct that has a constructor (a handle) | opaque non-nil |
 | receiver of a method whose type has `NewT` | built by `NewT` (`T.M~NewT`) |
 
