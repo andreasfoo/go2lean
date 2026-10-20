@@ -255,6 +255,42 @@ func (j *jsonTable) structDesc(st *types.Struct, sdk, api bool) map[string]any {
 	return kind("strct", "fields", fields, "meta", meta, "api", api)
 }
 
+// keysOf lists the JSON keys a value of entry root reads, breadth first
+// (its own members before those of nested types).
+func (j *jsonTable) keysOf(root int) []string {
+	var keys []string
+	seen := map[int]bool{}
+	queue := []int{root}
+	for len(queue) > 0 {
+		i := queue[0]
+		queue = queue[1:]
+		if seen[i] || i >= len(j.descs) {
+			continue
+		}
+		seen[i] = true
+		d := j.descs[i]
+		for _, k := range []string{"e", "val"} {
+			if e, ok := d[k].(int); ok {
+				queue = append(queue, e)
+			}
+		}
+		for _, fk := range []string{"fields", "variants"} {
+			fs, _ := d[fk].([]any)
+			for _, f := range fs {
+				m := f.(map[string]any)
+				if g, _ := m["guard"].(bool); g {
+					continue
+				}
+				if k, _ := m["key"].(string); k != "" && !m["in"].(bool) && !contains(keys, k) {
+					keys = append(keys, k)
+				}
+				queue = append(queue, m["ty"].(int))
+			}
+		}
+	}
+	return keys
+}
+
 // metaDesc describes the JSON metadata field (index fi) of an SDK response
 // type: where its raw text, ExtraFields and per-member respjson.Field go.
 // It is called after the typed fields before it were seen; members are

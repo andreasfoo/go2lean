@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -123,6 +124,10 @@ func TestJSONStructDescription(t *testing.T) {
 	}
 	if q := byKey["q"]; q == nil || j.descs[q["ty"].(int)]["k"] != "opaque" {
 		t.Errorf("a `,string` field must be opaque: %v", q)
+	}
+	keys := j.keysOf(root)
+	if len(keys) < 3 || keys[0] != "name" || !slices.Contains(keys, "a") || !slices.Contains(keys, "x") || slices.Contains(keys, "Inner") {
+		t.Errorf("keys of Node: %v (own and promoted keys, then nested ones; no embedded field names)", keys)
 	}
 	if len(j.zeros) != len(j.descs) {
 		t.Errorf("%d zero values for %d descriptions", len(j.zeros), len(j.descs))

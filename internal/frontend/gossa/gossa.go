@@ -2218,12 +2218,21 @@ func (t *fnState) jsonDecode(x *ssa.Call) (bool, error) {
 	}
 	t.emit(ir.Instr{Dst: t.def(x), Op: ir.JSONDecode{Root: t.prog.json.desc(pt.Elem())}, Args: []ir.Var{data, p}})
 	t.out.UsesJSON = true
-	// The keys the decoded types read: JSON inputs are built from them.
-	for _, k := range t.prog.json.keys {
-		if !slices.Contains(t.out.MapKeys, k) {
-			t.out.MapKeys = append(t.out.MapKeys, k)
+	// The keys the decoded type reads, nearest first, ahead of the other
+	// keys: JSON inputs are built from them.
+	root := t.prog.json.desc(pt.Elem())
+	var keys []string
+	for _, k := range append(t.prog.json.keysOf(root), t.prog.json.keys...) {
+		if !slices.Contains(keys, k) {
+			keys = append(keys, k)
 		}
 	}
+	for _, k := range t.out.MapKeys {
+		if !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	t.out.MapKeys = keys
 	return true, nil
 }
 
