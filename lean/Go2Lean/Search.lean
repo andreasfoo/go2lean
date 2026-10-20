@@ -64,6 +64,14 @@ inductive Gen where
   an object of one or two members, keys from `keys`, values null, a bool,
   0, an empty string or a string from `vals`. -/
   | jsonText (name : String) (keys vals : List (List Nat))
+  /-- An SDK response value (entry `desc` of the package's JSON table): a
+  value from `inner`, then written as the JSON document the harness
+  builds for it and decoded, so its typed fields, raw JSON and metadata
+  agree as they do in Go, where such values only come from decoding. -/
+  | sdkDoc (name : String) (t : GoSSA.JTable) (desc : Nat) (inner : Gen)
+  /-- A union variant field the code under test reads: chosen as the live
+  variant more often than the others. -/
+  | hot (inner : Gen)
 
 /-- The type table: field generators per named struct type. -/
 abbrev TypeTable := Array (List Gen)
@@ -144,9 +152,10 @@ def topDepth : Nat := 4
 
 /-- The field name a generator stands for. -/
 def Gen.name : Gen → String
+  | .hot inner => inner.name
   | .int n .. | .bool n | .err n | .slice n .. | .sliceOf n .. | .structv n _ | .ptr n _
   | .link n _ | .str n .. | .nilptr n | .ref n _ | .opaque n _ | .arrOf n .. | .mapOf n .. | .anyOf n _
-  | .jsonText n .. => n
+  | .jsonText n .. | .sdkDoc n .. => n
 
 /-- The SDKs of OpenAI and Anthropic spell a union as a struct whose
 fields are all named `Of<Variant>` (pointers, slices, `param.Opt` values):
@@ -170,6 +179,8 @@ partial def zeroGen (table : TypeTable) : Gen → Gen
   | .structv n fs => .structv n (fs.map (zeroGen table))
   | .mapOf n .. | .anyOf n _ => .opaque n .opaqueNil
   | .jsonText n .. => .str n 0 []
+  -- A zero value is a literal in Go too (no raw JSON): not normalised.
+  | .sdkDoc _ _ _ inner | .hot inner => zeroGen table inner
   | .ref n idx =>
     match table[idx]? with
     | some fs => .structv n (fs.map (zeroGen table))
@@ -193,7 +204,16 @@ random when the struct is a union. -/
 def chooseFields (table : TypeTable) (g : StdGen) (fields : List Gen) : List Gen × StdGen :=
   let n := variantCount fields
   if n ≥ 2 then
-    let (k, g) := randNat g 0 (n - 1)
+    -- Three times in four one of the variants the code reads, when it
+    -- reads some but not all.
+    let vars := fields.filter Gen.isVariant
+    let hot := (List.range vars.length).filter fun i => match vars[i]? with | some (.hot _) => true | _ => false
+    let (roll, g) := randNat g 0 3
+    let (k, g) :=
+      if roll < 3 && !hot.isEmpty && hot.length < n then
+        let (j, g) := randNat g 0 (hot.length - 1)
+        (hot[j]!, g)
+      else randNat g 0 (n - 1)
     (selectVariant table fields k, g)
   else (fields, g)
 
@@ -260,6 +280,18 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     let (b, g) := randBool g
     (.err b, g, heap)
   | .slice _ w _ maxLen =>
+    -- A byte slice (json.RawMessage, a request body) is one of the pool's
+    -- strings a third of the time: random bytes are almost never the JSON
+    -- or text the code parses.
+    let (roll, g) := randNat g 0 2
+    if w == 8 && roll == 0 && !pool.isEmpty then
+      let (i, g) := randNat g 0 (pool.length - 1)
+      let bs := pool[i]!
+      let (p, heap) := heapAlloc heap (.arr (bs.map fun b => .int 8 (BitVec.ofNat 8 b)))
+      match p with
+      | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 bs.length) (BitVec.ofNat 64 bs.length), g, heap)
+      | _ => (.unit, g, heap)
+    else
     let (len, g) := randNat g 0 maxLen
     let (extraCap, g) := randNat g 0 2
     let (elems, g) := genMany pf extra g w (len + extraCap)
@@ -273,7 +305,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     -- instead of growing exponentially.
     -- At depth zero the slice is empty: `depth - 1` would stay zero and a
     -- union whose variant holds a slice of itself would recurse forever.
-    let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else maxLen / 2 ^ (topDepth - depth)
+    let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else max (min maxLen 1) (maxLen / 2 ^ (topDepth - depth))
     let (len, g) := randNat g 0 maxLen
     let (extraCap, g) := if maxLen == 0 then (0, g) else randNat g 0 2
     let (elems, g, heap) := genList pf extra g heap pool table (depth - 1) allowNil (List.replicate (len + extraCap) elem)
@@ -286,15 +318,18 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     let (vs, g, heap) := genList pf extra g heap pool table depth allowNil fields
     let (vs, heap) := deriveExtraFields heap fields vs
     (.structv vs, g, heap)
-  | .ptr _ pointee =>
+  | .ptr name pointee =>
     -- With `allowNil` off (the default) a pointer is nil only once the
     -- depth budget is spent: "a field was never set" findings drown the
     -- ones people act on. With it on: nil one time in five, more often as
-    -- the budget runs out.
+    -- the budget runs out. The live variant of a union (`OfUser
+    -- *UserMessage`) costs no depth: it is how the SDKs spell one value,
+    -- and charging it left nested content parts and tool schemas empty.
+    let variant := (Gen.ptr name pointee).isVariant
     let (roll, g) := randNat g 0 4
-    if depth == 0 || (allowNil && roll < (if depth ≤ 1 then 3 else 1)) then (.ptr 0 [], g, heap)
+    if (depth == 0 && !variant) || (allowNil && roll < (if depth ≤ 1 then 3 else 1)) then (.ptr 0 [], g, heap)
     else
-      let (obj, g, heap) := genVal pf extra g heap pool table (depth - 1) allowNil pointee
+      let (obj, g, heap) := genVal pf extra g heap pool table (if variant then depth else depth - 1) allowNil pointee
       let (p, heap) := heapAlloc heap obj
       (p, g, heap)
   | .link _ pointee =>
@@ -317,7 +352,7 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
   | .mapOf _ key val maxLen =>
     -- Like a slice: halved bounds per level, empty at depth zero. Keys
     -- equal to an earlier one are dropped (a map holds each once).
-    let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else maxLen / 2 ^ (topDepth - depth)
+    let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else max (min maxLen 1) (maxLen / 2 ^ (topDepth - depth))
     let (roll, g) := randNat g 0 4
     if allowNil && roll == 0 then (.opaqueNil, g, heap) else
     let (len, g) := randNat g 0 maxLen
@@ -352,6 +387,12 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
       (acc ++ [(keys[i]!, values[j]!)], g)) ([], g)
     let (v, heap) := strAlloc heap (jsonObject members)
     (v, g, heap)
+  | .hot inner => genVal pf extra g heap pool table depth allowNil inner
+  | .sdkDoc _ t d inner =>
+    let (v, g, heap) := genVal pf extra g heap pool table depth allowNil inner
+    match sdkNormalize t d heap v with
+    | some (v, heap) => (v, g, heap)
+    | none => (v, g, heap)
   | .arrOf _ elem n =>
     -- Below the budget an array holds zero values of its element kind:
     -- the generator for the element at depth zero yields nil pointers and
@@ -526,12 +567,14 @@ def flatten : Gen → Val → List (String × Json)
   | .mapOf .., _ => []
   | .anyOf .., _ => []
   | .jsonText .., _ => []
+  | .sdkDoc .., _ => []
+  | .hot .., _ => []
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
     | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n _ => n | .arrOf n .. => n | .link n _ => n
-    | .mapOf n .. => n | .anyOf n _ => n | .jsonText n .. => n
+    | .mapOf n .. => n | .anyOf n _ => n | .jsonText n .. => n | .sdkDoc n .. => n | .hot inner => genName inner
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -604,6 +647,7 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.mapOf name .., v) => some (name, renderObj heap true v)
     | (.anyOf name _, v) => some (name, renderObj heap true v)
     | (.jsonText name .., v) => some (name, renderObj heap true v)
+    | (.sdkDoc name .., v) => some (name, renderObj heap true v)
     | _ => none
 
 partial def renderVal : Val → Json
@@ -778,6 +822,11 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
       (enumList extra maxLen pool table depth allowNil fields).map fun build heap =>
         let (vs, heap) := build heap
         (.structv vs, heap)
+  | .hot inner => enumGen extra maxLen pool table depth allowNil inner
+  | .sdkDoc _ t d inner =>
+    (enumGen extra maxLen pool table depth allowNil inner).map fun build heap =>
+      let (v, heap) := build heap
+      (sdkNormalize t d heap v).getD (v, heap)
   | .ptr _ pointee =>
     (if depth > 0 && !allowNil then [] else [fun heap => (.ptr 0 [], heap)]) ++
       (if depth == 0 then [] else
@@ -858,6 +907,7 @@ when the domain is small. -/
 partial def leaves (table : TypeTable) (seen : List Nat := []) : Gen → Nat
   | .structv _ fields => structLeaves table seen fields
   | .ptr _ pointee | .link _ pointee | .sliceOf _ pointee _ | .arrOf _ pointee _ => 1 + leaves table seen pointee
+  | .sdkDoc _ _ _ inner | .hot inner => leaves table seen inner
   | .mapOf _ key val _ => 1 + leaves table seen key + leaves table seen val
   | .anyOf _ alts => 1 + (alts.map fun (_, a) => leaves table seen a).foldl max 0
   | .ref _ tyIdx =>
@@ -889,6 +939,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     let k := genSize extra maxLen pool table (depth - 1) allowNil elem
     (List.range (min maxLen maxLen' + 1)).foldl (fun acc len => acc + k ^ len) 0
   | .structv _ fields => structSize extra maxLen pool table depth allowNil fields
+  | .sdkDoc _ _ _ inner | .hot inner => genSize extra maxLen pool table depth allowNil inner
   | .ptr _ pointee => (if depth > 0 && !allowNil then 0 else 1) + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .link _ pointee => 1 + (if depth == 0 then 0 else genSize extra maxLen pool table (depth - 1) allowNil pointee)
   | .ref _ tyIdx =>

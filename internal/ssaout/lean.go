@@ -112,6 +112,19 @@ func WriteRegistry(leanDir string) error {
 		}
 		fmt.Fprintf(&b, "  (\"gossa.%s\", Go2Lean.Generated.gossa.%s.prog)%s\n", m, m, sep)
 	}
+	b.WriteString("]\n\n/-- Each model's JSON table (SDK values generated as decoded documents). -/\ndef jsonTables : List (String × Go2Lean.GoSSA.JTable) := [\n")
+	for i, m := range mods {
+		sep := ","
+		if i == len(mods)-1 {
+			sep = ""
+		}
+		// A model generated before tables were always emitted has none.
+		table := "{ descs := #[], zeros := #[] }"
+		if src, err := os.ReadFile(filepath.Join(dir, m+".lean")); err == nil && strings.Contains(string(src), "\ndef jsonTable ") {
+			table = "Go2Lean.Generated.gossa." + m + ".jsonTable"
+		}
+		fmt.Fprintf(&b, "  (\"gossa.%s\", %s)%s\n", m, table, sep)
+	}
 	b.WriteString("]\n\nend Go2Lean.Generated\n")
 	return os.WriteFile(filepath.Join(leanDir, "Go2Lean", "Generated", "Registry.lean"), []byte(b.String()), 0o644)
 }
@@ -126,9 +139,11 @@ func Print(p *ir.Prog, module string) string {
 	// too small for a few hundred instructions in one block (614 needs
 	// more than 8192).
 	fmt.Fprintf(&b, "set_option maxRecDepth 100000\n\n")
-	if p.JSONTable != "" {
-		fmt.Fprintf(&b, "/-- The JSON descriptions of the types this package encodes or decodes. -/\ndef jsonTable : GoSSA.JTable :=\n  %s\n\n", p.JSONTable)
+	table := p.JSONTable
+	if table == "" {
+		table = "{ descs := #[], zeros := #[] }"
 	}
+	fmt.Fprintf(&b, "/-- The JSON descriptions of the types this package encodes or decodes. -/\ndef jsonTable : GoSSA.JTable :=\n  %s\n\n", table)
 	for i, f := range p.Funcs {
 		fmt.Fprintf(&b, "/-- %s (status: %s) -/\n", f.GoSig, f.Status)
 		fmt.Fprintf(&b, "def f%d : GoSSA.Func := {\n  name := %q, params := %s, nvals := %d, entry := %d,\n  blocks := #[\n",
@@ -193,7 +208,7 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		Dependency: p.Dependency,
 	}
 	for i, f := range p.Funcs {
-		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Closure: f.Closure, WrappedBy: f.WrappedBy, TestFile: f.TestFile, SpecMaxLen: f.SpecMaxLen, Consts: f.Consts, StrConsts: f.StrConsts, MapKeys: f.MapKeys, UsesJSON: f.UsesJSON, CmpStrs: f.CmpStrs, Calls: f.Calls, XCalls: f.XCalls, Exits: f.Exits}
+		mf := contract.ModelFunc{Name: f.Name, GoSig: f.GoSig, ID: i, Status: f.Status, Issues: f.Issues, SpecFor: f.SpecFor, Closure: f.Closure, WrappedBy: f.WrappedBy, TestFile: f.TestFile, SpecMaxLen: f.SpecMaxLen, Consts: f.Consts, StrConsts: f.StrConsts, MapKeys: f.MapKeys, UsesJSON: f.UsesJSON, CmpStrs: f.CmpStrs, Variants: f.Variants, Calls: f.Calls, XCalls: f.XCalls, Exits: f.Exits}
 		if f.Status != contract.ModelRejected {
 			abi := f.ABI
 			abiRel, err := ws.WriteABI(&abi, p.Package, f.Name)

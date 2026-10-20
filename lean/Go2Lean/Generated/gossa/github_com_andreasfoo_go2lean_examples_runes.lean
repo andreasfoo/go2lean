@@ -8,6 +8,10 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 set_option maxRecDepth 100000
 
+/-- The JSON descriptions of the types this package encodes or decodes. -/
+def jsonTable : GoSSA.JTable :=
+  { descs := #[], zeros := #[] }
+
 /-- func (c *github.com/andreasfoo/go2lean/examples/runes.Counter) Bump(by int) int (status: partial) -/
 def f0 : GoSSA.Func := {
   name := "Counter.Bump", params := [0, 1], nvals := 26, entry := 0,

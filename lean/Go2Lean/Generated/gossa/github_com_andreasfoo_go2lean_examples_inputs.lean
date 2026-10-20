@@ -8,6 +8,10 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 set_option maxRecDepth 100000
 
+/-- The JSON descriptions of the types this package encodes or decodes. -/
+def jsonTable : GoSSA.JTable :=
+  { descs := #[], zeros := #[] }
+
 /-- func(extras map[string]any) int (status: partial) -/
 def f0 : GoSSA.Func := {
   name := "Count", params := [0], nvals := 17, entry := 0,

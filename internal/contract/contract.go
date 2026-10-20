@@ -358,6 +358,10 @@ type ABIType struct {
 	GoType  string     `json:"go_type"`
 	TypePkg string     `json:"type_pkg,omitempty"`
 	Fields  []ABIParam `json:"fields"`
+	// JSONDesc is 1 + the type's entry in the package's JSON table for an
+	// SDK response type: the search generates its values as decoded
+	// documents, so typed fields and raw JSON agree.
+	JSONDesc int `json:"json_desc,omitempty"`
 }
 
 // ABIResult describes the Go result.
@@ -446,6 +450,9 @@ type ModelFunc struct {
 	// CmpStrs are the string constants the body compares with == or !=
 	// (k == "reasoning_content"): the keys generated JSON texts use.
 	CmpStrs []string `json:"cmp_strs,omitempty"`
+	// Variants are the union variant fields (OfTool, OfFile) the body
+	// reads: the search makes them the live variant more often.
+	Variants []string `json:"variants,omitempty"`
 	// Calls lists the IDs of the package functions this one calls, so the
 	// engines can mine the literals of the whole call tree.
 	Calls []int `json:"calls,omitempty"`

@@ -24,7 +24,7 @@ partial def valOfJson (j : Json) : Except String GoSSA.Val := do
   | _ => return .unit
 
 /-- Decode a generator; the shape mirrors `constraint.genJSON` on the Go side. -/
-partial def genOfJson (j : Json) : Except String Gen := do
+partial def genOfJson (t : GoSSA.JTable) (j : Json) : Except String Gen := do
   let k ← j.getObjValAs? String "k"
   let name := (j.getObjValAs? String "name").toOption.getD ""
   match k with
@@ -33,10 +33,12 @@ partial def genOfJson (j : Json) : Except String Gen := do
   | "err" => return .err name
   | "slice" =>
     return .slice name (← j.getObjValAs? Nat "w") (← j.getObjValAs? Bool "signed") (← j.getObjValAs? Nat "maxLen")
-  | "sliceOf" => return .sliceOf name (← genOfJson (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "maxLen")
-  | "structv" => return .structv name (← (← j.getObjValAs? (Array Json) "fields").toList.mapM genOfJson)
-  | "ptr" => return .ptr name (← genOfJson (← j.getObjVal? "pointee"))
-  | "link" => return .link name (← genOfJson (← j.getObjVal? "pointee"))
+  | "sliceOf" => return .sliceOf name (← genOfJson t (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "maxLen")
+  | "structv" => return .structv name (← (← j.getObjValAs? (Array Json) "fields").toList.mapM (genOfJson t))
+  | "hot" => return .hot (← genOfJson t (← j.getObjVal? "inner"))
+  | "sdkDoc" => return .sdkDoc name t (← j.getObjValAs? Nat "desc") (← genOfJson t (← j.getObjVal? "inner"))
+  | "ptr" => return .ptr name (← genOfJson t (← j.getObjVal? "pointee"))
+  | "link" => return .link name (← genOfJson t (← j.getObjVal? "pointee"))
   | "str" =>
     let enum := ((j.getObjValAs? (List String) "enum").toOption.getD []).map
       fun s => s.toUTF8.toList.map (·.toNat)
@@ -51,16 +53,16 @@ partial def genOfJson (j : Json) : Except String Gen := do
       | some "nonnil" => .boxed 0 .unit
       | _ => .unit
     return .opaque name v
-  | "arrOf" => return .arrOf name (← genOfJson (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "n")
+  | "arrOf" => return .arrOf name (← genOfJson t (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "n")
   | "mapOf" =>
-    return .mapOf name (← genOfJson (← j.getObjVal? "key")) (← genOfJson (← j.getObjVal? "val")) (← j.getObjValAs? Nat "maxLen")
+    return .mapOf name (← genOfJson t (← j.getObjVal? "key")) (← genOfJson t (← j.getObjVal? "val")) (← j.getObjValAs? Nat "maxLen")
   | "jsonText" =>
     let strs (key : String) : List (List Nat) :=
       ((j.getObjValAs? (List String) key).toOption.getD []).map fun s => s.toUTF8.toList.map (·.toNat)
     return .jsonText name (strs "keys") (strs "vals")
   | "anyOf" =>
     let alts ← (← j.getObjValAs? (Array Json) "alts").toList.mapM fun a => do
-      return ((← a.getObjValAs? Nat "tag"), (← genOfJson (← a.getObjVal? "gen")))
+      return ((← a.getObjValAs? Nat "tag"), (← genOfJson t (← a.getObjVal? "gen")))
     return .anyOf name alts
   | other => throw s!"unknown generator kind {other}"
 
@@ -87,9 +89,12 @@ structure Spec where
   limit : Nat
   budgetMs : Nat
 
-def specOfJson (j : Json) : Except String Spec := do
-  let gens ← (← j.getObjValAs? (Array Json) "gens").toList.mapM genOfJson
-  let table ← (← j.getObjValAs? (Array (Array Json)) "table").mapM fun fs => fs.toList.mapM genOfJson
+/-- `tables`: each model's JSON table, for SDK values generated as decoded
+documents (`sdkDoc`). -/
+def specOfJson (tables : List (String × GoSSA.JTable)) (j : Json) : Except String Spec := do
+  let t := (tables.lookup (← j.getObjValAs? String "prog")).getD { descs := #[], zeros := #[] }
+  let gens ← (← j.getObjValAs? (Array Json) "gens").toList.mapM (genOfJson t)
+  let table ← (← j.getObjValAs? (Array (Array Json)) "table").mapM fun fs => fs.toList.mapM (genOfJson t)
   return {
     prog := ← j.getObjValAs? String "prog"
     engine := ← j.getObjValAs? String "engine"
@@ -190,11 +195,11 @@ def link (registry : List (String × GoSSA.Prog)) (main : String) : Option GoSSA
 
 /-- Entry point of the `go2lean-search` executable: `go2lean-search spec.json`,
 with the models in `registry`. -/
-def driverMain (registry : List (String × GoSSA.Prog)) (args : List String) : IO UInt32 := do
+def driverMain (registry : List (String × GoSSA.Prog)) (tables : List (String × GoSSA.JTable)) (args : List String) : IO UInt32 := do
   match args with
   | [path] =>
     let txt ← IO.FS.readFile path
-    match Json.parse txt >>= specOfJson with
+    match Json.parse txt >>= specOfJson tables with
     | .error e => IO.eprintln s!"{path}: {e}"; return 2
     | .ok spec =>
       match link registry spec.prog with

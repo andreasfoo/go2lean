@@ -451,11 +451,11 @@ func ctorOf(f *ssa.Function) (*types.TypeName, bool) {
 // unmodelled callee must not read as "no panic"). deref loads the receiver
 // from the constructor's pointer for a value receiver.
 func ctorWrapper(p *ir.Prog, ctor, m *ssa.Function, ctorID, mID int, deref bool) (*ir.Func, error) {
-	cabi, err := abiOf(ctor)
+	cabi, err := abiOf(ctor, nil)
 	if err != nil {
 		return nil, err
 	}
-	mabi, err := abiOf(m)
+	mabi, err := abiOf(m, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -802,9 +802,23 @@ func (t *fnState) issue(format string, args ...any) {
 
 func (t *fnState) emit(in ir.Instr) { t.cur.Instrs = append(t.cur.Instrs, in) }
 
+// readVariant records that the body reads union variant field i (an
+// `Of<Variant>` field) of struct type st: the search makes such variants
+// the live one more often.
+func (t *fnState) readVariant(st types.Type, i int) {
+	s, ok := st.Underlying().(*types.Struct)
+	if !ok || i >= s.NumFields() {
+		return
+	}
+	name := s.Field(i).Name()
+	if len(name) > 2 && strings.HasPrefix(name, "Of") && name[2] >= 'A' && name[2] <= 'Z' && !slices.Contains(t.out.Variants, name) {
+		t.out.Variants = append(t.out.Variants, name)
+	}
+}
+
 func (t *fnState) translate() error {
 	f := t.f
-	abi, err := abiOf(f)
+	abi, err := abiOf(f, t.prog.json)
 	if err != nil {
 		return err
 	}
@@ -1512,6 +1526,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			return err
 		}
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.FieldAddr{I: x.Field}, Args: []ir.Var{p}})
+		t.readVariant(x.X.Type().Underlying().(*types.Pointer).Elem(), x.Field)
 		return nil
 	case *ssa.Field:
 		s, err := t.val(x.X)
@@ -1519,6 +1534,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			return err
 		}
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Field{I: x.Field}, Args: []ir.Var{s}})
+		t.readVariant(x.X.Type(), x.Field)
 		return nil
 	case *ssa.MakeSlice:
 		zero, ok := zeroVal(x.Type().Underlying().(*types.Slice).Elem())
@@ -1955,6 +1971,13 @@ func (t *fnState) call(x *ssa.Call) error {
 			return err
 		}
 	}
+	if callee != nil && callee.Pkg != nil && sdkPkg(callee.Pkg.Pkg.Path()) && strings.HasSuffix(callee.String(), "/internal/apijson.UnmarshalRoot") && len(x.Call.Args) == 2 {
+		// The SDKs decode their own types with apijson (UnmarshalJSON,
+		// the As* methods of unions): the JSON model's SDK decoding.
+		if done, err := t.jsonDecode(x); done || err != nil {
+			return err
+		}
+	}
 	if callee != nil && callee.String() == "encoding/json.Marshal" && len(x.Call.Args) == 1 {
 		return t.jsonMarshal(x)
 	}
@@ -2005,11 +2028,29 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil {
 		name = callee.String()
 	}
+	if _, tuple := x.Type().(*types.Tuple); hasResult && !tuple && callee != nil && callee.Pkg != nil && loggingPkg(callee.Pkg.Pkg.Path()) {
+		// A logger (logrus.WithContext, WithField): its results only feed
+		// more logging calls, which the model ignores. An opaque value, not
+		// an assumption.
+		t.issue("call to %s: logging, result opaque", name)
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+		return nil
+	}
 	if hasResult {
 		return t.havoc(x, "call "+name, "unmodeled-call", "")
 	}
 	t.issue("call to %s ignored (no result, effects not modelled)", name)
 	return nil
+}
+
+// loggingPkg says whether path is a logging package: its calls have no
+// effect the model follows.
+func loggingPkg(path string) bool {
+	switch path {
+	case "github.com/sirupsen/logrus", "log", "log/slog", "go.uber.org/zap":
+		return true
+	}
+	return false
 }
 
 // recordExit notes a return statement: its block (the current one), its
@@ -2883,7 +2924,7 @@ func funcPkg(f *ssa.Function) *types.Package {
 	return f.Pkg.Pkg
 }
 
-func abiOf(f *ssa.Function) (*contract.ABI, error) {
+func abiOf(f *ssa.Function, json *jsonTable) (*contract.ABI, error) {
 	abi := &contract.ABI{GoFunc: f.String(), GoSig: f.Signature.String(), Frontend: Frontend, Package: funcPkg(f).Path(), Variadic: f.Signature.Variadic(), Imports: map[string]string{}}
 	used := map[string]string{} // qualifier -> path
 	recordImport = func(path, name string) string {
@@ -2905,7 +2946,7 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		abi.Method = f.Name()
 	}
 	pkg := funcPkg(f)
-	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}, fset: f.Prog.Fset}
+	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}, fset: f.Prog.Fset, json: json}
 	for _, p := range f.Params {
 		if isTestingType(p.Type()) {
 			return nil, fmt.Errorf("test helper: parameter %s has type %s", p.Name(), p.Type())
@@ -2944,6 +2985,9 @@ type abiBuilder struct {
 	// scalars only, so the description stays finite.
 	anyDepth int
 	fset     *token.FileSet
+	// json is the package's JSON table, for SDK response types (nil: no
+	// JSON descriptions).
+	json *jsonTable
 }
 
 // register adds a recursive named struct type to the table.
@@ -2955,6 +2999,19 @@ func (ab *abiBuilder) register(n *types.Named, src, ipath string) int {
 	ab.index[n] = idx
 	ab.abi.Types = append(ab.abi.Types, contract.ABIType{GoType: src, TypePkg: ipath})
 	return idx
+}
+
+// hasRespMeta says whether st is an SDK response type: it keeps JSON
+// metadata (raw text, per-member fields) in a field named JSON.
+func hasRespMeta(st *types.Struct) bool {
+	for i := 0; i < st.NumFields(); i++ {
+		if f := st.Field(i); f.Name() == "JSON" {
+			if mst, ok := f.Type().Underlying().(*types.Struct); ok && isRespJSONMeta(mst) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // fields describes the fields of a struct; unexported fields of a foreign
@@ -3123,6 +3180,9 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 				return contract.ABIParam{}, err
 			}
 			ab.abi.Types[idx].Fields = fields
+			if ab.json != nil && hasRespMeta(st) {
+				ab.abi.Types[idx].JSONDesc = ab.json.desc(n) + 1
+			}
 			return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIStruct, TypeRef: ab.abi.Types[idx].GoType}, nil
 		}
 	}

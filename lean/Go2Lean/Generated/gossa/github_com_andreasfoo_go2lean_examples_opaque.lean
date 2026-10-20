@@ -8,6 +8,10 @@ open Go2Lean.SSA Go2Lean.GoSSA
 
 set_option maxRecDepth 100000
 
+/-- The JSON descriptions of the types this package encodes or decodes. -/
+def jsonTable : GoSSA.JTable :=
+  { descs := #[], zeros := #[] }
+
 /-- func (c *github.com/andreasfoo/go2lean/examples/opaque.Cache) Share(n int) int (status: complete) -/
 def f0 : GoSSA.Func := {
   name := "Cache.Share", params := [0, 1], nvals := 7, entry := 0,

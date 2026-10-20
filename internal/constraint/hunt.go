@@ -184,7 +184,15 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 		return map[string]any{"k": "slice", "name": p.Go, "w": w, "signed": signed, "maxLen": maxLen}, nil
 	case contract.ABIStruct:
 		if p.TypeRef != "" {
-			return map[string]any{"k": "ref", "name": p.Go, "ty": typeIndex(abi, p.TypeRef)}, nil
+			ref := map[string]any{"k": "ref", "name": p.Go, "ty": typeIndex(abi, p.TypeRef)}
+			for _, t := range abi.Types {
+				if t.GoType == p.TypeRef && t.JSONDesc > 0 {
+					// An SDK response value: generated, then decoded from
+					// the document the harness builds for it.
+					return map[string]any{"k": "sdkDoc", "name": p.Go, "desc": t.JSONDesc - 1, "inner": ref}, nil
+				}
+			}
+			return ref, nil
 		}
 		fs := []map[string]any{}
 		for _, f := range p.Fields {
@@ -270,8 +278,8 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 // literals, the strings used as map keys and compared with ==, and whether
 // some function decodes JSON.
 type pool struct {
-	consts, strConsts, mapKeys, cmpStrs []string
-	usesJSON                            bool
+	consts, strConsts, mapKeys, cmpStrs, variants []string
+	usesJSON                                      bool
 }
 
 // literalPool collects the literals of the given functions and,
@@ -313,6 +321,7 @@ func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []in
 		add(&pl.strConsts, f.StrConsts)
 		add(&pl.mapKeys, f.MapKeys)
 		add(&pl.cmpStrs, f.CmpStrs)
+		add(&pl.variants, f.Variants)
 		pl.usesJSON = pl.usesJSON || f.UsesJSON
 		for _, callee := range f.Calls {
 			walk(contract.XCall{Package: x.Package, ID: callee})
@@ -384,6 +393,29 @@ func jsonGens(node any, keys, vals []string) {
 
 // keyMaps gives every generated map with string keys and no enum of its
 // own the map keys of the call tree as its key enum.
+// hotVariants marks the union variant fields the call tree reads
+// (`hot`): a union of 28 variants whose code handles three would
+// otherwise rarely hold one of those three.
+func hotVariants(node any, hot []string) {
+	switch n := node.(type) {
+	case map[string]any:
+		for _, v := range n {
+			hotVariants(v, hot)
+		}
+	case []map[string]any:
+		for i, v := range n {
+			hotVariants(v, hot)
+			if name, _ := v["name"].(string); v["k"] != "hot" && slices.Contains(hot, name) {
+				n[i] = map[string]any{"k": "hot", "name": name, "inner": v}
+			}
+		}
+	case [][]map[string]any:
+		for _, v := range n {
+			hotVariants(v, hot)
+		}
+	}
+}
+
 func keyMaps(node any, keys []string) {
 	switch n := node.(type) {
 	case map[string]any:
@@ -492,6 +524,8 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	}
 	jsonGens(g, jsonKeys, jsonVals)
 	jsonGens(table, jsonKeys, jsonVals)
+	hotVariants(g, pl.variants)
+	hotVariants(table, pl.variants)
 
 	extra := []json.Number{}
 	for _, c := range consts {

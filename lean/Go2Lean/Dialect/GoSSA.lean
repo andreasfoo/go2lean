@@ -1649,6 +1649,102 @@ where
   wholeObject (members : List (String × List Nat)) : List Nat :=
     [123] ++ jSep (members.map fun (k, v) => goJsonQuote (asciiBytes k) ++ [58] ++ v) 44 ++ [125]
 
+/-! SDK response values for the search: generated values whose typed
+fields and raw JSON agree, as only decoding produces them. -/
+
+/-- The harness's zero test for a rendered value (poc/harness.go
+isZeroJSON): a zero field is left out of the document. -/
+partial def jsZero : Val → Bool
+  | .int _ v => v == 0
+  | .bool b => !b
+  | .err b => !b
+  | .str _ _ len => len == 0
+  | .ptr 0 _ | .slice 0 .. | .opaqueNil | .unit | .boxed 0 _ => true
+  | .structv vs | .arr vs => vs.all jsZero
+  | _ => false
+
+def jObjBytes (members : List (List Nat × List Nat)) : List Nat :=
+  let sorted := members.mergeSort fun a b => bytesLe a.1 b.1
+  [123] ++ jSep (sorted.map fun (k, x) => goJsonQuote k ++ [58] ++ x) 44 ++ [125]
+
+/-- The JSON document the harness decodes an SDK response value from
+(poc/harness.go jsonDoc, then json.Marshal): the non-zero typed fields
+under their keys, each level's raw JSON members merged in where no typed
+field has the key, keys sorted. Floats and other opaque fields are left
+out, as the harness leaves them out. `none`: a value the model cannot
+write as that document. -/
+partial def jDoc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Option (List Nat) :=
+  match t.descs[d]?, v with
+  | some (.str _), s@(.str ..) => (strBytes heap s).map goJsonQuote
+  | some .bool, .bool b => some (asciiBytes (if b then "true" else "false"))
+  | some (.int _ signed), .int _ x => some (bvDec signed x)
+  | some (.ptr _), .ptr 0 _ => some (asciiBytes "null")
+  | some (.ptr e), p@(.ptr ..) => match heapLoad heap p with | .ok x => jDoc t heap e x | _ => none
+  | some (.slice _), .slice 0 .. => some (asciiBytes "[]")
+  | some (.slice e), .slice ref off len _ =>
+    match heap[ref]? with
+    | some (.arr es) => elems e ((es.drop off.toNat).take len.toNat)
+    | _ => none
+  | some (.arr _ e), .arr es => elems e es
+  | some (.map ..), .opaqueNil => some (asciiBytes "{}")
+  | some (.map kd vd), m@(.boxed 1 _) => do
+    let (_, es) ← mapEntries heap m
+    let members ← es.mapM fun (k, x) => do
+      let key ← match t.descs[kd]?, k with
+        | some (.str _), s@(.str ..) => strBytes heap s
+        | some (.int _ sg), .int _ n => some (bvDec sg n)
+        | _, _ => none
+      pure (key, ← jDoc t heap vd x)
+    pure (jObjBytes (dedup members))
+  | some .iface, .opaqueNil | some .iface, .boxed 0 _ => some (asciiBytes "null")
+  | some .iface, .boxed tag inner => t.boxed.lookup tag >>= fun d' => jDoc t heap d' inner
+  | some (.strct fields md _), .structv vs => do
+    let mut members : List (List Nat × List Nat) := []
+    let mut inlined : Option (List Nat) := none
+    for f in fields do
+      if f.guard then continue
+      let x := vs[f.idx]?.getD .unit
+      if jsZero x then continue
+      if (t.descs[f.ty]?.map fun | .opaque | .float => true | _ => false) == some true then continue
+      let doc ← jDoc t heap f.ty x
+      if f.inline then
+        match doc with
+        | 123 :: _ => members := members ++ (jObjMembers doc).map fun (k, s) => (asciiBytes k, s)
+        | _ => inlined := some doc
+      else members := members ++ [(f.key, doc)]
+    -- The raw JSON's members no typed field wrote (harness: decoded into
+    -- map[string]json.RawMessage, so the last of a duplicate key wins, and
+    -- re-encoded compact and HTML-escaped).
+    if let some mt := md then
+      if let some (.structv ms) := vs[mt.field]? then
+        if let some raw := ms[mt.raw]? >>= strBytes heap then
+          if let .ok (.obj _) := Lean.Json.parse (utf8Lossy raw) then
+            let extras := dedup ((jObjMembers (jTrim raw)).map fun (k, src) => (asciiBytes k, htmlEscape (compactJson src)))
+            let typed := members
+            members := members ++ extras.filter fun (k, _) => !typed.any (·.1 == k)
+    if let some doc := inlined then
+      if members.isEmpty then return doc
+    pure (jObjBytes members)
+  | _, _ => none
+where
+  elems (e : Nat) (es : List Val) : Option (List Nat) := do
+    let parts ← es.mapM (jDoc t heap e)
+    pure ([91] ++ jSep parts 44 ++ [93])
+  /-- Later entries replace earlier ones with the same key. -/
+  dedup (ms : List (List Nat × List Nat)) : List (List Nat × List Nat) :=
+    ms.foldl (fun acc (k, x) => (acc.filter (·.1 != k)) ++ [(k, x)]) []
+
+/-- An SDK response value as decoding makes it from `v`'s document: typed
+fields, raw text, per-member metadata and ExtraFields that agree (what
+the harness builds by decoding the same document). `none` where the
+document or its decoding is beyond the model. -/
+def sdkNormalize (t : JTable) (d : Nat) (heap : Heap Val) (v : Val) : Option (Val × Heap Val) := do
+  let doc ← jDoc t heap d v
+  let j ← (Lean.Json.parse (utf8Lossy doc)).toOption
+  match jDec t heap d j doc (t.zeros[d]?.getD .unit) with
+  | .ok (v', heap', false) => some (v', heap')
+  | _ => none
+
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
