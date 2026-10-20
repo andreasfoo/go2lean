@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/repo"
@@ -693,6 +694,21 @@ func buildDriver(leanDir string) error {
 	if driverBuilt == leanDir {
 		return nil
 	}
+	// Hunts run as parallel processes (round scripts use xargs -P): one
+	// lake build at a time, or a second one fails on the first's
+	// half-written outputs.
+	if err := os.MkdirAll(filepath.Join(leanDir, ".lake"), 0o755); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(leanDir, ".lake", "go2lean-build.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if out, err := lake(leanDir, "build", "go2lean-search"); err != nil {
 		return fmt.Errorf("lake build go2lean-search: %w\n%s", err, out)
 	}

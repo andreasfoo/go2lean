@@ -1288,6 +1288,30 @@ partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Boo
     | none, s@(.str ..) => (strBytes heap s).elim (.error false) (.ok ∘ goJsonQuote)
     | none, .bool b => .ok (asciiBytes (if b then "true" else "false"))
     | none, .int _ x => .ok (bvDec true x)
+    -- A map[string]interface{} or []interface{} the program does not box
+    -- itself (a decoded JSON object, a generated input): its members are
+    -- interface values again.
+    | none, m@(.boxed 1 _) =>
+      match mapEntries heap m with
+      | some (_, es) => do
+        -- Interface members only (map[string]interface{}): another map
+        -- type's values need their own description.
+        if !es.all (fun (_, x) => x matches .boxed .. || x matches .opaqueNil) then .error false
+        let mut parts : List (List Nat × List Nat) := []
+        for (kv, x) in es do
+          let key ← (strBytes heap kv).elim (.error false) .ok
+          parts := parts ++ [(key, ← jEnc t heap d x)]
+        let sorted := parts.mergeSort fun a b => bytesLe a.1 b.1
+        .ok ([123] ++ jSep (sorted.map fun (key, x) => goJsonQuote key ++ [58] ++ x) 44 ++ [125])
+      | none => .error false
+    | none, .slice 0 .. => .ok (asciiBytes "null")
+    | none, .slice ref off len _ =>
+      match heap[ref]? with
+      | some (.arr es) =>
+        let es := (es.drop off.toNat).take len.toNat
+        -- []interface{} only: a []byte encodes as base64.
+        if es.all (fun x => x matches .boxed .. || x matches .opaqueNil) then elems d es else .error false
+      | _ => .error false
     | none, _ => .error false
   | some (.strct fields _ _), .structv vs => do
     let ms ← members fields vs
