@@ -40,3 +40,27 @@ func TestGensAndTypeTable(t *testing.T) {
 		t.Fatalf("type table: %s", tj)
 	}
 }
+
+func TestHotEnumsAndVariants(t *testing.T) {
+	g := []map[string]any{{"k": "structv", "name": "item", "fields": []map[string]any{
+		{"k": "str", "name": "Type", "enum": []string{"message", "reasoning", "function_call", "web_search_call"}},
+		{"k": "ptr", "name": "OfTool"},
+		{"k": "ptr", "name": "OfBash"},
+	}}}
+	hotEnums(g, []string{"reasoning"})
+	hotVariants(g, []string{"OfTool"})
+	fields := g[0]["fields"].([]map[string]any)
+	enum := fields[0]["enum"].([]string)
+	n := 0
+	for _, e := range enum {
+		if e == "reasoning" {
+			n++
+		}
+	}
+	if 2*n < len(enum) {
+		t.Errorf("compared value %d of %d enum entries, want half: %v", n, len(enum), enum)
+	}
+	if fields[1]["k"] != "hot" || fields[1]["name"] != "OfTool" || fields[2]["k"] != "ptr" {
+		t.Errorf("variants: %v", fields)
+	}
+}

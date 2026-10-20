@@ -393,6 +393,42 @@ func jsonGens(node any, keys, vals []string) {
 
 // keyMaps gives every generated map with string keys and no enum of its
 // own the map keys of the call tree as its key enum.
+// hotEnums weights the values of a documented enum that the call tree
+// compares (item.Type == "reasoning"): repeated in the enum list until
+// they make half of it, so a field with twenty documented values takes
+// the two the code tests for half the time.
+func hotEnums(node any, cmp []string) {
+	switch n := node.(type) {
+	case map[string]any:
+		if enum, ok := n["enum"].([]string); ok && n["k"] == "str" {
+			var hot []string
+			for _, e := range enum {
+				if slices.Contains(cmp, e) && !slices.Contains(hot, e) {
+					hot = append(hot, e)
+				}
+			}
+			if len(hot) > 0 && len(hot) < len(enum) {
+				out := append([]string{}, enum...)
+				for i := 0; i < len(enum); i++ {
+					out = append(out, hot[i%len(hot)])
+				}
+				n["enum"] = out
+			}
+		}
+		for _, v := range n {
+			hotEnums(v, cmp)
+		}
+	case []map[string]any:
+		for _, v := range n {
+			hotEnums(v, cmp)
+		}
+	case [][]map[string]any:
+		for _, v := range n {
+			hotEnums(v, cmp)
+		}
+	}
+}
+
 // hotVariants marks the union variant fields the call tree reads
 // (`hot`): a union of 28 variants whose code handles three would
 // otherwise rarely hold one of those three.
@@ -526,6 +562,8 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	jsonGens(table, jsonKeys, jsonVals)
 	hotVariants(g, pl.variants)
 	hotVariants(table, pl.variants)
+	hotEnums(g, pl.cmpStrs)
+	hotEnums(table, pl.cmpStrs)
 
 	extra := []json.Number{}
 	for _, c := range consts {
