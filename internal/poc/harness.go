@@ -290,7 +290,7 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 			return "", fmt.Errorf("string %s: %w", p.Go, err)
 		}
 		return fmt.Sprintf("%s := %s(%q)", p.Go, p.GoType, sv), nil
-	case contract.ABIStruct, contract.ABIPtr, contract.ABIArray:
+	case contract.ABIStruct, contract.ABIPtr, contract.ABIArray, contract.ABIMap, contract.ABIAny:
 		raw, ok := cx.Objects[p.Go]
 		if !ok {
 			return "", fmt.Errorf("counterexample has no object for %s", p.Go)
@@ -305,6 +305,10 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 		expr, err := literal(abi, p, v)
 		if err != nil {
 			return "", err
+		}
+		if p.Kind == contract.ABIMap || p.Kind == contract.ABIAny {
+			// Typed declaration: an interface holds the literal's own type.
+			return fmt.Sprintf("var %s %s = %s", p.Go, p.GoType, expr), nil
 		}
 		return fmt.Sprintf("%s := %s", p.Go, expr), nil
 	case contract.ABISlice:
@@ -454,13 +458,51 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			parts = append(parts, s)
 		}
 		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
+	case contract.ABIMap:
+		if v == nil {
+			return "(" + p.GoType + ")(nil)", nil
+		}
+		obj, _ := v.(map[string]any)
+		entries, ok := obj["map"].([]any)
+		if !ok {
+			return "", fmt.Errorf("%s: expected {\"map\": [...]}, got %v", p.Go, v)
+		}
+		var parts []string
+		for _, e := range entries {
+			kv, ok := e.([]any)
+			if !ok || len(kv) != 2 {
+				return "", fmt.Errorf("%s: bad map entry %v", p.Go, e)
+			}
+			k, err := literal(abi, *p.Key, kv[0])
+			if err != nil {
+				return "", err
+			}
+			val, err := literal(abi, *p.Value, kv[1])
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, k+": "+val)
+		}
+		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
+	case contract.ABIAny:
+		if v == nil {
+			return "nil", nil
+		}
+		obj, _ := v.(map[string]any)
+		tag, _ := obj["tag"].(float64)
+		for _, a := range p.Alts {
+			if float64(a.Tag) == tag {
+				return literal(abi, a, obj["v"])
+			}
+		}
+		return "", fmt.Errorf("%s: no alternative with type tag %v", p.Go, obj["tag"])
 	case contract.ABIPtr:
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
 		}
-		if p.Pointee.Kind == contract.ABIOpaque {
-			// A pointer to a value the model never looked into: a pointer
-			// to its zero value.
+		if p.Pointee.Kind == contract.ABIOpaque || v == "opaque" {
+			// A pointer to a value the model never looked into (or to a nil
+			// map or interface): a pointer to its zero value.
 			return "new(" + p.Pointee.GoType + ")", nil
 		}
 		inner, err := literal(abi, *p.Pointee, v)
@@ -574,7 +616,7 @@ func isZeroJSON(abi *contract.ABI, p contract.ABIParam, v any) bool {
 		return v == ""
 	case contract.ABIError:
 		return v == "nil" || v == nil
-	case contract.ABIOpaque, contract.ABIPtr, contract.ABISlice:
+	case contract.ABIOpaque, contract.ABIPtr, contract.ABISlice, contract.ABIMap, contract.ABIAny:
 		return v == nil
 	case contract.ABIStruct, contract.ABIArray:
 		elems, _ := v.([]any)
@@ -609,6 +651,14 @@ func collectImports(p contract.ABIParam, into map[string]bool) {
 	}
 	if p.ElemParam != nil {
 		collectImports(*p.ElemParam, into)
+	}
+	for _, q := range []*contract.ABIParam{p.Key, p.Value} {
+		if q != nil {
+			collectImports(*q, into)
+		}
+	}
+	for _, a := range p.Alts {
+		collectImports(a, into)
 	}
 }
 
@@ -647,6 +697,14 @@ func needsErrors(abi *contract.ABI, p contract.ABIParam, raw json.RawMessage) bo
 			elems, _ := v.([]any)
 			for _, e := range elems {
 				if p.ElemParam != nil && walk(*p.ElemParam, e) {
+					return true
+				}
+			}
+		case contract.ABIMap:
+			obj, _ := v.(map[string]any)
+			entries, _ := obj["map"].([]any)
+			for _, e := range entries {
+				if kv, ok := e.([]any); ok && len(kv) == 2 && walk(*p.Value, kv[1]) {
 					return true
 				}
 			}

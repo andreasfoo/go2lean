@@ -53,6 +53,13 @@ inductive Gen where
   | opaque (name : String) (v : Val)
   /-- A fixed-size array of `n` elements from `elem`. -/
   | arrOf (name : String) (elem : Gen) (n : Nat)
+  /-- A map of up to `maxLen` entries with keys from `key` (distinct) and
+  values from `val`, built as the program builds maps (`.boxed 1 p`); nil
+  when nil inputs are allowed. -/
+  | mapOf (name : String) (key val : Gen) (maxLen : Nat)
+  /-- An empty interface: nil, or the value of one of `alts` boxed with its
+  type tag. -/
+  | anyOf (name : String) (alts : List (Nat × Gen))
 
 /-- The type table: field generators per named struct type. -/
 abbrev TypeTable := Array (List Gen)
@@ -133,7 +140,7 @@ def topDepth : Nat := 4
 /-- The field name a generator stands for. -/
 def Gen.name : Gen → String
   | .int n .. | .bool n | .err n | .slice n .. | .sliceOf n .. | .structv n _ | .ptr n _
-  | .link n _ | .str n .. | .nilptr n | .ref n _ | .opaque n _ | .arrOf n .. => n
+  | .link n _ | .str n .. | .nilptr n | .ref n _ | .opaque n _ | .arrOf n .. | .mapOf n .. | .anyOf n _ => n
 
 /-- The SDKs of OpenAI and Anthropic spell a union as a struct whose
 fields are all named `Of<Variant>` (pointers, slices, `param.Opt` values):
@@ -155,6 +162,7 @@ partial def zeroGen (table : TypeTable) : Gen → Gen
   | .err n => .opaque n (.err false)
   | .str n .. => .str n 0 []
   | .structv n fs => .structv n (fs.map (zeroGen table))
+  | .mapOf n .. | .anyOf n _ => .opaque n .opaqueNil
   | .ref n idx =>
     match table[idx]? with
     | some fs => .structv n (fs.map (zeroGen table))
@@ -249,6 +257,31 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     | none => (.unit, g, heap)
   | .nilptr _ => (.ptr 0 [], g, heap)
   | .opaque _ v => (v, g, heap)
+  | .mapOf _ key val maxLen =>
+    -- Like a slice: halved bounds per level, empty at depth zero. Keys
+    -- equal to an earlier one are dropped (a map holds each once).
+    let maxLen := if depth == 0 then 0 else if depth ≥ topDepth then maxLen else maxLen / 2 ^ (topDepth - depth)
+    let (roll, g) := randNat g 0 4
+    if allowNil && roll == 0 then (.opaqueNil, g, heap) else
+    let (len, g) := randNat g 0 maxLen
+    let (entries, g, heap) := (List.range len).foldl (fun (acc, g, heap) _ =>
+      let (k, g, heap) := genVal pf extra g heap pool table (depth - 1) allowNil key
+      let (v, g, heap) := genVal pf extra g heap pool table (depth - 1) allowNil val
+      if acc.any (fun (k', _) => keyEq heap k k') then (acc, g, heap) else (acc ++ [(k, v)], g, heap))
+      (([] : List (Val × Val)), g, heap)
+    let (p, heap) := heapAlloc heap (mapObj entries)
+    (.boxed 1 p, g, heap)
+  | .anyOf _ alts =>
+    -- nil one time in (alternatives + 1); at depth zero only scalars, so
+    -- an interface holding a map of interfaces bottoms out.
+    let alts := if depth == 0 then alts.filter (fun (_, a) => match a with | .mapOf .. | .sliceOf .. => false | _ => true) else alts
+    let (i, g) := randNat g 0 alts.length
+    match alts[i]? with
+    | none => (.opaqueNil, g, heap)
+    | some (tag, a) =>
+      -- The interface itself costs no depth: its map or slice does.
+      let (v, g, heap) := genVal pf extra g heap pool table depth allowNil a
+      (.boxed tag v, g, heap)
   | .arrOf _ elem n =>
     -- Below the budget an array holds zero values of its element kind:
     -- the generator for the element at depth zero yields nil pointers and
@@ -417,11 +450,14 @@ def flatten : Gen → Val → List (String × Json)
   | .ref .., _ => []
   | .opaque .., _ => []
   | .arrOf .., _ => []
+  | .mapOf .., _ => []
+  | .anyOf .., _ => []
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
     | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n _ => n | .arrOf n .. => n | .link n _ => n
+    | .mapOf n .. => n | .anyOf n _ => n
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -447,7 +483,15 @@ partial def renderObj (heap : Heap Val) (signed : Bool) : Val → Json
   | .unit => Json.null
   -- Opaque values: M3 passes the zero value (nil) for inputs of these types.
   | .opaqueNil => Json.null
-  | .boxed .. => Json.null
+  -- A map the generator or the program built: its entries in order.
+  | m@(.boxed 1 _) =>
+    match mapEntries heap m with
+    | some (_, es) => Json.mkObj [("map", Json.arr (es.map fun (k, v) =>
+        Json.arr #[renderObj heap signed k, renderObj heap signed v]).toArray)]
+    | none => Json.null
+  -- A value in an interface: its type tag and the value (funcs: nil).
+  | .boxed 0 _ => Json.null
+  | .boxed t v => Json.mkObj [("tag", (t : Json)), ("v", renderObj heap signed v)]
   | s@(.str ..) =>
     match strBytes heap s with
     | some bs => bytesToJson bs
@@ -483,6 +527,8 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.sliceOf name _ _, v) => some (name, renderObj heap true v)
     | (.opaque name _, _) => some (name, Json.null)
     | (.arrOf name _ _, v) => some (name, renderObj heap true v)
+    | (.mapOf name .., v) => some (name, renderObj heap true v)
+    | (.anyOf name _, v) => some (name, renderObj heap true v)
     | _ => none
 
 partial def renderVal : Val → Json
@@ -625,6 +671,10 @@ where
       fun (seen, out) x => if seen.contains x then (seen, out) else (seen.insert x, out.push x)
     out.toList
 
+/-- How many values of each dynamic type the exhaustive engine puts in an
+empty interface. -/
+def anyPerType : Nat := 8
+
 /-- Enumerate one parameter as a heap-building function: each candidate
 takes the heap so far and returns the value and the extended heap. -/
 partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable := #[])
@@ -685,6 +735,27 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
     (enumList extra maxLen pool table (depth - 1) allowNil (List.replicate n elem)).map fun build heap =>
       let (vs, heap) := build heap
       (.arr vs, heap)
+  | .mapOf _ key val _ =>
+    -- nil (when allowed), empty, and every map of one entry.
+    (if allowNil then [fun heap => (.opaqueNil, heap)] else []) ++
+    [fun heap => let (p, heap) := heapAlloc heap (mapObj []); (.boxed 1 p, heap)] ++
+    (if depth == 0 then [] else
+      (enumList extra maxLen pool table (depth - 1) allowNil [key, val]).map fun build heap =>
+        let (kv, heap) := build heap
+        match kv with
+        | [k, v] => let (p, heap) := heapAlloc heap (mapObj [(k, v)]); (.boxed 1 p, heap)
+        | _ => (.unit, heap))
+  | .anyOf _ alts =>
+    -- The interface itself costs no depth: its map or slice does, and at
+    -- depth zero only scalars are left.
+    let alts := if depth == 0 then alts.filter (fun (_, a) => match a with | .mapOf .. | .sliceOf .. => false | _ => true) else alts
+    -- nil and the first `anyPerType` values of each dynamic type: an
+    -- interface stays a few dozen values, not the product of every type.
+    [fun heap => (.opaqueNil, heap)] ++
+      alts.flatMap fun (tag, a) =>
+        ((enumGen extra maxLen pool table depth allowNil a).take anyPerType).map fun build heap =>
+          let (v, heap) := build heap
+          (.boxed tag v, heap)
 where
   /-- The field lists to enumerate: one per variant for a union, else the
   fields as they are. -/
@@ -708,6 +779,8 @@ when the domain is small. -/
 partial def leaves (table : TypeTable) (seen : List Nat := []) : Gen → Nat
   | .structv _ fields => structLeaves table seen fields
   | .ptr _ pointee | .link _ pointee | .sliceOf _ pointee _ | .arrOf _ pointee _ => 1 + leaves table seen pointee
+  | .mapOf _ key val _ => 1 + leaves table seen key + leaves table seen val
+  | .anyOf _ alts => 1 + (alts.map fun (_, a) => leaves table seen a).foldl max 0
   | .ref _ tyIdx =>
     if seen.contains tyIdx then 1
     else match table[tyIdx]? with
@@ -749,6 +822,12 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
   | .opaque .. => 1
   | .arrOf _ elem n => (genSize extra maxLen pool table (depth - 1) allowNil elem) ^ n
   | .nilptr _ => 1
+  | .mapOf _ key val _ =>
+    (if allowNil then 1 else 0) + 1 + (if depth == 0 then 0 else
+      genSize extra maxLen pool table (depth - 1) allowNil key * genSize extra maxLen pool table (depth - 1) allowNil val)
+  | .anyOf _ alts =>
+    let alts := if depth == 0 then alts.filter (fun (_, a) => match a with | .mapOf .. | .sliceOf .. => false | _ => true) else alts
+    1 + (alts.map fun (_, a) => min anyPerType (genSize extra maxLen pool table depth allowNil a)).sum
 where
   structSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (table : TypeTable) (depth : Nat)
       (allowNil : Bool) (fields : List Gen) : Nat :=

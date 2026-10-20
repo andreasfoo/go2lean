@@ -52,6 +52,12 @@ partial def genOfJson (j : Json) : Except String Gen := do
       | _ => .unit
     return .opaque name v
   | "arrOf" => return .arrOf name (← genOfJson (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "n")
+  | "mapOf" =>
+    return .mapOf name (← genOfJson (← j.getObjVal? "key")) (← genOfJson (← j.getObjVal? "val")) (← j.getObjValAs? Nat "maxLen")
+  | "anyOf" =>
+    let alts ← (← j.getObjValAs? (Array Json) "alts").toList.mapM fun a => do
+      return ((← a.getObjValAs? Nat "tag"), (← genOfJson (← a.getObjVal? "gen")))
+    return .anyOf name alts
   | other => throw s!"unknown generator kind {other}"
 
 def propertyOfJson (j : Json) : Except String Property := do

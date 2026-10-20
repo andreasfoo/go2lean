@@ -1,4 +1,5 @@
 import Go2Lean.SSA.Core
+import Lean.Data.Json.Parser
 
 /-!
 # GoSSA dialect
@@ -212,6 +213,12 @@ inductive Op where
   /-- `m[k]` (with `commaOk`, `(v, ok)`); `zero` for a missing key. -/
   | mapLookup (commaOk : Bool) (zero : Val)
   | mapUpdate | mapDelete | mapLen
+  /-- `json.Unmarshal(data, p)` for `p` pointing at a `string` (kind 0),
+  `bool` (1), `interface{}` (2), `map[string]interface{}` (3) or
+  `[]interface{}` (4); args `[data, p]`, yields the error. Decoded values
+  are boxed with `tags`, the type tags of string, bool, float64,
+  map[string]interface{} and []interface{} (numbers stay opaque). -/
+  | jsonUnmarshal (kind : Nat) (tags : List Nat)
   /-- An iterator over a map: a heap cell holding `(map, next index)`. -/
   | mapRange
   /-- Advance a map iterator: `(ok, key, value)`, zeros when done. -/
@@ -824,12 +831,110 @@ def allocStrSlice (heap : Heap Val) (parts : List (List Nat)) : Val × Heap Val 
   | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 vals.length) (BitVec.ofNat 64 vals.length), heap)
   | _ => (.unit, heap)
 
+/-- `bytes` as a string, invalid UTF-8 sequences replaced by U+FFFD. -/
+def utf8Lossy (bytes : List Nat) : String := Id.run do
+  let mut out := ""
+  let mut i := 0
+  for _ in [0:bytes.length] do
+    if i ≥ bytes.length then break
+    let (r, w) := decodeRune bytes i
+    out := out.push (Char.ofNat r)
+    i := i + w
+  return out
+
+/-- A decoded JSON value as the program would hold it in an interface:
+strings, bools, numbers (opaque), `map[string]interface{}` and
+`[]interface{}` boxed with their `tags`, null as the nil interface. -/
+partial def jsonToVal (tags : List Nat) (heap : Heap Val) : Lean.Json → Val × Heap Val
+  | .null => (.opaqueNil, heap)
+  | .bool b => (.boxed (tags.getD 1 0) (.bool b), heap)
+  | .num _ => (.boxed (tags.getD 2 0) .unit, heap)
+  | .str s =>
+    let (v, heap) := strAlloc heap (s.toUTF8.toList.map (·.toNat))
+    (.boxed (tags.getD 0 0) v, heap)
+  | .arr es =>
+    let (vs, heap) := es.toList.foldl (fun (acc, heap) e =>
+      let (v, heap) := jsonToVal tags heap e
+      (acc ++ [v], heap)) ([], heap)
+    let (p, heap) := heapAlloc heap (.arr vs)
+    let n := BitVec.ofNat 64 vs.length
+    match p with
+    | .ptr ref _ => (.boxed (tags.getD 4 0) (.slice ref 0#64 n n), heap)
+    | _ => (.unit, heap)
+  | .obj kvs =>
+    let (es, heap) := kvs.toList.foldl (fun (acc, heap) (k, e) =>
+      let (kv, heap) := strAlloc heap (k.toUTF8.toList.map (·.toNat))
+      let (v, heap) := jsonToVal tags heap e
+      (acc ++ [(kv, v)], heap)) ([], heap)
+    let (p, heap) := heapAlloc heap (mapObj es)
+    (.boxed (tags.getD 3 0) (.boxed 1 p), heap)
+
+/-- `json.Unmarshal` of `bytes` into the `kind` value `p` points at (see
+`Op.jsonUnmarshal`): Go's rules for these targets. Invalid JSON is an
+error and leaves the target alone; null leaves a string or bool alone and
+sets an interface, map or slice to nil; a value of the wrong JSON type is
+an error; an object is merged into a non-nil map. -/
+def jsonUnmarshalOp (heap : Heap Val) (kind : Nat) (tags : List Nat) (bytes : List Nat) (p : Val) :
+    Res (Val × Heap Val) :=
+  let store (heap : Heap Val) (v : Val) : Res (Val × Heap Val) :=
+    match heapStore heap p v with
+    | .ok heap => .ok (.err false, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  let typeErr : Res (Val × Heap Val) := .ok (.err true, heap)
+  -- Invalid UTF-8 becomes U+FFFD, as Go's decoder does inside strings
+  -- (outside them both parsers reject the document).
+  let text := utf8Lossy bytes
+  match Lean.Json.parse text with
+  | .error _ => .ok (.err true, heap)
+  | .ok j =>
+    match kind, j with
+    | 0, .null | 1, .null => .ok (.err false, heap)
+    | 0, .str s => let (v, heap) := strAlloc heap (s.toUTF8.toList.map (·.toNat)); store heap v
+    | 0, _ => typeErr
+    | 1, .bool b => store heap (.bool b)
+    | 1, _ => typeErr
+    | 2, j => let (v, heap) := jsonToVal tags heap j; store heap v
+    | 3, .null => store heap .opaqueNil
+    | 3, .obj _ =>
+      match jsonToVal tags heap j, heapLoad heap p with
+      | (.boxed _ fresh, heap), .ok .opaqueNil => store heap fresh
+      | (.boxed _ fresh, heap), .ok old =>
+        -- Merge into the map the target already holds.
+        match mapEntries heap old, mapEntries heap fresh with
+        | some (q, es), some (_, new) =>
+          let es := new.foldl (fun es (k, v) =>
+            if es.any (fun (k', _) => keyEq heap k k') then
+              es.map fun (k', v') => if keyEq heap k k' then (k', v) else (k', v')
+            else es ++ [(k, v)]) es
+          match heapStore heap q (mapObj es) with
+          | .ok heap => .ok (.err false, heap)
+          | .panic k => .panic k
+          | .outOfFuel => .outOfFuel
+        | _, _ => .panic .modelStuck
+      | _, _ => .panic .modelStuck
+    | 3, _ => typeErr
+    | 4, .null => store heap (.slice 0 0#64 0#64 0#64)
+    | 4, .arr _ =>
+      match jsonToVal tags heap j with
+      | (.boxed _ sl, heap) => store heap sl
+      | _ => .panic .modelStuck
+    | 4, _ => typeErr
+    | _, _ => .panic .modelStuck
+
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
   | .makeMap, [] =>
     let (p, heap) := heapAlloc heap (.arr [])
     .ok (.boxed 1 p, heap)
+  | .jsonUnmarshal kind tags, [data, p] =>
+    match data with
+    | .slice ref off len _ =>
+      match strBytes heap (.str ref off len) with
+      | some bs => jsonUnmarshalOp heap kind tags bs p
+      | none => .panic .modelStuck
+    | _ => .panic .modelStuck
   | .mapLookup commaOk zero, [m, k] =>
     let found : Option Val := match m with
       | .opaqueNil => some zero

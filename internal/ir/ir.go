@@ -210,6 +210,19 @@ func (u Unbox) Lean() string {
 }
 
 // MapLookup is m[k] (with CommaOk, (v, ok)); Zero for a missing key.
+// JSONUnmarshal is json.Unmarshal into a pointer to a value of Kind (0
+// string, 1 bool, 2 interface{}, 3 map[string]interface{}, 4
+// []interface{}); Tags are the type tags of string, bool, float64,
+// map[string]interface{} and []interface{} for the decoded values.
+type JSONUnmarshal struct {
+	Kind int
+	Tags [5]uint32
+}
+
+func (j JSONUnmarshal) Lean() string {
+	return fmt.Sprintf("(.jsonUnmarshal %d [%d, %d, %d, %d, %d])", j.Kind, j.Tags[0], j.Tags[1], j.Tags[2], j.Tags[3], j.Tags[4])
+}
+
 type MapLookup struct {
 	CommaOk bool
 	Zero    Val
@@ -407,6 +420,8 @@ type Func struct {
 	SpecMaxLen int
 	Consts     []string         // integer literals, see contract.ModelFunc.Consts
 	StrConsts  []string         // string literals
+	MapKeys    []string         // string constants used as map keys
+	UsesJSON   bool             // the body decodes JSON (json.Unmarshal)
 	Calls      []int            // callees within the program, by function id
 	XCalls     []contract.XCall // callees in other packages of the same compile
 	Exits      []contract.ExitSite

@@ -921,6 +921,18 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 	return v, nil
 }
 
+// mapKey records a string constant used as a map key (m["role"]): the
+// generator builds input maps mostly from such keys.
+func (t *fnState) mapKey(k ssa.Value) {
+	c, ok := k.(*ssa.Const)
+	if !ok || c.Value == nil || c.Value.Kind() != constant.String {
+		return
+	}
+	if s := constant.StringVal(c.Value); !slices.Contains(t.out.MapKeys, s) {
+		t.out.MapKeys = append(t.out.MapKeys, s)
+	}
+}
+
 func constVal(c *ssa.Const) (ir.Val, error) {
 	if c.Value == nil {
 		switch {
@@ -1347,6 +1359,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return nil
 	case *ssa.MapUpdate:
+		t.mapKey(x.Key)
 		m, err := t.val(x.Map)
 		if err != nil {
 			return err
@@ -1508,6 +1521,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		return nil
 	case *ssa.Lookup:
 		if mt, isMap := x.X.Type().Underlying().(*types.Map); isMap {
+			t.mapKey(x.Index)
 			zero, ok := zeroVal(mt.Elem())
 			if !ok {
 				zero, ok = assumedValue(mt.Elem())
@@ -1917,6 +1931,11 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil && callee.String() == "fmt.Sprintf" && len(x.Call.Args) == 2 {
 		return t.sprintf(x)
 	}
+	if callee != nil && callee.String() == "encoding/json.Unmarshal" && len(x.Call.Args) == 2 {
+		if done, err := t.jsonUnmarshal(x); done || err != nil {
+			return err
+		}
+	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
 		if op, ok := ir.StdlibOps[callee.String()]; ok {
@@ -2036,8 +2055,16 @@ func stringEnum(t types.Type) []string {
 // type's fully qualified name, so every package of a linked model agrees.
 func typeTag(t types.Type) uint32 {
 	h := fnv.New32a()
-	h.Write([]byte(types.TypeString(t, nil)))
+	h.Write([]byte(tagName(t)))
 	return h.Sum32()
+}
+
+var anyAliasRe = regexp.MustCompile(`\bany\b`)
+
+// tagName spells t for its tag the same way whether the source wrote the
+// alias any or interface{}: they are one type at run time.
+func tagName(t types.Type) string {
+	return anyAliasRe.ReplaceAllString(types.TypeString(t, nil), "interface{}")
 }
 
 // typeAssert lowers x.(T) for a concrete T. A value the model boxed itself
@@ -2076,6 +2103,61 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 // sprintf lowers fmt.Sprintf: the formatted string when the model can
 // format it (plain %s %d %v %t %% on strings, integers and bools the
 // program boxed), else the havoc string an unmodelled call gives.
+// jsonUnmarshal lowers json.Unmarshal(data, &v) for v of a JSON-shaped
+// type (string, bool, interface{}, map[string]interface{}, []interface{}):
+// the model parses the bytes. Other targets (structs) stay unmodelled.
+func (t *fnState) jsonUnmarshal(x *ssa.Call) (bool, error) {
+	mi, ok := x.Call.Args[1].(*ssa.MakeInterface)
+	if !ok {
+		return false, nil
+	}
+	pt, ok := mi.X.Type().Underlying().(*types.Pointer)
+	if !ok {
+		return false, nil
+	}
+	kind := -1
+	elem := pt.Elem()
+	switch u := elem.Underlying().(type) {
+	case *types.Basic:
+		if isString(elem) {
+			kind = 0
+		} else if isBool(elem) {
+			kind = 1
+		}
+	case *types.Interface:
+		if isEmptyInterface(elem) {
+			kind = 2
+		}
+	case *types.Map:
+		if isString(u.Key()) && isEmptyInterface(u.Elem()) {
+			kind = 3
+		}
+	case *types.Slice:
+		if isEmptyInterface(u.Elem()) {
+			kind = 4
+		}
+	}
+	if kind < 0 {
+		return false, nil
+	}
+	data, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	p, err := t.val(mi.X)
+	if err != nil {
+		return true, err
+	}
+	empty := types.NewInterfaceType(nil, nil)
+	op := ir.JSONUnmarshal{Kind: kind, Tags: [5]uint32{
+		typeTag(types.Typ[types.String]), typeTag(types.Typ[types.Bool]), typeTag(types.Typ[types.Float64]),
+		typeTag(types.NewMap(types.Typ[types.String], empty)), typeTag(types.NewSlice(empty)),
+	}}
+	t.emit(ir.Instr{Dst: t.def(x), Op: op, Args: []ir.Var{data, p}})
+	t.out.UsesJSON = true
+	return true, nil
+}
+
 func (t *fnState) sprintf(x *ssa.Call) error {
 	f, err := t.val(x.Call.Args[0])
 	if err != nil {
@@ -2779,6 +2861,10 @@ type abiBuilder struct {
 	pkg   *types.Package
 	abi   *contract.ABI
 	index map[*types.Named]int
+	// anyDepth counts the empty interfaces being described around the
+	// current value: an interface inside an interface's map or slice holds
+	// scalars only, so the description stays finite.
+	anyDepth int
 }
 
 // register adds a recursive named struct type to the table.
@@ -2886,6 +2972,13 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		// An empty Builder (a copied non-empty one panics in Go): a string of
 		// length zero in the model, `strings.Builder{}` in the test.
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIString, MaxLen: -1}, nil
+	case !isForeignUnexported(pkg, t) && isEmptyInterface(t):
+		return ab.anyParam(name, src, ipath, extra, stack), nil
+	case !isForeignUnexported(pkg, t) && isGeneratedMap(t):
+		if mp, ok := ab.mapParam(name, t.Underlying().(*types.Map), src, ipath, extra, stack); ok {
+			return mp, nil
+		}
+		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, ExtraPkgs: extra, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
 	case isOpaqueType(t) || isForeignOpaqueStruct(pkg, t) || isForeignUnexported(pkg, t):
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, ExtraPkgs: extra, Model: []string{name}, Kind: contract.ABIOpaque, Zero: zeroLit(t, src)}, nil
 	case isBool(t):
@@ -2965,6 +3058,66 @@ func (ab *abiBuilder) param(name string, t types.Type, stack []*types.Named) (co
 		return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, Model: []string{name}, Kind: contract.ABIPtr, Pointee: &pointee}, nil
 	}
 	return contract.ABIParam{}, fmt.Errorf("unsupported type %s", t)
+}
+
+// isEmptyInterface says whether t is interface{} (any, or a named type
+// for it): the inputs the generator fills with values of a few dynamic
+// types. Interfaces with methods stay opaque.
+func isEmptyInterface(t types.Type) bool {
+	it, ok := t.Underlying().(*types.Interface)
+	return ok && it.NumMethods() == 0 && !isError(t)
+}
+
+// isGeneratedMap says whether t is a map the generator builds: keys of a
+// string, integer or bool kind (they compare by value in the model).
+func isGeneratedMap(t types.Type) bool {
+	m, ok := t.Underlying().(*types.Map)
+	if !ok {
+		return false
+	}
+	if isString(m.Key()) || isBool(m.Key()) {
+		return true
+	}
+	_, _, ok = intWidth(m.Key())
+	return ok
+}
+
+// mapParam describes a map input; false when its key or value cannot be
+// described (the map then stays opaque).
+func (ab *abiBuilder) mapParam(name string, m *types.Map, src, ipath string, extra []string, stack []*types.Named) (contract.ABIParam, bool) {
+	key, err := ab.param("key", m.Key(), stack)
+	if err != nil {
+		return contract.ABIParam{}, false
+	}
+	val, err := ab.param("value", m.Elem(), stack)
+	if err != nil {
+		return contract.ABIParam{}, false
+	}
+	return contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, ExtraPkgs: extra, Model: []string{name},
+		Kind: contract.ABIMap, Key: &key, Value: &val, Zero: "nil"}, true
+}
+
+// anyParam describes an empty interface input: nil, or a string, bool or
+// int, or (outside another interface's contents) a map[string]interface{}
+// or []interface{} of such values, the shapes decoded JSON has.
+func (ab *abiBuilder) anyParam(name, src, ipath string, extra []string, stack []*types.Named) contract.ABIParam {
+	alts := []types.Type{types.Typ[types.String], types.Typ[types.Bool], types.Typ[types.Int]}
+	if ab.anyDepth == 0 {
+		empty := types.NewInterfaceType(nil, nil)
+		alts = append(alts, types.NewMap(types.Typ[types.String], empty), types.NewSlice(empty))
+	}
+	ab.anyDepth++
+	defer func() { ab.anyDepth-- }()
+	p := contract.ABIParam{Go: name, GoType: src, TypePkg: ipath, ExtraPkgs: extra, Model: []string{name}, Kind: contract.ABIAny, Zero: "nil"}
+	for _, at := range alts {
+		a, err := ab.param("v", at, stack)
+		if err != nil {
+			continue
+		}
+		a.Tag = typeTag(at)
+		p.Alts = append(p.Alts, a)
+	}
+	return p
 }
 
 // specTarget names the function f is a spec for. A `go2lean:spec X` doc

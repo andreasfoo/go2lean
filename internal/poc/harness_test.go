@@ -139,3 +139,24 @@ func TestEmptyComposite(t *testing.T) {
 		}
 	}
 }
+
+func TestLiteralMapAndInterface(t *testing.T) {
+	str := contract.ABIParam{Go: "v", GoType: "string", Model: []string{"v"}, Kind: contract.ABIString, Tag: 7}
+	inner := contract.ABIParam{Go: "value", GoType: "interface{}", Model: []string{"value"}, Kind: contract.ABIAny, Zero: "nil",
+		Alts: []contract.ABIParam{str}}
+	m := contract.ABIParam{Go: "v", GoType: "map[string]interface{}", Model: []string{"v"}, Kind: contract.ABIMap, Zero: "nil",
+		Key: ptr(contract.ABIParam{Go: "key", GoType: "string", Model: []string{"key"}, Kind: contract.ABIString}), Value: &inner, Tag: 9}
+	p := contract.ABIParam{Go: "x", GoType: "any", Model: []string{"x"}, Kind: contract.ABIAny, Zero: "nil", Alts: []contract.ABIParam{str, m}}
+	var v any
+	if err := json.Unmarshal([]byte(`{"tag": 9, "v": {"map": [["role", {"tag": 7, "v": "system"}], ["n", null]]}}`), &v); err != nil {
+		t.Fatal(err)
+	}
+	got, err := literal(&contract.ABI{}, p, v)
+	want := `map[string]interface{}{string("role"): string("system"), string("n"): nil}`
+	if err != nil || got != want {
+		t.Fatalf("got %q, %v; want %q", got, err, want)
+	}
+	if got, _ := literal(&contract.ABI{}, m, nil); got != "(map[string]interface{})(nil)" {
+		t.Fatalf("nil map: got %q", got)
+	}
+}

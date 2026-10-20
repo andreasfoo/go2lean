@@ -281,6 +281,8 @@ const (
 	ABIString ABIParamKind = "string" // one model value; reported under Objects as a JSON string
 	ABIOpaque ABIParamKind = "opaque" // interface, map, func, chan, float or unsafe.Pointer: the model never looks inside; M3 passes the zero value
 	ABIArray  ABIParamKind = "array"  // one model value; Len elements of Elem/ElemParam, reported under Objects as a JSON array
+	ABIMap    ABIParamKind = "map"    // one model value: nil or a map of Key to Value, reported under Objects as {"map": [[k, v], ...]}
+	ABIAny    ABIParamKind = "any"    // one model value: an empty interface holding nil or a value of one of Alts, reported as {"tag": t, "v": ...}
 )
 
 // ABIParam describes one Go parameter. GoType is spelled as Go source in
@@ -330,6 +332,13 @@ type ABIParam struct {
 	// TypeRef names an entry of ABI.Types for a struct that refers to itself
 	// (directly or through pointers); Fields is then empty.
 	TypeRef string `json:"type_ref,omitempty"`
+	// Key and Value describe the key and element types of a map.
+	Key   *ABIParam `json:"key,omitempty"`
+	Value *ABIParam `json:"value,omitempty"`
+	// Alts are the dynamic types an empty interface is generated with, and
+	// Tag the model's type tag of an Alts entry (a hash of the type's name).
+	Alts []ABIParam `json:"alts,omitempty"`
+	Tag  uint32     `json:"tag,omitempty"`
 }
 
 // ABIType is a named struct type in the ABI's type table.
@@ -416,6 +425,12 @@ type ModelFunc struct {
 	Consts []string `json:"consts,omitempty"`
 	// StrConsts are the string literals in the body, for the same purpose.
 	StrConsts []string `json:"str_consts,omitempty"`
+	// MapKeys are the string constants the body uses as map keys
+	// (m["role"]): the generator draws input map keys mostly from them.
+	MapKeys []string `json:"map_keys,omitempty"`
+	// UsesJSON marks a body that decodes JSON: the engines then add JSON
+	// texts built from the literals to the string pool.
+	UsesJSON bool `json:"uses_json,omitempty"`
 	// Calls lists the IDs of the package functions this one calls, so the
 	// engines can mine the literals of the whole call tree.
 	Calls []int `json:"calls,omitempty"`
