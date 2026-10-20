@@ -161,6 +161,24 @@ func TestLiteralMapAndInterface(t *testing.T) {
 	}
 }
 
+// An interface field holding an empty map is not nil: it must be set (the
+// field is the JSON schema of a structured-output format: nil means none).
+func TestLiteralInterfaceFieldHoldingEmptyMap(t *testing.T) {
+	inner := contract.ABIParam{Go: "value", GoType: "interface{}", Model: []string{"value"}, Kind: contract.ABIAny, Zero: "nil"}
+	m := contract.ABIParam{Go: "v", GoType: "map[string]interface{}", Model: []string{"v"}, Kind: contract.ABIMap, Zero: "nil",
+		Key: ptr(contract.ABIParam{Go: "key", GoType: "string", Model: []string{"key"}, Kind: contract.ABIString}), Value: &inner, Tag: 9}
+	schema := contract.ABIParam{Go: "Schema", GoType: "any", Model: []string{"Schema"}, Kind: contract.ABIAny, Zero: "nil", Alts: []contract.ABIParam{m}}
+	st := contract.ABIParam{Go: "f", GoType: "Format", Model: []string{"f"}, Kind: contract.ABIStruct, Fields: []contract.ABIParam{schema}}
+	var v any
+	if err := json.Unmarshal([]byte(`[{"tag": 9, "v": {"map": []}}]`), &v); err != nil {
+		t.Fatal(err)
+	}
+	got, err := literal(&contract.ABI{}, st, v)
+	if want := `Format{Schema: map[string]interface{}{}}`; err != nil || got != want {
+		t.Fatalf("got %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestLiteralRawJSONValueIsDecoded(t *testing.T) {
 	meta := contract.ABIParam{Go: "JSON", GoType: "struct{raw string}", Model: []string{"JSON"}, Kind: contract.ABIStruct, JSONName: "-",
 		Fields: []contract.ABIParam{{Go: "raw", GoType: "string", Model: []string{"raw"}, Kind: contract.ABIString, JSONText: true}}}

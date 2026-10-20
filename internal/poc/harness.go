@@ -448,10 +448,10 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if emptyComposite(e) && f.Kind != contract.ABIMap && !(f.Kind == contract.ABISlice && !strings.Contains(e, "struct{")) {
+			if emptyComposite(e) && f.Kind != contract.ABIMap && f.Kind != contract.ABIAny && !(f.Kind == contract.ABISlice && !strings.Contains(e, "struct{")) {
 				// An empty composite literal is the zero value (an empty map
-				// or slice is not: writes work, JSON encodes [] and {}): leave
-				// it out
+				// or slice is not: writes work, JSON encodes [] and {}; nor is
+				// an interface holding one: it is not nil): leave it out
 				// (an anonymous struct with a foreign unexported field, like
 				// the SDKs' JSON metadata, cannot be spelled here at all).
 				continue
