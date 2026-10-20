@@ -311,6 +311,14 @@ inductive Op where
   | strAtoi
   /-- `strconv.Itoa`. -/
   | strItoa
+  /-- strconv.ParseInt(s, base, bitSize) and ParseUint: `(value, err)`. -/
+  | strParseInt
+  | strParseUint
+  /-- strconv.ParseBool -/
+  | strParseBool
+  /-- strconv.FormatInt(i, base) and FormatUint -/
+  | strFormatInt
+  | strFormatUint
   /-- `==` / `!=` on arrays and structs that hold strings: strings compare
   by their bytes, the rest as `eq`. -/
   | eqDeep | neDeep
@@ -580,6 +588,83 @@ def atoiClamped (bs : List Nat) : Option Int :=
     | rest => (false, rest)
   if digits.isEmpty || !digits.all (fun d => 48 ≤ d && d ≤ 57) then none
   else some (if neg then -(2 ^ 63) else 2 ^ 63 - 1)
+
+/-- strconv's `lower` on a byte: `c | 0x20`. -/
+def strconvLower (c : Nat) : Nat := c ||| 0x20
+
+/-- strconv's underscoreOK: in a base-0 number, underscores only between
+digits or after a base prefix. -/
+def underscoreOK (s : List Nat) : Bool :=
+  let s := match s with | 45 :: r | 43 :: r => r | r => r
+  let (hex, start, rest) : Bool × Nat × List Nat := match s with
+    | 48 :: p :: r =>
+      if strconvLower p == 98 || strconvLower p == 111 || strconvLower p == 120 then (strconvLower p == 120, 48, r)
+      else (false, 94, s)
+    | _ => (false, 94, s)
+  -- saw: 94 start, 48 digit or prefix, 95 underscore, 33 anything else
+  let saw := rest.foldl (init := some start) fun saw c =>
+    match saw with
+    | none => none
+    | some sw =>
+      if (48 ≤ c && c ≤ 57) || (hex && 97 ≤ strconvLower c && strconvLower c ≤ 102) then some 48
+      else if c == 95 then (if sw != 48 then none else some 95)
+      else if sw == 95 then none
+      else some 33
+  match saw with | some sw => sw != 95 | none => false
+
+/-- strconv.ParseUint, step by step as Go does it: the value and the error
+(0 none, 1 syntax, 2 range, 3 base or bit size). A range error returns the
+bit size's maximum as soon as the value overflows. -/
+def parseUintGo (s : List Nat) (base bitSize : Int) : Nat × Nat :=
+  if s.isEmpty then (0, 1) else
+  let base0 := base == 0
+  let (b, body) : Int × List Nat :=
+    if 2 ≤ base && base ≤ 36 then (base, s)
+    else if base == 0 then
+      match s with
+      | 48 :: p :: r :: rest =>
+        let lp := strconvLower p
+        if lp == 98 then (2, r :: rest) else if lp == 111 then (8, r :: rest)
+        else if lp == 120 then (16, r :: rest) else (8, p :: r :: rest)
+      | 48 :: rest => (8, rest)
+      | _ => (10, s)
+    else (-1, s)
+  if b < 0 || bitSize < 0 || bitSize > 64 then (0, 3) else
+  let bits : Nat := if bitSize == 0 then 64 else bitSize.toNat
+  let maxVal : Nat := 2 ^ bits - 1
+  let rec go : List Nat → Nat → Bool → Nat × Nat
+    | [], n, us => if us && !underscoreOK s then (0, 1) else (n, 0)
+    | c :: cs, n, us =>
+      if c == 95 && base0 then go cs n true
+      else
+        let d := if 48 ≤ c && c ≤ 57 then c - 48
+          else if 97 ≤ strconvLower c && strconvLower c ≤ 122 then strconvLower c - 87 else 99
+        if d ≥ b.toNat then (0, 1)
+        else
+          let n1 := n * b.toNat + d
+          if n1 > maxVal then (maxVal, 2) else go cs n1 us
+  go body 0 false
+
+/-- strconv.ParseInt: the sign, then ParseUint; out of range gives the
+nearest bound of the bit size. -/
+def parseIntGo (s : List Nat) (base bitSize : Int) : Int × Nat :=
+  if s.isEmpty then (0, 1) else
+  let (neg, body) := match s with | 43 :: r => (false, r) | 45 :: r => (true, r) | r => (false, r)
+  let (un, e) := parseUintGo body base bitSize
+  if e != 0 && e != 2 then (0, e) else
+  let bits : Nat := if bitSize == 0 then 64 else bitSize.toNat
+  let cutoff : Nat := 2 ^ (bits - 1)
+  if !neg && un ≥ cutoff then ((cutoff : Int) - 1, 2)
+  else if neg && un > cutoff then (-(cutoff : Int), 2)
+  else (if neg then -(un : Int) else un, e)
+
+/-- strconv.FormatUint's digits of n in base (2..36), lower case. -/
+def formatNatGo (n base : Nat) : List Nat :=
+  let digit (d : Nat) : Nat := if d < 10 then 48 + d else 87 + d
+  let rec go : Nat → Nat → List Nat → List Nat
+    | 0, _, acc => acc
+    | fuel + 1, n, acc => if n < base then digit n :: acc else go fuel (n / base) (digit (n % base) :: acc)
+  go 70 n []
 
 def itoaBytes (v : Int) : List Nat :=
   let digits := (toString v.natAbs).toUTF8.toList.map (·.toNat)
@@ -2322,6 +2407,35 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | none => .panic .modelStuck
     | _ => .panic .modelStuck
   | .strItoa, [.int _ v] => .ok (strAlloc heap (itoaBytes v.toInt))
+  | .strParseInt, [s, .int _ base, .int _ bits] =>
+    match strBytes heap s with
+    | some x =>
+      let (v, e) := parseIntGo x base.toInt bits.toInt
+      .ok (.tuple [.int 64 (BitVec.ofInt 64 v), .err (e != 0)], heap)
+    | none => .panic .modelStuck
+  | .strParseUint, [s, .int _ base, .int _ bits] =>
+    match strBytes heap s with
+    | some x =>
+      let (v, e) := parseUintGo x base.toInt bits.toInt
+      .ok (.tuple [.int 64 (BitVec.ofNat 64 v), .err (e != 0)], heap)
+    | none => .panic .modelStuck
+  | .strParseBool, [s] =>
+    match strBytes heap s with
+    | some x =>
+      let t := [[49], [116], [84], [84, 82, 85, 69], [116, 114, 117, 101], [84, 114, 117, 101]]
+      let f := [[48], [102], [70], [70, 65, 76, 83, 69], [102, 97, 108, 115, 101], [70, 97, 108, 115, 101]]
+      if t.contains x then .ok (.tuple [.bool true, .err false], heap)
+      else if f.contains x then .ok (.tuple [.bool false, .err false], heap)
+      else .ok (.tuple [.bool false, .err true], heap)
+    | none => .panic .modelStuck
+  | .strFormatInt, [.int _ v, .int _ b] =>
+    if b.toInt < 2 || b.toInt > 36 then .panic .explicit
+    else
+      let ds := formatNatGo v.toInt.natAbs b.toNat
+      .ok (strAlloc heap (if v.toInt < 0 then 45 :: ds else ds))
+  | .strFormatUint, [.int _ v, .int _ b] =>
+    if b.toInt < 2 || b.toInt > 36 then .panic .explicit
+    else .ok (strAlloc heap (formatNatGo v.toNat b.toNat))
   | .randRead, [.slice _ _ len _] => .ok (.tuple [.int 64 len, .err false], heap)
   | .strToLower, [s] =>
     match strBytes heap s with

@@ -132,8 +132,8 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 outcome (confirmed, certified, none) with
 [`testdata/regress/examples.golden`](testdata/regress/examples.golden);
 `scripts/json-diff.sh out-jd` checks the `encoding/json` model against Go,
-and `PKG=testdata/rediff scripts/json-diff.sh out-rd` the `regexp` model.
-All three run on every push.
+`PKG=testdata/rediff scripts/json-diff.sh out-rd` the `regexp` model, and
+`PKG=testdata/convdiff` the `strconv` model. All run on every push.
 
 | package | planted bug | result |
 |---|---|---|
