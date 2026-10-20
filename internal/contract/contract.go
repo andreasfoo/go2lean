@@ -344,6 +344,10 @@ type ABIParam struct {
 	// object of extra fields, which the harness merges into the typed
 	// value by a marshal / unmarshal round trip.
 	JSONText bool `json:"json_text,omitempty"`
+	// JSONName is a struct field's key in JSON (its json tag, else its Go
+	// name; "-" when encoding skips it), used to build SDK response values
+	// from a JSON document.
+	JSONName string `json:"json_name,omitempty"`
 }
 
 // ABIType is a named struct type in the ABI's type table.

@@ -160,3 +160,23 @@ func TestLiteralMapAndInterface(t *testing.T) {
 		t.Fatalf("nil map: got %q", got)
 	}
 }
+
+func TestLiteralRawJSONValueIsDecoded(t *testing.T) {
+	meta := contract.ABIParam{Go: "JSON", GoType: "struct{raw string}", Model: []string{"JSON"}, Kind: contract.ABIStruct, JSONName: "-",
+		Fields: []contract.ABIParam{{Go: "raw", GoType: "string", Model: []string{"raw"}, Kind: contract.ABIString, JSONText: true}}}
+	n := intParam("N")
+	n.JSONName = "n"
+	inner := contract.ABIParam{Go: "Delta", GoType: "sdk.Delta", Model: []string{"Delta"}, Kind: contract.ABIStruct, JSONName: "delta",
+		Fields: []contract.ABIParam{n, meta}}
+	st := contract.ABIParam{Go: "c", GoType: "sdk.Chunk", Model: []string{"c"}, Kind: contract.ABIStruct,
+		Fields: []contract.ABIParam{inner, meta}}
+	p := contract.ABIParam{Go: "c", GoType: "*sdk.Chunk", Model: []string{"c"}, Kind: contract.ABIPtr, Pointee: &st}
+	got, err := literal(&contract.ABI{}, p, []any{[]any{"1", []any{`{"x":null,"n":5}`}}, []any{""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `func() *sdk.Chunk { v := func() sdk.Chunk { var go2leanV sdk.Chunk; _ = json.Unmarshal([]byte("{\"delta\":{\"n\":1,\"x\":null}}"), &go2leanV); return go2leanV }(); return &v }()`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}

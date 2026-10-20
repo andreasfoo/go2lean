@@ -408,17 +408,22 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if !ok || len(fields) != len(p.Fields) {
 			return "", fmt.Errorf("%s: expected %d fields, got %v", p.Go, len(p.Fields), v)
 		}
+		if hasRawJSON(abi, p, v) {
+			// An SDK response value with raw JSON somewhere inside: such
+			// values only come from decoding, so decode the document.
+			doc, err := json.Marshal(jsonDoc(abi, p, v))
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("func() %[1]s { var go2leanV %[1]s; _ = json.Unmarshal([]byte(%[2]q), &go2leanV); return go2leanV }()", p.GoType, doc), nil
+		}
 		if !canImport(abi.Package, p.TypePkg) {
 			return "", fmt.Errorf("%s: type %s lives in an internal package the test cannot import", p.Go, p.GoType)
 		}
 		var parts []string
-		raw := ""
 		for i, f := range p.Fields {
 			if f.JSONText {
-				continue // set by the parent's round trip (rawJSON below)
-			}
-			if f.Go == "JSON" && f.Kind == contract.ABIStruct {
-				raw = jsonText(f, fields[i])
+				continue // empty here (a non-empty one is decoded above)
 			}
 			if f.Kind == contract.ABIOpaque {
 				continue // zero value: nil map, nil interface, nil func
@@ -448,11 +453,7 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			}
 			parts = append(parts, f.Go+": "+e)
 		}
-		lit := p.GoType + "{" + strings.Join(parts, ", ") + "}"
-		if raw != "" {
-			return rawJSON(p.GoType, lit, raw), nil
-		}
-		return lit, nil
+		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
 	case contract.ABISlice, contract.ABIArray:
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
@@ -521,7 +522,7 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if p.Pointee.Kind == contract.ABIStruct || p.Pointee.MaxLen < 0 {
+		if (p.Pointee.Kind == contract.ABIStruct && !strings.HasPrefix(inner, "func()")) || p.Pointee.MaxLen < 0 {
 			return "&" + inner, nil
 		}
 		// A pointer to a scalar: allocate it in a closure.
@@ -530,28 +531,130 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 	return "", fmt.Errorf("%s: cannot render kind %s", p.Go, p.Kind)
 }
 
-// jsonText is the generated raw JSON inside an SDK type's JSON metadata
-// field, if any.
-func jsonText(meta contract.ABIParam, v any) string {
-	fields, _ := v.([]any)
-	for i, f := range meta.Fields {
-		if f.JSONText && i < len(fields) {
-			s, _ := fields[i].(string)
-			return s
+// withTable fills in the fields of a type-table reference.
+func withTable(abi *contract.ABI, p contract.ABIParam) contract.ABIParam {
+	if p.TypeRef != "" {
+		for _, t := range abi.Types {
+			if t.GoType == p.TypeRef {
+				p.Fields = t.Fields
+			}
 		}
 	}
-	return ""
+	return p
 }
 
-// rawJSON builds a value of the SDK response type typ whose raw JSON
-// carries the members of raw next to the typed fields of lit: the SDK only
-// sets its raw JSON when decoding, so the literal is encoded, the members
-// merged in, and the document decoded into a fresh value.
-func rawJSON(typ, lit, raw string) string {
-	return fmt.Sprintf("func() %[1]s { go2leanB, _ := json.Marshal(%[2]s); go2leanM := map[string]json.RawMessage{}; "+
-		"_ = json.Unmarshal(go2leanB, &go2leanM); go2leanE := map[string]json.RawMessage{}; _ = json.Unmarshal([]byte(%[3]q), &go2leanE); "+
-		"for go2leanK, go2leanX := range go2leanE { go2leanM[go2leanK] = go2leanX }; go2leanB, _ = json.Marshal(go2leanM); "+
-		"var go2leanOut %[1]s; _ = json.Unmarshal(go2leanB, &go2leanOut); return go2leanOut }()", typ, lit, raw)
+// hasRawJSON says whether the value holds a non-empty generated raw JSON
+// (an SDK response type's RawJSON()) anywhere.
+func hasRawJSON(abi *contract.ABI, p contract.ABIParam, v any) bool {
+	p = withTable(abi, p)
+	switch p.Kind {
+	case contract.ABIString:
+		s, _ := v.(string)
+		return p.JSONText && s != ""
+	case contract.ABIStruct:
+		fields, _ := v.([]any)
+		for i, f := range p.Fields {
+			if i < len(fields) && hasRawJSON(abi, f, fields[i]) {
+				return true
+			}
+		}
+	case contract.ABIPtr:
+		return v != nil && v != "opaque" && p.Pointee != nil && hasRawJSON(abi, *p.Pointee, v)
+	case contract.ABISlice, contract.ABIArray:
+		elems, _ := v.([]any)
+		for _, e := range elems {
+			if hasRawJSON(abi, p.ElemAsParam(), e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// jsonDoc is the JSON document an SDK response value with the model's
+// contents decodes from: typed fields under their JSON names (zero ones
+// left out), and each level's generated raw JSON members merged into its
+// object where no typed field has the key.
+func jsonDoc(abi *contract.ABI, p contract.ABIParam, v any) any {
+	p = withTable(abi, p)
+	switch p.Kind {
+	case contract.ABIInt:
+		s, _ := v.(string)
+		if w, signed, ok := p.IntInfo(); ok && !signed && strings.HasPrefix(s, "-") {
+			if n, ok := new(big.Int).SetString(s, 10); ok {
+				s = n.Add(n, new(big.Int).Lsh(big.NewInt(1), uint(w))).String()
+			}
+		}
+		return json.Number(s)
+	case contract.ABIBool:
+		return v == "true" || v == true
+	case contract.ABIString:
+		return v
+	case contract.ABIStruct:
+		fields, _ := v.([]any)
+		obj := map[string]any{}
+		var extra map[string]json.RawMessage
+		for i, f := range p.Fields {
+			if i >= len(fields) {
+				break
+			}
+			if f.Go == "JSON" && f.Kind == contract.ABIStruct {
+				for j, g := range f.Fields {
+					if s, ok := elemAt(fields[i], j).(string); g.JSONText && ok && s != "" {
+						_ = json.Unmarshal([]byte(s), &extra)
+					}
+				}
+				continue
+			}
+			if !token.IsExported(f.Go) || f.JSONName == "-" || f.Kind == contract.ABIOpaque || isZeroJSON(abi, f, fields[i]) {
+				continue
+			}
+			obj[f.JSONName] = jsonDoc(abi, f, fields[i])
+		}
+		for k, x := range extra {
+			if _, typed := obj[k]; !typed {
+				obj[k] = x
+			}
+		}
+		return obj
+	case contract.ABIPtr:
+		if v == nil || v == "opaque" || p.Pointee == nil {
+			return nil
+		}
+		return jsonDoc(abi, *p.Pointee, v)
+	case contract.ABISlice, contract.ABIArray:
+		elems, _ := v.([]any)
+		out := []any{}
+		for _, e := range elems {
+			out = append(out, jsonDoc(abi, p.ElemAsParam(), e))
+		}
+		return out
+	case contract.ABIMap:
+		obj, _ := v.(map[string]any)
+		entries, _ := obj["map"].([]any)
+		out := map[string]any{}
+		for _, e := range entries {
+			if kv, ok := e.([]any); ok && len(kv) == 2 {
+				out[fmt.Sprint(kv[0])] = jsonDoc(abi, *p.Value, kv[1])
+			}
+		}
+		return out
+	case contract.ABIAny:
+		obj, _ := v.(map[string]any)
+		for _, a := range p.Alts {
+			if t, _ := obj["tag"].(float64); float64(a.Tag) == t {
+				return jsonDoc(abi, a, obj["v"])
+			}
+		}
+	}
+	return nil
+}
+
+func elemAt(v any, i int) any {
+	if xs, ok := v.([]any); ok && i < len(xs) {
+		return xs[i]
+	}
+	return nil
 }
 
 // canImport applies Go's internal-package rule: a package under

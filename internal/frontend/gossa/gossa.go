@@ -17,6 +17,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -2925,6 +2926,7 @@ func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named
 		if f.Kind == contract.ABIString && len(f.Enum) == 0 && ab.fset != nil {
 			f.Enum = docEnum(ab.fset, fld)
 		}
+		f.JSONName = jsonName(fld, u.Tag(i))
 		fields = append(fields, f)
 	}
 	return fields, nil
@@ -2968,6 +2970,15 @@ func docEnum(fset *token.FileSet, fld *types.Var) []string {
 		}
 	}
 	return nil
+}
+
+// jsonName is the key encoding/json uses for a struct field.
+func jsonName(fld *types.Var, tag string) string {
+	name, _, _ := strings.Cut(reflect.StructTag(tag).Get("json"), ",")
+	if name == "" {
+		return fld.Name()
+	}
+	return name
 }
 
 // isRespJSONMeta says whether u is the JSON metadata struct of an OpenAI or
