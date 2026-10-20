@@ -217,6 +217,15 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 	}
 	judge(v, p.prop, p.cx, res)
 	v.Probes = res.probes
+	panicMsg := v.Observed["panic"]
+	nilCaused := strings.Contains(panicMsg, "nil pointer dereference") || (panicMsg != "" && !strings.HasPrefix(panicMsg, "runtime error"))
+	if nils := nilArguments(p.cx); v.Status == contract.VerdictConfirmed && len(nils) > 0 && nilCaused && p.prop.Kind == contract.KindNoPanic {
+		// Confirmed with a nil argument and a panic one can cause (a nil
+		// dereference, an explicit panic): often a precondition of the API
+		// (a nil error to report, a nil stream), so say so.
+		v.Diagnosis = &contract.Diagnosis{Reason: "nil_argument", Notes: []string{
+			"the call passed nil for " + strings.Join(nils, ", ") + ": check that some caller can"}}
+	}
 	if v.Status == contract.VerdictConfirmed && len(p.state) > 0 && p.prop.Kind == contract.KindNoPanic {
 		// Confirmed, but on package state the model does not know: the
 		// program may set it up before any call (an Init function), and
@@ -226,6 +235,23 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 				"): check that the program does not initialise it before calls like this one"}}
 	}
 	return v
+}
+
+// nilArguments names the top-level arguments a counterexample sets to nil.
+func nilArguments(cx *contract.Counterexample) []string {
+	var out []string
+	for name, v := range cx.Inputs {
+		if v == "nil" && !strings.Contains(name, "_") {
+			out = append(out, name)
+		}
+	}
+	for name, raw := range cx.Objects {
+		if s := strings.TrimSpace(string(raw)); s == "null" || s == `"nil"` {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 // unknownState names the package-level variables a counterexample's model

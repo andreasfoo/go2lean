@@ -186,3 +186,33 @@ func InitEncoder() { enc = &encoder{perToken: 4} }
 // Tokens is the token count of s. It panics when InitEncoder has not run:
 // confirmed, with the verdict noting the package state it read.
 func Tokens(s string) int { return len(s) / enc.perToken }
+
+// ring is built by newRing only (it is unexported): a ring with an empty
+// buffer is a state no caller can make, so push is not a target on a
+// receiver built field by field (newRing is variadic: no wrapper).
+type ring struct {
+	buf []int
+	pos int
+}
+
+func newRing(sizes ...int) *ring {
+	n := 4
+	if len(sizes) > 0 && sizes[0] > 0 {
+		n = sizes[0]
+	}
+	return &ring{buf: make([]int, n)}
+}
+
+func (r *ring) push(v int) {
+	r.buf[r.pos%len(r.buf)] = v
+	r.pos++
+}
+
+// Fill pushes n values into a fresh ring (holds).
+func Fill(n int) int {
+	r := newRing()
+	for i := 0; i < n && i < 16; i++ {
+		r.push(i)
+	}
+	return r.pos
+}

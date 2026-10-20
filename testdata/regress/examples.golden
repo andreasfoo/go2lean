@@ -100,6 +100,7 @@ exhausted overflow_sum_nopanic
 confirmed overflow_sum_specsum
 exhausted portable_count_nopanic
 exhausted_havoc portable_digit_nopanic
+exhausted portable_fill_nopanic
 exhausted portable_first_nopanic
 inconclusive portable_group_nopanic
 confirmed portable_head_nopanic
@@ -110,6 +111,7 @@ exhausted portable_meta_get_nopanic
 exhausted portable_meta_newsession_nopanic
 confirmed portable_minor_nopanic
 exhausted portable_month_nopanic
+none portable_newring_nopanic
 confirmed portable_parse_c0_nopanic
 confirmed portable_parse_c_nopanic
 confirmed portable_per_nopanic

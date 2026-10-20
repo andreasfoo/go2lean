@@ -609,15 +609,29 @@ func addCtorWrappers(p *ir.Prog, fns []*ssa.Function) {
 			continue
 		}
 		ctor, ok := ctors[named.Obj()]
-		if !ok || ctor.Signature.Variadic() {
+		if !ok {
+			continue
+		}
+		// An unexported type is built by its constructor only: without a
+		// wrapper the method is no target (a receiver made field by field
+		// can hold states the constructor never makes).
+		noWrapper := func() {
+			if !named.Obj().Exported() {
+				p.Funcs[ids[m]].CtorOnly = ctor.Name()
+			}
+		}
+		if ctor.Signature.Variadic() {
+			noWrapper()
 			continue
 		}
 		_, ctorPtr := ctor.Signature.Results().At(0).Type().(*types.Pointer)
 		if ptrRecv && !ctorPtr {
+			noWrapper()
 			continue // the constructor's value would need an address
 		}
 		w, err := ctorWrapper(p, ctor, m, ids[ctor], ids[m], ctorPtr && !ptrRecv)
 		if err != nil {
+			noWrapper()
 			continue
 		}
 		w.TestFile = p.Funcs[ids[m]].TestFile || p.Funcs[ids[ctor]].TestFile
@@ -642,8 +656,11 @@ func ctorOf(f *ssa.Function) (*types.TypeName, bool) {
 	if !ok || f.Pkg == nil || named.Obj().Pkg() != f.Pkg.Pkg {
 		return nil, false
 	}
+	// NewT or newT for T; for an unexported t also NewT and newT with its
+	// first letter capitalised (newAnthropicBetaToResponsesConverter).
 	n := named.Obj().Name()
-	if f.Name() != "New"+n && f.Name() != "new"+n && f.Name() != "New"+strings.ToUpper(n[:1])+n[1:] {
+	upper := strings.ToUpper(n[:1]) + n[1:]
+	if f.Name() != "New"+n && f.Name() != "new"+n && f.Name() != "New"+upper && f.Name() != "new"+upper {
 		return nil, false
 	}
 	return named.Obj(), true

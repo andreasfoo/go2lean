@@ -446,6 +446,11 @@ type ModelFunc struct {
 	// WrappedBy names the constructor wrapper that targets this method in
 	// its place (T.M~NewT).
 	WrappedBy string `json:"wrapped_by,omitempty"`
+	// CtorOnly names the constructor of this method's unexported type when
+	// no wrapper could be built for it: only that constructor makes such a
+	// receiver, so one built field by field is a misuse and the method is
+	// not a target.
+	CtorOnly string `json:"ctor_only,omitempty"`
 	// TestFile marks a function declared in a _test.go file: modelled for
 	// the specs and tests that call it, never a target itself.
 	TestFile bool `json:"test_file,omitempty"`

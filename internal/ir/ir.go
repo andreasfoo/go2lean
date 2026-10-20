@@ -480,6 +480,7 @@ type Func struct {
 	SpecFor   string
 	Closure   bool
 	WrappedBy string
+	CtorOnly  string
 	TestFile  bool
 	// SpecMaxLen is the spec's go2lean:maxlen directive (0: none).
 	SpecMaxLen int
