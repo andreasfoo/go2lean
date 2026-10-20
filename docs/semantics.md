@@ -103,6 +103,7 @@ yields UB or poison, Go panics. A run ends in one of:
 | `make([]T, n, c)` | `makeSlice` | exact; negative/too large length panics |
 | `append` | `appendSlice` | exact while capacity allows; growth doubles the capacity (Go's growth is implementation-defined) |
 | `copy` | `copySlice` | exact |
+| `min`, `max` on integers | a comparison and `ite` per argument | exact (on strings and floats: havoc) |
 | `len`, `cap` of slices, arrays, pointers to arrays | `len cap` | exact |
 | `==` on arrays and structs | `eq` / `eqDeep` (strings compared by bytes) | exact for comparable fields; floats inside are havoc |
 | struct/array literals | `mkStruct`, `.arr` | exact |
@@ -184,6 +185,7 @@ Calls not listed here are unmodelled (§4.6).
 | `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell) |
 | `strconv.Atoi` | exact for decimal `int64` (sign, range error) |
 | `strconv.Itoa` | exact |
+| `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add` | exact: plain reads and writes of the wrapped field (the model is single-threaded); other methods (`Swap`, `CompareAndSwap`): havoc |
 | `strconv.ParseInt ParseUint` | exact: bases 0 (prefixes `0b 0o 0x 0`, underscores) and 2–36, bit sizes 0–64, syntax, range (the bound, as soon as the value overflows), base and bit size errors; checked against Go by `PKG=testdata/convdiff scripts/json-diff.sh` |
 | `strconv.ParseBool FormatInt FormatUint` | exact (an illegal base panics, as in Go) |
 | `math/rand` and `math/rand/v2` `Intn Int31n Int63n IntN Int32N Int64N UintN Uint32N Uint64N` (functions and `*Rand` methods) | any value in `[0, n)` (havoc); Go's panic for `n <= 0` |

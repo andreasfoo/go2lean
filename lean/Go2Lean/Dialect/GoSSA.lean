@@ -389,6 +389,8 @@ inductive Op where
   `commaOk` the result is `(v, ok)` and a mismatch gives `(zero, false)`,
   without it a mismatch panics. -/
   | unbox (tag : Nat) (commaOk : Bool) (zero : Val)
+  /-- `c ? a : b` (the builtins min and max) -/
+  | ite
   /-- Is it known whether this func/map/channel/interface value is nil? -/
   | nilKnown
   /-- Is this error value one whose identity the model knows: nil, a
@@ -901,6 +903,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .reflectIsZero, [.boxed _ v] =>
     match isZeroVal v with | some b => .ok (.bool b) | none => .panic .modelStuck
   | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
+  | .ite, [.bool c, a, b] => .ok (if c then a else b)
   | .reIn ids, [x] => .ok (.bool (match x with | .boxed _ (.int _ id) => ids.contains id.toNat | _ => false))
   | .errKnown, [x] => .ok (.bool (match x with | .boxed .. | .err false => true | _ => false))
   | .errTagKnown tag, [x] => .ok (.bool (match x with | .boxed t _ => t == tag | .err false => true | _ => false))

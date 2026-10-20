@@ -2212,6 +2212,37 @@ func (t *fnState) call(x *ssa.Call) error {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Append{Zero: zero}, Args: []ir.Var{a, b}})
 			return nil
 		}
+		if _, signed, isInt := intWidth(x.Type()); (bi.Name() == "min" || bi.Name() == "max") && isInt {
+			// min(a, b, ...) and max: a comparison and a choice per argument
+			// (min(a) compares a with itself).
+			acc, err := t.val(x.Call.Args[0])
+			if err != nil {
+				return err
+			}
+			rest := x.Call.Args[1:]
+			if len(rest) == 0 {
+				rest = x.Call.Args[:1]
+			}
+			for i, a := range rest {
+				v, err := t.val(a)
+				if err != nil {
+					return err
+				}
+				less := t.fresh()
+				t.emit(ir.Instr{Dst: less, Op: pick(signed, "slt", "ult"), Args: []ir.Var{v, acc}})
+				next := t.fresh()
+				if i == len(rest)-1 {
+					next = t.def(x)
+				}
+				if bi.Name() == "min" {
+					t.emit(ir.Instr{Dst: next, Op: ir.Simple("ite"), Args: []ir.Var{less, v, acc}})
+				} else {
+					t.emit(ir.Instr{Dst: next, Op: ir.Simple("ite"), Args: []ir.Var{less, acc, v}})
+				}
+				acc = next
+			}
+			return nil
+		}
 		if hasResult {
 			if bi.Name() == "len" || bi.Name() == "cap" {
 				t.opaqueLen(t.def(x), bi.Name(), x.Call.Args[0].Type())
@@ -2283,6 +2314,9 @@ func (t *fnState) call(x *ssa.Call) error {
 			return nil
 		}
 		if done, err := t.randBounded(x, callee); done || err != nil {
+			return err
+		}
+		if done, err := t.atomicCall(x, callee); done || err != nil {
 			return err
 		}
 		if done, err := t.regexpCall(x, callee); done || err != nil {
@@ -3190,6 +3224,93 @@ func regexpPattern(v ssa.Value) (string, bool) {
 		return "", false
 	}
 	return constant.StringVal(k.Value), true
+}
+
+// atomicCall lowers Load, Store and Add on sync/atomic's Bool, Int32,
+// Int64, Uint32 and Uint64: reads and writes of the integer field v the
+// type wraps (Bool holds 0 or 1). The model is single-threaded, so these
+// are plain accesses.
+func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	recv := callee.Signature.Recv()
+	if recv == nil || callee.Pkg == nil || callee.Pkg.Pkg.Path() != "sync/atomic" {
+		return false, nil
+	}
+	pt, ok := recv.Type().(*types.Pointer)
+	if !ok {
+		return false, nil
+	}
+	named, ok := pt.Elem().(*types.Named)
+	if !ok {
+		return false, nil
+	}
+	st, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return false, nil
+	}
+	field := -1
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Field(i).Name() == "v" {
+			field = i
+		}
+	}
+	isBool := named.Obj().Name() == "Bool"
+	switch named.Obj().Name() {
+	case "Bool", "Int32", "Int64", "Uint32", "Uint64":
+	default:
+		return false, nil
+	}
+	w, _, isInt := intWidth(st.Field(max(field, 0)).Type())
+	if field < 0 || !isInt {
+		return false, nil
+	}
+	switch callee.Name() {
+	case "Load", "Store", "Add":
+	default:
+		return false, nil
+	}
+	p, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	addr := t.fresh()
+	t.emit(ir.Instr{Dst: addr, Op: ir.FieldAddr{I: field}, Args: []ir.Var{p}})
+	konst := func(bits string) ir.Var {
+		v := t.fresh()
+		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.IntVal{Width: w, Bits: bits}}})
+		return v
+	}
+	switch callee.Name() {
+	case "Load":
+		if isBool {
+			raw := t.fresh()
+			t.emit(ir.Instr{Dst: raw, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("ne"), Args: []ir.Var{raw, konst("0")}})
+		} else {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		}
+	case "Store":
+		v, err := t.val(x.Call.Args[1])
+		if err != nil {
+			return true, err
+		}
+		if isBool {
+			b := t.fresh()
+			t.emit(ir.Instr{Dst: b, Op: ir.Simple("ite"), Args: []ir.Var{v, konst("1"), konst("0")}})
+			v = b
+		}
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, v}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
+	case "Add": // Bool has no Add
+		d, err := t.val(x.Call.Args[1])
+		if err != nil {
+			return true, err
+		}
+		old := t.fresh()
+		t.emit(ir.Instr{Dst: old, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("add"), Args: []ir.Var{old, d}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, t.def(x)}})
+	}
+	return true, nil
 }
 
 // randBounded lowers the bounded draws of math/rand and math/rand/v2

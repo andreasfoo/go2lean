@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/andreasfoo/go2lean/examples/portable/meta"
 )
@@ -215,4 +216,34 @@ func Fill(n int) int {
 		r.push(i)
 	}
 	return r.pos
+}
+
+// Budget fits a requested budget under a cap of at least 1024 and returns
+// how many 1024-token chunks it is: min and max are exact, so the divisor
+// is never zero (holds).
+func Budget(req, capTokens int) int {
+	c := max(capTokens, 1024)
+	return 1_000_000 / (min(req, c)%c + c)
+}
+
+// Shrink takes a third of the smaller of two limits. Bug: both 0.
+func Shrink(a, b int) int { return 300 / min(a, b, 100) }
+
+type counter struct {
+	done atomic.Bool
+	n    atomic.Int64
+}
+
+// Drain counts n events, then reports the average over them. Bug: n of 0
+// (the atomic counter is read back as written).
+func Drain(n int) int64 {
+	var c counter
+	for i := 0; i < n && i < 8; i++ {
+		c.n.Add(10)
+	}
+	c.done.Store(true)
+	if !c.done.Load() {
+		return -1
+	}
+	return 100 / c.n.Load()
 }
