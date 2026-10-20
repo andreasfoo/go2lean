@@ -49,6 +49,10 @@ func Label(kind string, n int) string { return fmt.Sprintf("%s-%d", kind, n) }
 // small number make a label under eight bytes, and the slice panics.
 func Short(kind string, n int) string { return Label(kind, n)[:8] }
 
+// HexTag is the first four hex digits of a key. Bug: a key under two
+// bytes has fewer than four digits, and the slice panics.
+func HexTag(key string) string { return fmt.Sprintf("%x", []byte(key))[:4] }
+
 // go2lean:spec Label
 // SpecLabelFormat: the kind, a dash, the number in decimal.
 func SpecLabelFormat(kind string, n int, ret string) bool {

@@ -294,6 +294,9 @@ inductive Op where
   | eqDeep | neDeep
   /-- `hex.EncodeToString(b)`: two lowercase hex digits per byte. -/
   | hexEncode
+  /-- `base64.StdEncoding.DecodeString`: the bytes and the error (CR and
+  LF are skipped, as Go does; on an error the bytes are nil). -/
+  | base64DecodeStd
   /-- `fmt.Sprintf(format, args...)` for the verbs `%s %d %v %t %%` without
   flags or widths on strings, integers and bools the program boxed; any
   other format or value gets the model stuck (the call is then unmodelled). -/
@@ -615,28 +618,38 @@ where
       | some true, r => r
       | none, _ => none
 
-/-- The bytes `%v` (and `%s`, `%d`, `%t`) prints for a value the program
+/-- Lower-case hex of bytes, as `%x` and `hex.EncodeToString` print them. -/
+def hexDigits (x : List Nat) : List Nat :=
+  let digit (d : Nat) := if d < 10 then 48 + d else 87 + d
+  x.flatMap fun b => [digit (b / 16), digit (b % 16)]
+
+/-- The bytes `%v` (and `%s`, `%d`, `%t`, and `%x` of a string or a byte
+slice, whose boxed type tag is `bytesTag`) prints for a value the program
 boxed, or `none`. Integers print signed: the model does not keep the
 signedness of a boxed integer, so a large unsigned value would print
 wrong; formats of those are rare in the code this models. -/
-def fmtArg (heap : Heap Val) (verb : Nat) : Val → Option (List Nat)
-  | .boxed _ (.str r o l) => if verb == 115 || verb == 118 then strBytes heap (.str r o l) else none
+def fmtArg (heap : Heap Val) (bytesTag verb : Nat) : Val → Option (List Nat)
+  | .boxed _ (.str r o l) =>
+    if verb == 115 || verb == 118 then strBytes heap (.str r o l)
+    else if verb == 120 then hexDigits <$> strBytes heap (.str r o l) else none
+  | .boxed t (.slice r o l _) =>
+    if verb == 120 && t == bytesTag then hexDigits <$> strBytes heap (.str r o l) else none
   | .boxed _ (.int _ v) => if verb == 100 || verb == 118 then some (itoaBytes v.toInt) else none
   | .boxed _ (.bool b) =>
     if verb == 116 || verb == 118 then some (if b then [116, 114, 117, 101] else [102, 97, 108, 115, 101]) else none
   | _ => none
 
 /-- Format `fmt` with `args` (see `Op.sprintf`). -/
-def sprintfBytes (heap : Heap Val) : List Nat → List Val → Option (List Nat)
+def sprintfBytes (heap : Heap Val) (bytesTag : Nat) : List Nat → List Val → Option (List Nat)
   | [], [] => some []
   | [], _ :: _ => none -- Go appends %!(EXTRA ...): not modelled
-  | 37 :: 37 :: rest, args => (37 :: ·) <$> sprintfBytes heap rest args
+  | 37 :: 37 :: rest, args => (37 :: ·) <$> sprintfBytes heap bytesTag rest args
   | 37 :: verb :: rest, a :: args =>
-    match fmtArg heap verb a, sprintfBytes heap rest args with
+    match fmtArg heap bytesTag verb a, sprintfBytes heap bytesTag rest args with
     | some x, some y => some (x ++ y)
     | _, _ => none
   | 37 :: _, _ => none -- a missing argument or a bare % at the end
-  | c :: rest, args => (c :: ·) <$> sprintfBytes heap rest args
+  | c :: rest, args => (c :: ·) <$> sprintfBytes heap bytesTag rest args
 
 /-- Key equality for maps: strings by their bytes, the rest by `eqVal`. -/
 def keyEq (heap : Heap Val) (a b : Val) : Bool :=
@@ -1780,6 +1793,14 @@ partial def jDoc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Option (Li
   | some (.int _ signed), .int _ x => some (bvDec signed x)
   | some (.ptr _), .ptr 0 _ => some (asciiBytes "null")
   | some (.ptr e), p@(.ptr ..) => match heapLoad heap p with | .ok x => jDoc t heap e x | _ => none
+  -- json.RawMessage: itself when it is JSON, null otherwise (the harness
+  -- writes it so).
+  | some .raw, .slice 0 .. => some (asciiBytes "null")
+  | some .raw, .slice ref off len _ =>
+    (strBytes heap (.str ref off len)).map fun bs =>
+      match Lean.Json.parse (utf8Lossy bs) with
+      | .ok _ => htmlEscape (compactJson bs)
+      | .error _ => asciiBytes "null"
   | some (.slice _), .slice 0 .. => some (asciiBytes "[]")
   | some (.slice e), .slice ref off len _ =>
     match heap[ref]? with
@@ -1851,6 +1872,17 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
   | .makeMap, [] =>
     let (p, heap) := heapAlloc heap (.arr [])
     .ok (.boxed 1 p, heap)
+  | .base64DecodeStd, [s] =>
+    match strBytes heap s with
+    | some bs =>
+      match base64Dec (bs.filter fun b => b != 10 && b != 13) with
+      | some out =>
+        let (p, heap) := heapAlloc heap (.arr (out.map fun b => .int 8 (BitVec.ofNat 8 b)))
+        match p with
+        | .ptr ref _ => .ok (.tuple [.slice ref 0#64 (BitVec.ofNat 64 out.length) (BitVec.ofNat 64 out.length), .err false], heap)
+        | _ => .panic .modelStuck
+      | none => .ok (.tuple [.slice 0 0#64 0#64 0#64, .err true], heap)
+    | none => .panic .modelStuck
   | .jsonMarshal t root, [v] =>
     match jEnc t heap root v with
     | .ok bs =>
@@ -1962,22 +1994,20 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | some r => .ok (.bool r, heap) | none => .panic .modelStuck
   | .neDeep, [a, b] => match eqDeep heap a b with
     | some r => .ok (.bool !r, heap) | none => .panic .modelStuck
-  | .sprintfOk, [f, args] =>
+  | .sprintfOk, [f, args, .int _ bt] =>
     match strBytes heap f, sliceElems heap args with
-    | some fb, some xs => .ok (.bool ((sprintfBytes heap fb xs).isSome), heap)
+    | some fb, some xs => .ok (.bool ((sprintfBytes heap bt.toNat fb xs).isSome), heap)
     | _, _ => .ok (.bool false, heap)
-  | .sprintf, [f, args] =>
+  | .sprintf, [f, args, .int _ bt] =>
     match strBytes heap f, sliceElems heap args with
     | some fb, some xs =>
-      match sprintfBytes heap fb xs with
+      match sprintfBytes heap bt.toNat fb xs with
       | some r => if r.length > strLimit then .panic .modelStuck else .ok (strAlloc heap r)
       | none => .panic .modelStuck
     | _, _ => .panic .modelStuck
   | .hexEncode, [.slice ref off len _] =>
     match strBytes heap (.str ref off len) with
-    | some x =>
-      let digit (d : Nat) := if d < 10 then 48 + d else 87 + d
-      .ok (strAlloc heap (x.flatMap fun b => [digit (b / 16), digit (b % 16)]))
+    | some x => .ok (strAlloc heap (hexDigits x))
     | none => .panic .modelStuck
   | .freshArr n, [] =>
     let k := heap.size

@@ -4,7 +4,10 @@
 // one. Run with scripts/json-diff.sh.
 package jsondiff
 
-import "encoding/json"
+import (
+	"encoding/base64"
+	"encoding/json"
+)
 
 type Inner struct {
 	A int    `json:"a,omitempty"`
@@ -12,15 +15,15 @@ type Inner struct {
 }
 
 type Doc struct {
-	Name  string          `json:"name"`
-	Count int8            `json:"count,omitempty"`
-	U     uint16          `json:"u"`
-	Ok    bool            `json:"ok,omitempty"`
-	Tags  []string        `json:"tags"`
-	Meta  map[string]int  `json:"meta,omitempty"`
-	In    *Inner          `json:"in,omitempty"`
-	Any   any             `json:"any"`
-	Raw   []byte          `json:"raw,omitempty"`
+	Name  string         `json:"name"`
+	Count int8           `json:"count,omitempty"`
+	U     uint16         `json:"u"`
+	Ok    bool           `json:"ok,omitempty"`
+	Tags  []string       `json:"tags"`
+	Meta  map[string]int `json:"meta,omitempty"`
+	In    *Inner         `json:"in,omitempty"`
+	Any   any            `json:"any"`
+	Raw   []byte         `json:"raw,omitempty"`
 	Inner
 	hid
 }
@@ -73,6 +76,15 @@ func DecodeLoose(s string) string {
 // EncodeRaw encodes raw text inside a struct.
 func EncodeRaw(r json.RawMessage) string {
 	b, err := json.Marshal(Loose{R: r})
+	if err != nil {
+		return "ERR"
+	}
+	return string(b)
+}
+
+// Decode64 decodes standard base64.
+func Decode64(s string) string {
+	b, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		return "ERR"
 	}

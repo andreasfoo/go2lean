@@ -640,6 +640,19 @@ func jsonDoc(abi *contract.ABI, p contract.ABIParam, v any) any {
 		return jsonDoc(abi, *p.Pointee, v)
 	case contract.ABISlice, contract.ABIArray:
 		elems, _ := v.([]any)
+		if p.Kind == contract.ABISlice && strings.HasSuffix(p.GoType, "json.RawMessage") {
+			// Raw JSON text: in the document as itself when it is JSON
+			// (null otherwise), as the model writes it (GoSSA.jDoc).
+			var b []byte
+			for _, e := range elems {
+				n, _ := strconv.Atoi(fmt.Sprint(e))
+				b = append(b, byte(n))
+			}
+			if v == nil || !json.Valid(b) {
+				return nil
+			}
+			return json.RawMessage(b)
+		}
 		out := []any{}
 		for _, e := range elems {
 			out = append(out, jsonDoc(abi, p.ElemAsParam(), e))

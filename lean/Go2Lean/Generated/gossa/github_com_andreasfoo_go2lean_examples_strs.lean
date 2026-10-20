@@ -12,8 +12,43 @@ set_option maxRecDepth 100000
 def jsonTable : GoSSA.JTable :=
   { descs := #[], zeros := #[] }
 
-/-- func(name string) bool (status: complete) -/
+/-- func(key string) string (status: complete) -/
 def f0 : GoSSA.Func := {
+  name := "HexTag", params := [0], nvals := 17, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 1 .strToBytes [0],
+                 .op 2 (.alloc (.arr [.opaqueNil])) [],
+                 .op 3 (.const (.int 64 0#64)) [],
+                 .op 4 .indexAddr [2, 3],
+                 .op 5 (.box 359372799) [1],
+                 .op 6 .storePath [4, 5],
+                 .op 7 (.const (.int 64 0#64)) [],
+                 .op 8 .strLen [2],
+                 .op 9 .reslice [2, 7, 8],
+                 .op 10 (.strConst [37, 120]) [],
+                 .op 11 (.const (.int 64 359372799#64)) [],
+                 .op 13 .sprintfOk [10, 9, 11]],
+      term := .br 13 1 [] 2 [] },
+    -- 1: entry.sprintf
+    { params := [],
+      instrs := #[.op 12 .sprintf [10, 9, 11]],
+      term := .jump 3 [] },
+    -- 2: entry.sprintf-unknown
+    { params := [],
+      instrs := #[.havoc 12 0],
+      term := .jump 3 [] },
+    -- 3: entry.sprintf-join
+    { params := [],
+      instrs := #[.op 14 (.const (.int 64 0#64)) [],
+                 .op 15 (.const (.int 64 4#64)) [],
+                 .op 16 .strSlice [12, 14, 15]],
+      term := .ret 16 }
+  ] }
+
+/-- func(name string) bool (status: complete) -/
+def f1 : GoSSA.Func := {
   name := "IsAdmin", params := [0], nvals := 4, entry := 0,
   blocks := #[
     -- 0: entry
@@ -25,8 +60,8 @@ def f0 : GoSSA.Func := {
   ] }
 
 /-- func(kind string, n int) string (status: complete) -/
-def f1 : GoSSA.Func := {
-  name := "Label", params := [0, 1], nvals := 17, entry := 0,
+def f2 : GoSSA.Func := {
+  name := "Label", params := [0, 1], nvals := 18, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
@@ -43,24 +78,25 @@ def f1 : GoSSA.Func := {
                  .op 12 .strLen [2],
                  .op 13 .reslice [2, 11, 12],
                  .op 14 (.strConst [37, 115, 45, 37, 100]) [],
-                 .op 16 .sprintfOk [14, 13]],
-      term := .br 16 1 [] 2 [] },
+                 .op 15 (.const (.int 64 359372799#64)) [],
+                 .op 17 .sprintfOk [14, 13, 15]],
+      term := .br 17 1 [] 2 [] },
     -- 1: entry.sprintf
     { params := [],
-      instrs := #[.op 15 .sprintf [14, 13]],
+      instrs := #[.op 16 .sprintf [14, 13, 15]],
       term := .jump 3 [] },
     -- 2: entry.sprintf-unknown
     { params := [],
-      instrs := #[.havoc 15 0],
+      instrs := #[.havoc 16 1],
       term := .jump 3 [] },
     -- 3: entry.sprintf-join
     { params := [],
       instrs := #[],
-      term := .ret 15 }
+      term := .ret 16 }
   ] }
 
 /-- func(s string) (int, error) (status: partial) -/
-def f2 : GoSSA.Func := {
+def f3 : GoSSA.Func := {
   name := "ParsePort", params := [0], nvals := 20, entry := 0,
   blocks := #[
     -- 0: entry
@@ -70,7 +106,7 @@ def f2 : GoSSA.Func := {
       term := .br 2 2 [] 1 [] },
     -- 1: if.then
     { params := [],
-      instrs := #[.havoc 3 1,
+      instrs := #[.havoc 3 2,
                  .op 4 (.const (.int 64 0#64)) [],
                  .op 5 .mkTuple [4, 3]],
       term := .ret 5 },
@@ -86,7 +122,7 @@ def f2 : GoSSA.Func := {
       term := .br 12 3 [] 5 [] },
     -- 3: if.then
     { params := [],
-      instrs := #[.havoc 13 2,
+      instrs := #[.havoc 13 3,
                  .op 14 (.const (.int 64 0#64)) [],
                  .op 15 .mkTuple [14, 13]],
       term := .ret 15 },
@@ -103,7 +139,7 @@ def f2 : GoSSA.Func := {
   ] }
 
 /-- func(u string) string (status: complete) -/
-def f3 : GoSSA.Func := {
+def f4 : GoSSA.Func := {
   name := "Scheme", params := [0], nvals := 5, entry := 0,
   blocks := #[
     -- 0: entry
@@ -116,13 +152,13 @@ def f3 : GoSSA.Func := {
   ] }
 
 /-- func(kind string, n int) string (status: complete) -/
-def f4 : GoSSA.Func := {
+def f5 : GoSSA.Func := {
   name := "Short", params := [0, 1], nvals := 6, entry := 0,
   blocks := #[
     -- 0: entry
     { params := [],
       instrs := #[],
-      term := .call 1 [0, 1] 2 1 [] 2 },
+      term := .call 2 [0, 1] 2 1 [] 2 },
     -- 1: entry.after-call
     { params := [],
       instrs := #[.op 3 (.const (.int 64 0#64)) [],
@@ -131,12 +167,12 @@ def f4 : GoSSA.Func := {
       term := .ret 5 },
     -- 2: entry.call-fallback
     { params := [],
-      instrs := #[.havoc 2 3],
+      instrs := #[.havoc 2 4],
       term := .jump 1 [] }
   ] }
 
 /-- func(kind string, n int, ret string) bool (status: complete) -/
-def f5 : GoSSA.Func := {
+def f6 : GoSSA.Func := {
   name := "SpecLabelFormat", params := [0, 1, 2], nvals := 8, entry := 0,
   blocks := #[
     -- 0: entry
@@ -150,7 +186,7 @@ def f5 : GoSSA.Func := {
   ] }
 
 /-- func(s string, ret0 int, ret1 error) bool (status: complete) -/
-def f6 : GoSSA.Func := {
+def f7 : GoSSA.Func := {
   name := "SpecParsePortRange", params := [0, 1, 2], nvals := 12, entry := 0,
   blocks := #[
     -- 0: entry
@@ -179,6 +215,6 @@ def f6 : GoSSA.Func := {
       term := .ret 3 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6], havocWidths := #[2, 0, 0, 2] }
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7], havocWidths := #[2, 2, 0, 0, 2] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_strs

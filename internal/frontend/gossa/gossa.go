@@ -1993,6 +1993,16 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil && callee.String() == "encoding/json.Marshal" && len(x.Call.Args) == 1 {
 		return t.jsonMarshal(x)
 	}
+	if callee != nil && callee.String() == "(*encoding/base64.Encoding).DecodeString" && len(x.Call.Args) == 2 && isGlobalLoad(x.Call.Args[0], "encoding/base64", "StdEncoding") {
+		// base64.StdEncoding.DecodeString (the other encodings differ in
+		// alphabet and padding: unmodelled).
+		s, err := t.val(x.Call.Args[1])
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("base64DecodeStd"), Args: []ir.Var{s}})
+		return nil
+	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
 		if op, ok := ir.StdlibOps[callee.String()]; ok {
@@ -2045,6 +2055,16 @@ func (t *fnState) call(x *ssa.Call) error {
 	}
 	t.issue("call to %s ignored (no result, effects not modelled)", name)
 	return nil
+}
+
+// isGlobalLoad says whether v loads the package-level variable pkg.name.
+func isGlobalLoad(v ssa.Value, pkg, name string) bool {
+	u, ok := v.(*ssa.UnOp)
+	if !ok || u.Op != token.MUL {
+		return false
+	}
+	g, ok := u.X.(*ssa.Global)
+	return ok && g.Pkg != nil && g.Pkg.Pkg.Path() == pkg && g.Name() == name
 }
 
 // loggingPkg says whether path is a logging package: its calls have no
@@ -2169,7 +2189,7 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 
 // sprintf lowers fmt.Sprintf: the formatted string when the model can
 // format it (plain %s %d %v %t %% on strings, integers and bools the
-// program boxed), else the havoc string an unmodelled call gives.
+// program boxed, %x on strings and byte slices), else the havoc string an unmodelled call gives.
 // jsonUnmarshal lowers json.Unmarshal(data, &v) for v of a JSON-shaped
 // type (string, bool, interface{}, map[string]interface{}, []interface{}):
 // the model parses the bytes. Other targets (structs) stay unmodelled.
@@ -2290,9 +2310,13 @@ func (t *fnState) sprintf(x *ssa.Call) error {
 	if err != nil {
 		return err
 	}
+	// %x formats a byte slice; the model tells one by its boxed type tag
+	// (the tag of []byte as the program spells it: byte, not uint8).
+	bytesTag := t.fresh()
+	t.emit(ir.Instr{Dst: bytesTag, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: fmt.Sprint(typeTag(types.NewSlice(types.Universe.Lookup("byte").Type())))}}})
 	dst := t.def(x)
 	ok := t.fresh()
-	t.emit(ir.Instr{Dst: ok, Op: ir.Simple("sprintfOk"), Args: []ir.Var{f, args}})
+	t.emit(ir.Instr{Dst: ok, Op: ir.Simple("sprintfOk"), Args: []ir.Var{f, args, bytesTag}})
 	yes := len(t.out.Blocks)
 	no, join := yes+1, yes+2
 	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: ok, T: yes, F: no}
@@ -2302,7 +2326,7 @@ func (t *fnState) sprintf(x *ssa.Call) error {
 		ir.Block{Name: name + ".sprintf-unknown"},
 		ir.Block{Name: name + ".sprintf-join"})
 	t.cur = &t.out.Blocks[yes]
-	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("sprintf"), Args: []ir.Var{f, args}})
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("sprintf"), Args: []ir.Var{f, args, bytesTag}})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[no]
 	if err := t.havocInto(dst, x.Type(), t.f.Name()+": call fmt.Sprintf", "unmodeled-call", ""); err != nil {
