@@ -25,7 +25,9 @@ func (e *engineOptions) get() constraint.SearchOptions {
 	return o
 }
 
-func searchFlags(fs *flag.FlagSet) *engineOptions {
+// searchFlags declares the search options; budget is the default -budget:
+// short for sweeps over many properties, longer where there are few.
+func searchFlags(fs *flag.FlagSet, budget int) *engineOptions {
 	o := &constraint.SearchOptions{}
 	engine := fs.String("engine", "all", "engine: random, exhaustive or all")
 	fs.IntVar(&o.Seed, "seed", 42, "random seed")
@@ -36,7 +38,7 @@ func searchFlags(fs *flag.FlagSet) *engineOptions {
 	fs.IntVar(&o.ExhaustLimit, "exhaust-limit", 300000, "maximum domain size the exhaustive engine attempts")
 	fs.BoolVar(&o.NilInputs, "nil-inputs", false, "let top-level pointer arguments and receivers be nil")
 	fs.IntVar(&o.Jobs, "jobs", 0, "properties searched in parallel (default: number of CPUs)")
-	fs.IntVar(&o.BudgetSeconds, "budget", 10, "seconds each engine may spend on one property (0: unlimited)")
+	fs.IntVar(&o.BudgetSeconds, "budget", budget, "seconds each engine may spend on one property (0: unlimited)")
 	return &engineOptions{o, engine}
 }
 
@@ -65,7 +67,7 @@ func cmdHunt(args []string) error {
 	fs := flag.NewFlagSet("hunt", flag.ExitOnError)
 	ws := workspaceFlag(fs)
 	id := fs.String("property", "", "property id (default: all)")
-	opts := searchFlags(fs)
+	opts := searchFlags(fs, 10)
 	fs.Parse(args)
 	w, env, err := openWorkspace(ws)
 	if err != nil {
@@ -110,7 +112,7 @@ func cmdPoc(args []string) error {
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	ws := workspaceFlag(fs)
-	opts := searchFlags(fs)
+	opts := searchFlags(fs, 10)
 	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
 	resume := fs.Bool("resume", false, "skip properties already searched and counterexamples already verified in the workspace")
 	fs.Parse(args)

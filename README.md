@@ -75,7 +75,8 @@ something unmodelled) is reported as unknown, never as a counterexample
 or a certificate. Both run in `go2lean-search`, a native
 executable built by lake from the Lean engines and every generated model,
 driven by a JSON description of the search; properties are searched in
-parallel, and each engine stops at a wall-clock budget (10 s by default)
+parallel, and each engine stops at a wall-clock budget (10 s by default; 120 s
+under `agent`)
 so one function with expensive inputs cannot stall a sweep. The agent sits on top: it reads the source and
 the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
 the ones the frontend rejects, runs the pipeline, and writes a report from

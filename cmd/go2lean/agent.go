@@ -21,7 +21,10 @@ func cmdAgent(args []string) error {
 	guidance := fs.String("guidance", "", "file with guidance for the proposal round (bug classes, invariants, functions to target)")
 	specFile := fs.String("spec-file", "", "name of the spec file the agent writes in the package (default go2lean_specs_test.go)")
 	deps := fs.Bool("deps", false, "also model the functions of dependency packages the package calls")
-	opts := searchFlags(fs)
+	// The agent's specs are few and target large functions (a trial on a
+	// converter with a thousand generated fields takes seconds): a 10 s
+	// budget left some of them with a handful of trials.
+	opts := searchFlags(fs, 120)
 	fs.Parse(args)
 	guidanceText := ""
 	if *guidance != "" {
