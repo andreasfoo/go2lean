@@ -689,15 +689,25 @@ for the tool: for each, write the *general* property a reviewer would state
 gap and close it. A hit means go2lean found an input that breaks the
 property and `go test` confirmed it.
 
-| bug | property (spec) | result | gap behind a miss / what changed |
+| bug | property (spec) | result (go2lean `bac5535`) | what it took |
 |---|---|---|---|
-| Anthropic -> Chat request drops temperature, top_p, stop_sequences | `SpecConvertAnthropicBetaToOpenAIRequestKeepsSampling`: a parameter the client sets reaches the Chat request | hit, trial 0 | none |
-| tool_choice any/none become auto | `...KeepsToolChoice`: the mode keeps its meaning | hit, trial 17 | none |
-| Responses stream: arguments only in `.done` are lost | `SpecResponsesToChatConverterProcessEventArgumentsAnySchedule`: for **any legal event schedule** (deltas or `.done` only, chosen by a generated field), the client assembles the response's arguments | hit, trial 610 | the earlier stream specs replayed one fixed schedule (always deltas), which hid the bug: the schedule has to be an input of the property |
-| Chat -> Anthropic stream: DeepSeek's `reasoning_content: null` opens a second block | `SpecOpenAIToAnthropicConverterProcessChunkOneOpenBlock`: for any sequence of deltas, one block is open at a time and deltas go to it | see below | the converter reads `delta.RawJSON()` (an unexported field the generator left empty) and decodes it with `json.Unmarshal` (havoc): **JSON metadata of SDK types, JSON decoding** |
+| Anthropic -> Chat request drops temperature, top_p, stop_sequences | `SpecConvertAnthropicBetaToOpenAIRequestKeepsSampling`: a parameter the client sets reaches the Chat request | found at trial 3, confirmed | nothing |
+| tool_choice any/none become auto | `...KeepsToolChoice`: the mode keeps its meaning | trial 10, confirmed | nothing |
+| Responses stream: arguments only in `.done` are lost | `SpecResponsesToChatConverterProcessEventArgumentsAnySchedule`: for **any legal event schedule** (deltas or `.done` only, chosen by a generated field), the client assembles the response's arguments | trial 13, confirmed | the spec: earlier stream specs replayed one fixed schedule (always deltas), which hid the bug; the schedule has to be an input of the property |
+| Chat -> Anthropic stream: a block opens while another is open (found by go2lean) | `SpecOpenAIToAnthropicConverterProcessChunkOneOpenBlock`: for any sequence of deltas, one block is open at a time and deltas go to it | trial 24, confirmed | the harness wrote an empty map as nil |
+| Chat -> Anthropic stream: `reasoning_content` after the answer opens a second block (DeepSeek's `null`) | `...OneOpenTextBlock`: the same for deltas without tool calls | trial 80, confirmed | the converter reads `delta.RawJSON()` and decodes it: map and interface inputs, `json.Unmarshal`, SDK raw JSON keyed by compared strings, documented enums; the harness decodes such values from one document (inline union variants); the spec cleared finish reasons and used a converter without a token counter (tiktoken out of reach) |
 | Chat -> Anthropic non-stream: thinking is the raw JSON literal | (stream/non-stream agreement) | out of reach | the converter builds its result by `json.Marshal` of a struct and `json.Unmarshal` into an SDK type: encoding and decoding of structs is not modelled |
 | non-stream usage counts cache reads twice | (handler-level) | out of reach | the bug sits inline in a gin handler that forwards over HTTP |
 | env credentials sent upstream | (SDK client options) | out of reach | the process environment is read inside the SDK's request building |
+
+All five reachable cases are confirmed (go2lean-tingly-box
+`scripts/benchmark.sh`). The misses on the way were of three kinds: the
+spec (a fixed event schedule; chunks skipped for a random finish reason),
+go2lean (inputs it could not generate, calls it did not model, harness
+renderings that changed the value), and reach (code the function-level
+search does not get to). Regression after these changes (`run -deps
+./examples/...`): **36 of 36 confirmed** (Weight, Label, Role new), no
+spurious, **82 certificates** (78 before).
 
 Changes made for the misses (each with a ground-truth example, `examples/inputs`):
 
