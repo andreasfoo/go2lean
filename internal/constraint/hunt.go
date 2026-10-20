@@ -16,6 +16,7 @@ import (
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/repo"
+	"github.com/andreasfoo/go2lean/internal/ssaout"
 )
 
 // Engine selects which counterexample engines Hunt runs.
@@ -573,8 +574,11 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	if strConsts == nil {
 		strConsts = []string{}
 	}
-	leanDir := repo.LeanDir(root)
-	if err := buildDriver(leanDir); err != nil {
+	leanDir := repo.WorkspaceLeanDir(ws.Root)
+	if err := ssaout.EnsureProject(leanDir, repo.LeanDir(root)); err != nil {
+		return nil, "", err
+	}
+	if err := buildDriver(repo.LeanDir(root), leanDir); err != nil {
 		return nil, "", err
 	}
 	spec := map[string]any{
@@ -686,21 +690,44 @@ func InvalidateDriver() {
 	driverBuilt = ""
 }
 
-// buildDriver links the native search driver (lean/Main.lean) against
-// every generated model once per compile.
-func buildDriver(leanDir string) error {
+// buildDriver links a workspace's native search driver against its
+// generated models once per compile: first go2lean's core library (shared
+// by every workspace, so built under the core's lock), then the workspace's
+// project (under its own lock: a round's parallel hunts share it).
+func buildDriver(coreDir, leanDir string) error {
 	driverMu.Lock()
 	defer driverMu.Unlock()
 	if driverBuilt == leanDir {
 		return nil
 	}
-	// Hunts run as parallel processes (round scripts use xargs -P): one
-	// lake build at a time, or a second one fails on the first's
-	// half-written outputs.
-	if err := os.MkdirAll(filepath.Join(leanDir, ".lake"), 0o755); err != nil {
+	if err := locked(coreDir, func() error {
+		if out, err := lake(coreDir, "build", "Go2Lean"); err != nil {
+			return fmt.Errorf("lake build Go2Lean (core): %w\n%s", err, out)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(leanDir, ".lake", "go2lean-build.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err := locked(leanDir, func() error {
+		if out, err := lake(leanDir, "build", "go2lean-search"); err != nil {
+			return fmt.Errorf("lake build go2lean-search: %w\n%s", err, out)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	driverBuilt = leanDir
+	return nil
+}
+
+// locked runs f holding an exclusive lock on dir's lake build: hunts run
+// as parallel processes (round scripts use xargs -P), and a second lake
+// build in the same project fails on the first's half-written outputs.
+func locked(dir string, f func() error) error {
+	if err := os.MkdirAll(filepath.Join(dir, ".lake"), 0o755); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, ".lake", "go2lean-build.lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
@@ -709,14 +736,11 @@ func buildDriver(leanDir string) error {
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	if out, err := lake(leanDir, "build", "go2lean-search"); err != nil {
-		return fmt.Errorf("lake build go2lean-search: %w\n%s", err, out)
-	}
-	driverBuilt = leanDir
-	return nil
+	return f()
 }
 
-// runSearch writes the search description under lean/Search and runs the
+// runSearch writes the search description under the workspace's
+// lean/Search and runs the
 // native driver on it, parsing the JSON line it prints.
 func runSearch(leanDir, name string, spec map[string]any, engine string) (*searchResult, error) {
 	specFile := filepath.Join(leanDir, "Search", name+".json")

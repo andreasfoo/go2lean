@@ -1,9 +1,8 @@
 /out/
 /out-*/
 /lean/.lake/
-/lean/Search/
-/lean/Go2Lean/Generated/Registry.lean
 *.test
-# Generated models: only the go2lean examples are tracked.
-/lean/Go2Lean/Generated/gossa/*
-!/lean/Go2Lean/Generated/gossa/github_com_andreasfoo_go2lean_examples_*.lean
+# Models and search files live in each workspace's own lake project; these
+# are left over from checkouts that predate it.
+/lean/Search/
+/lean/Go2Lean/Generated/

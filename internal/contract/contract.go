@@ -498,7 +498,7 @@ type ModelReport struct {
 	Package    string      `json:"package"`
 	Frontend   string      `json:"frontend"`
 	LeanModule string      `json:"lean_module"` // e.g. Go2Lean.Generated.gossa.overflow
-	LeanFile   string      `json:"lean_file"`   // relative to the repo root
+	LeanFile   string      `json:"lean_file"`   // relative to the workspace
 	Funcs      []ModelFunc `json:"funcs"`
 	Havoc      []ABIHavoc  `json:"havoc,omitempty"` // program-wide havoc sites
 	// Dependency marks a package modelled only for its callers (-deps).

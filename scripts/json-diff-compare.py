@@ -23,3 +23,4 @@ for f in sorted(glob.glob(f"{ws}/verdicts/*.json")):
         same += 1
         print("SAME", inp[:160], "->", model[0][:160])
 print(f"same {same}, different {diff}, other {other}")
+sys.exit(1 if diff else 0)

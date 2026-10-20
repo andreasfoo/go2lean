@@ -2,13 +2,14 @@ name = "go2lean"
 version = "0.1.0"
 defaultTargets = ["Go2Lean"]
 
+# The core: the SSA semantics, the GoSSA dialect and the search engines.
+# Generated models are not part of it: each workspace is a lake project of
+# its own (written by go2lean, `<workspace>/lean`) that requires this one by
+# path, holds its models and links the search driver, so workspaces build
+# and run side by side.
+# No roots, only globs: a library owns every module its roots prefix, and
+# the default root `Go2Lean` would claim the workspaces' Go2Lean.Generated.*.
 [[lean_lib]]
 name = "Go2Lean"
-# Build the root module and every submodule, including M1's generated models.
-globs = ["Go2Lean.+"]
-
-# The native search driver; links every generated model through the
-# registry M1 regenerates on each compile.
-[[lean_exe]]
-name = "go2lean-search"
-root = "Main"
+roots = []
+globs = ["Go2Lean", "Go2Lean.SSA.+", "Go2Lean.Dialect.+", "Go2Lean.Search", "Go2Lean.Driver"]

@@ -6,12 +6,16 @@ import Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_oob
 sample. For every `v lo hi`, the model of `oob.Clamp` returns a value on
 which `SpecClampIdentity` holds. The model is the deep embedding the
 engines run (`run` and `runFunc` from `Go2Lean.SSA`), unfolded by `simp`
-with one `rfl` lemma per op used, then split into cases. Check it with
+with one `rfl` lemma per op used, then split into cases. The model lives in
+a workspace's lake project, so check it from there:
 
-    cd lean && lake env lean Proofs/OobClampIdentity.lean
+    go run ./cmd/go2lean compile -workspace out ./examples/oob
+    cd out/lean && lake lean ../../lean/Proofs/OobClampIdentity.lean
 
-It is not part of the `Go2Lean` library build: the FuncIds below are those
-of the generated model and change when M1 regenerates it. -/
+(`lake lean`, not `lake env lean`: the core and the workspace both hold
+modules under `Go2Lean`, which only lake's per-package resolution tells
+apart.) It is not part of the `Go2Lean` library build: the FuncIds below are
+those of the generated model and change when M1 regenerates it. -/
 
 open Go2Lean Go2Lean.SSA Go2Lean.GoSSA
 open Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_oob

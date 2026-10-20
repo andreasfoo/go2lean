@@ -26,5 +26,9 @@ func Root() (string, error) {
 	}
 }
 
-// LeanDir is the lake project.
+// LeanDir is the lake project of go2lean's core Lean library.
 func LeanDir(root string) string { return filepath.Join(root, "lean") }
+
+// WorkspaceLeanDir is a workspace's own lake project: its generated models
+// and its search driver (see ssaout.EnsureProject).
+func WorkspaceLeanDir(ws string) string { return filepath.Join(ws, "lean") }

@@ -27,7 +27,7 @@ go run ./cmd/go2lean run ./examples/overflow
 
 ```
 == M1 compile
-compiled github.com/andreasfoo/go2lean/examples/overflow -> lean/Go2Lean/Generated/gossa/overflow.lean
+compiled github.com/andreasfoo/go2lean/examples/overflow -> out/lean/Go2Lean/Generated/gossa/overflow.lean
   SpecSum      complete  func(xs []int, ret int) bool  [spec for Sum]
   Sum          complete  func(xs []int) int
 == M2 properties
@@ -125,6 +125,11 @@ go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-ur
 
 `go2lean run -deps -workspace out-reg ./examples/...` runs every row
 (`-deps` models the generic helpers of package `slices` the examples call).
+`scripts/regress.sh out-reg` does the same and compares every property's
+outcome (confirmed, certified, none) with
+[`testdata/regress/examples.golden`](testdata/regress/examples.golden);
+`scripts/json-diff.sh out-jd` checks the `encoding/json` model against Go.
+Both run on every push.
 
 | package | planted bug | result |
 |---|---|---|
@@ -215,6 +220,7 @@ internal/agent/        M2 agent: LLM interface, Claude, mock, prompts, loop
 internal/poc/          M3: harness generation, execution, verdicts
 internal/pipeline/     the steps the CLI and the agent share
 lean/                  Lean 4 project: SSA core, GoSSA dialect, search engines
+<workspace>/lean/      a workspace's own Lean project: its models and search driver
 examples/              ground-truth packages
 docs/design.md         design and roadmap
 docs/semantics.md      the Go semantics modelled, by construct, with status

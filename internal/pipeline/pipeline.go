@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -64,13 +65,17 @@ func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string
 		return nil, err
 	}
 	var reports []*contract.ModelReport
+	leanDir := repo.WorkspaceLeanDir(w.Root)
+	if err := ssaout.EnsureProject(leanDir, repo.LeanDir(env.Root)); err != nil {
+		return nil, err
+	}
 	for _, prog := range progs {
 		constraint.InvalidateDriver()
-		report, err := ssaout.Emit(prog, repo.LeanDir(env.Root), w, modPath)
+		report, err := ssaout.Emit(prog, leanDir, w, modPath)
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(out, "compiled %s -> %s\n", prog.Package, report.LeanFile)
+		fmt.Fprintf(out, "compiled %s -> %s\n", prog.Package, filepath.Join(w.Root, report.LeanFile))
 		for _, f := range report.Funcs {
 			fmt.Fprintf(out, "  %-12s %-9s %s", f.Name, f.Status, f.GoSig)
 			if f.SpecFor != "" {

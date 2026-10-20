@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cache the Lean toolchain and the core build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            lean/.lake
+          key: lean-${{ hashFiles('lean/lean-toolchain') }}-${{ hashFiles('lean/lakefile.toml', 'lean/Go2Lean/**/*.lean', 'lean/Go2Lean.lean') }}
+          restore-keys: lean-${{ hashFiles('lean/lean-toolchain') }}-
+
+      - name: Install elan
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build the Lean core
+        working-directory: lean
+        run: lake build
+
+      - name: Unit tests
+        run: go test ./internal/...
+
+      - name: Ground-truth regression (testdata/regress/examples.golden)
+        run: scripts/regress.sh "$RUNNER_TEMP/regress"
+
+      - name: encoding/json model against Go
+        run: scripts/json-diff.sh "$RUNNER_TEMP/json-diff" 4 | tail -5
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            ${{ runner.temp }}/regress/run.log
+            ${{ runner.temp }}/regress/outcomes.txt
+            ${{ runner.temp }}/json-diff/*.log
+          if-no-files-found: ignore

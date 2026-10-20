@@ -83,6 +83,61 @@ func panicCtor(k contract.PanicKind) string {
 	return "other"
 }
 
+// EnsureProject makes leanDir (a workspace's `lean/`) the lake project its
+// models live in: a lakefile requiring go2lean's core library (coreDir, the
+// checkout's `lean/`) by path, the core's toolchain, and the search
+// driver's main module. Each workspace builds and runs its own driver, so
+// workspaces do not share generated files and can run side by side.
+func EnsureProject(leanDir, coreDir string) error {
+	core, err := filepath.Abs(coreDir)
+	if err != nil {
+		return err
+	}
+	toolchain, err := os.ReadFile(filepath.Join(core, "lean-toolchain"))
+	if err != nil {
+		return err
+	}
+	files := map[string]string{
+		"lakefile.toml": fmt.Sprintf(`# Written by go2lean: this workspace's models and search driver.
+name = "go2lean-models"
+defaultTargets = ["go2lean-search"]
+
+[[require]]
+name = "go2lean"
+path = %q
+
+[[lean_lib]]
+name = "Go2LeanModels"
+globs = ["Go2Lean.Generated.+"]
+
+[[lean_exe]]
+name = "go2lean-search"
+root = "Main"
+`, core),
+		"lean-toolchain": string(toolchain),
+		"Main.lean": `-- Written by go2lean: the search driver over this workspace's models.
+import Go2Lean.Driver
+import Go2Lean.Generated.Registry
+
+def main (args : List String) : IO UInt32 :=
+  Go2Lean.Search.driverMain Go2Lean.Generated.registry Go2Lean.Generated.jsonTables args
+`,
+	}
+	if err := os.MkdirAll(filepath.Join(leanDir, "Go2Lean", "Generated", "gossa"), 0o755); err != nil {
+		return err
+	}
+	for name, content := range files {
+		path := filepath.Join(leanDir, name)
+		if old, err := os.ReadFile(path); err == nil && string(old) == content {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return WriteRegistry(leanDir)
+}
+
 // WriteRegistry lists every generated model in Generated/Registry.lean,
 // which the native search driver links so one executable serves all
 // packages. It is regenerated on every emit.

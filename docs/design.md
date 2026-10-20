@@ -358,7 +358,8 @@ from the oracle, so M3 materialises exactly the slice the model saw.
 
 ### 4.7 M1 outputs
 
-- `lean/Go2Lean/Generated/<frontend>/<pkg>.lean`
+- `<workspace>/lean/Go2Lean/Generated/<frontend>/<pkg>.lean`, in the
+  workspace's own lake project (see §8)
 - `<workspace>/models/<frontend>/<Func>.json` (ABI), `report.json` (per function:
   complete / partial / rejected, issues, spec-for, Lean FuncId)
 - `<workspace>/targets/<id>.json`
@@ -583,16 +584,31 @@ go2lean/
   internal/constraint/      M2 core: property templates, engine runners
   internal/agent/           M2 agent loop, LLM interface (later)
   internal/poc/             M3
-  lean/                     lake project (Lean 4 core only; no Mathlib, no plausible)
+  lean/                     lake project `go2lean`, the core (Lean 4 core only; no Mathlib, no plausible)
     Go2Lean/SSA/Core.lean        the core
     Go2Lean/Dialect/GoSSA.lean   the GoSSA dialect
-    Go2Lean/Search.lean          the random engine
-    Go2Lean/Generated/           M1 output (do not edit)
-    Go2Lean/Proofs/              M2 output
-    Search/                      per-property search files (scratch, ignored)
+    Go2Lean/Search.lean          the engines
+    Go2Lean/Driver.lean          the search driver (JSON in, JSON out)
+    Proofs/                      proof prototypes (checked from a workspace)
+  <workspace>/lean/         lake project `go2lean-models`, written by M1
+    lakefile.toml                requires the core by path
+    Go2Lean/Generated/           M1 output (do not edit) and its Registry
+    Main.lean                    the `go2lean-search` executable
+    Search/                      per-property search files (scratch)
   examples/                 ground-truth packages
   docs/
 ```
+
+Each workspace has its own lake project for its models, so runs in different
+workspaces never share build state: the generated modules, the registry and
+the `go2lean-search` executable are per workspace, and the core is built once
+in `lean/` under a file lock (`.lake/go2lean-build.lock`, as is each
+workspace's build). Before this split every run wrote its models into the
+checkout's `lean/` and rebuilt one shared executable, so two runs at the same
+time (an agent pass and a regression run, say) rebuilt each other's driver
+mid-hunt and failed. The core library has no roots, only globs: a lake
+library's default root claims every module under its prefix, and `Go2Lean`
+would claim the workspaces' `Go2Lean.Generated.*`.
 
 ```
 go2lean compile [-workspace out] <package>        M1: Go → Lean model, ABI, targets
