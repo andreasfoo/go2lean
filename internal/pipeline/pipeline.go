@@ -66,7 +66,11 @@ func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string
 	}
 	var reports []*contract.ModelReport
 	leanDir := repo.WorkspaceLeanDir(w.Root)
-	if err := ssaout.EnsureProject(leanDir, repo.LeanDir(env.Root)); err != nil {
+	core, err := repo.CoreDir(env.Root)
+	if err != nil {
+		return nil, err
+	}
+	if err := ssaout.EnsureProject(leanDir, core); err != nil {
 		return nil, err
 	}
 	for _, prog := range progs {

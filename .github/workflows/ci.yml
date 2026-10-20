@@ -29,6 +29,7 @@ jobs:
         with:
           path: |
             ~/.elan
+            ~/.cache/go2lean
             lean/.lake
           key: lean-${{ hashFiles('lean/lean-toolchain') }}-${{ hashFiles('lean/lakefile.toml', 'lean/Go2Lean/**/*.lean', 'lean/Go2Lean.lean') }}
           restore-keys: lean-${{ hashFiles('lean/lean-toolchain') }}-

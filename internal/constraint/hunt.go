@@ -577,10 +577,14 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		strConsts = []string{}
 	}
 	leanDir := repo.WorkspaceLeanDir(ws.Root)
-	if err := ssaout.EnsureProject(leanDir, repo.LeanDir(root)); err != nil {
+	core, err := repo.CoreDir(root)
+	if err != nil {
 		return nil, "", err
 	}
-	if err := buildDriver(repo.LeanDir(root), leanDir); err != nil {
+	if err := ssaout.EnsureProject(leanDir, core); err != nil {
+		return nil, "", err
+	}
+	if err := buildDriver(core, leanDir); err != nil {
 		return nil, "", err
 	}
 	spec := map[string]any{

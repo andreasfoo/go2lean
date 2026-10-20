@@ -602,8 +602,12 @@ go2lean/
 Each workspace has its own lake project for its models, so runs in different
 workspaces never share build state: the generated modules, the registry and
 the `go2lean-search` executable are per workspace, and the core is built once
-in `lean/` under a file lock (`.lake/go2lean-build.lock`, as is each
-workspace's build). Before this split every run wrote its models into the
+per version under a file lock (`.lake/go2lean-build.lock`, as is each
+workspace's build): runs build and require a snapshot of `lean/`'s core
+sources in `~/.cache/go2lean/core-<hash of their contents>`
+(`$GO2LEAN_CACHE` overrides the directory; the four most recently used are
+kept), so editing the checkout while a run is going makes a new snapshot
+instead of rebuilding the core under the running searches. Before this split every run wrote its models into the
 checkout's `lean/` and rebuilt one shared executable, so two runs at the same
 time (an agent pass and a regression run, say) rebuilt each other's driver
 mid-hunt and failed. The core library has no roots, only globs: a lake
