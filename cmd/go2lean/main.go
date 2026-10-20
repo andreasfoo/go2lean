@@ -17,6 +17,8 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 	}
+	limitMemory()
+	startMemProfile()
 	var err error
 	switch os.Args[1] {
 	case "compile":
