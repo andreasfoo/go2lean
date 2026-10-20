@@ -15,12 +15,14 @@ import (
 	"go/token"
 	"go/types"
 	"hash/fnv"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
@@ -990,6 +992,16 @@ func (t *fnState) block(i int, b *ssa.BasicBlock) error {
 }
 
 func (t *fnState) binop(x *ssa.BinOp) error {
+	if (x.Op == token.EQL || x.Op == token.NEQ) && isString(x.X.Type()) {
+		// Strings compared against a constant: candidate JSON keys and values.
+		for _, o := range []ssa.Value{x.X, x.Y} {
+			if c, ok := o.(*ssa.Const); ok && c.Value != nil && c.Value.Kind() == constant.String {
+				if s := constant.StringVal(c.Value); !slices.Contains(t.out.CmpStrs, s) {
+					t.out.CmpStrs = append(t.out.CmpStrs, s)
+				}
+			}
+		}
+	}
 	w, signed, isInt := intWidth(x.X.Type())
 	_, countSigned, _ := intWidth(x.Y.Type())
 	_ = w
@@ -2827,7 +2839,7 @@ func abiOf(f *ssa.Function) (*contract.ABI, error) {
 		abi.Method = f.Name()
 	}
 	pkg := funcPkg(f)
-	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}}
+	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}, fset: f.Prog.Fset}
 	for _, p := range f.Params {
 		if isTestingType(p.Type()) {
 			return nil, fmt.Errorf("test helper: parameter %s has type %s", p.Name(), p.Type())
@@ -2865,6 +2877,7 @@ type abiBuilder struct {
 	// current value: an interface inside an interface's map or slice holds
 	// scalars only, so the description stays finite.
 	anyDepth int
+	fset     *token.FileSet
 }
 
 // register adds a recursive named struct type to the table.
@@ -2882,8 +2895,21 @@ func (ab *abiBuilder) register(n *types.Named, src, ipath string) int {
 // struct are opaque, since a test in the target package cannot set them.
 func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named) ([]contract.ABIParam, error) {
 	var fields []contract.ABIParam
+	meta := isRespJSONMeta(u)
 	for i := 0; i < u.NumFields(); i++ {
 		fld := u.Field(i)
+		if foreign && meta && fld.Name() == "raw" {
+			// The raw JSON behind RawJSON(): a JSON text of extra fields.
+			fields = append(fields, contract.ABIParam{Go: "raw", GoType: "string", Model: []string{"raw"}, Kind: contract.ABIString, JSONText: true})
+			continue
+		}
+		if foreign && meta && fld.Name() == "ExtraFields" {
+			// Decoding sets it from the raw JSON; a test cannot set it on
+			// its own (the metadata struct cannot be spelled), so it stays
+			// nil in the model.
+			fields = append(fields, contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: "nil", ZeroModel: map[string]any{"k": "nil"}})
+			continue
+		}
 		if foreign && !fld.Exported() {
 			p := contract.ABIParam{Go: fld.Name(), GoType: types.TypeString(fld.Type(), nil), Model: []string{fld.Name()}, Kind: contract.ABIOpaque, Zero: zeroLit(fld.Type(), types.TypeString(fld.Type(), nil))}
 			if z, ok := zeroVal(fld.Type()); ok {
@@ -2896,9 +2922,70 @@ func (ab *abiBuilder) fields(u *types.Struct, foreign bool, stack []*types.Named
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", fld.Name(), err)
 		}
+		if f.Kind == contract.ABIString && len(f.Enum) == 0 && ab.fset != nil {
+			f.Enum = docEnum(ab.fset, fld)
+		}
 		fields = append(fields, f)
 	}
 	return fields, nil
+}
+
+var (
+	docLines   = map[string][]string{}
+	anyOfRe    = regexp.MustCompile(`^\s*//\s*Any of (.*)$`)
+	quotedRe   = regexp.MustCompile(`"([^"\\]*)"`)
+	docLinesMu sync.Mutex
+)
+
+// docEnum reads the values a string field documents as `// Any of "a",
+// "b".` in the comment above it (the convention of the Stainless-generated
+// OpenAI and Anthropic SDKs, whose enum-like fields are plain strings).
+func docEnum(fset *token.FileSet, fld *types.Var) []string {
+	pos := fset.Position(fld.Pos())
+	if pos.Filename == "" || pos.Line < 2 {
+		return nil
+	}
+	docLinesMu.Lock()
+	lines, ok := docLines[pos.Filename]
+	if !ok {
+		if b, err := os.ReadFile(pos.Filename); err == nil {
+			lines = strings.Split(string(b), "\n")
+		}
+		docLines[pos.Filename] = lines
+	}
+	docLinesMu.Unlock()
+	for i := pos.Line - 2; i >= 0 && i < len(lines); i-- {
+		l := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(l, "//") {
+			break
+		}
+		if m := anyOfRe.FindStringSubmatch(l); m != nil {
+			var out []string
+			for _, q := range quotedRe.FindAllStringSubmatch(m[1], -1) {
+				out = append(out, q[1])
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// isRespJSONMeta says whether u is the JSON metadata struct of an OpenAI or
+// Anthropic SDK response type: fields of type respjson.Field (and
+// ExtraFields) next to an unexported raw string.
+func isRespJSONMeta(u *types.Struct) bool {
+	hasRaw, hasField := false, false
+	for i := 0; i < u.NumFields(); i++ {
+		f := u.Field(i)
+		if f.Name() == "raw" && isString(f.Type()) {
+			hasRaw = true
+		}
+		if n, ok := types.Unalias(f.Type()).(*types.Named); ok && n.Obj().Name() == "Field" && n.Obj().Pkg() != nil &&
+			strings.HasSuffix(n.Obj().Pkg().Path(), "/packages/respjson") {
+			hasField = true
+		}
+	}
+	return hasRaw && hasField
 }
 
 // zeroModel describes a zero value for the generator (see valOfJson in

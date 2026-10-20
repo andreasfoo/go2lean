@@ -680,6 +680,64 @@ the go/ssa frontend in one pass (15 s). What it taught:
 | the seventh pass still confirmed 231 nil-input findings through constructors fed a third-party struct the generator built field by field (`*gorm.DB` with gorm's internal maps nil) | **handles**: a pointer to a struct of another package (outside the standard library) whose package exports a function returning a pointer to it (`gorm.Open`, `NewStore`) is generated as a non-nil pointer to an opaque value (the harness writes `new(T)`); any use of its contents makes the run moot, a callee working on it takes its fallback. `examples/xpkg` `Post` (a `*money.Ledger` from `NewLedger`) certified. Regression: 32 of 32 confirmed, 76 certificates |
 | triaging the seventh pass: 31 confirmations were helpers declared in `_test.go` files; `update.sh` on the hand specs showed #1924 out of reach at `-maxlen 6` (ids over 40 characters) and the Anthropic -> Chat stream specs stuck at a `fmt.Sprintf` id | functions declared in `_test.go` files stay in the model but are not targets (`TestFile`). A spec can carry `go2lean:maxlen N`: its property searches inputs up to N long. **`fmt.Sprintf`** with plain `%s %d %v %t %%` on strings, integers and bools the program boxed is formatted (`sprintfOk` decides at run time; any other format or value takes the old havoc string). `examples/strs` `Short`/`Label`. Regression: 33 of 33 confirmed, 78 certificates |
 
+## 9c. Benchmark: bugs found by hand (2026-10-20)
+
+Six tingly-box bugs were found by reading code and checking bug classes of
+similar gateways (go2lean-tingly-box findings 6-11). They are a benchmark
+for the tool: for each, write the *general* property a reviewer would state
+(no trigger input encoded), run go2lean blind, and when it misses, name the
+gap and close it. A hit means go2lean found an input that breaks the
+property and `go test` confirmed it.
+
+| bug | property (spec) | result | gap behind a miss / what changed |
+|---|---|---|---|
+| Anthropic -> Chat request drops temperature, top_p, stop_sequences | `SpecConvertAnthropicBetaToOpenAIRequestKeepsSampling`: a parameter the client sets reaches the Chat request | hit, trial 0 | none |
+| tool_choice any/none become auto | `...KeepsToolChoice`: the mode keeps its meaning | hit, trial 17 | none |
+| Responses stream: arguments only in `.done` are lost | `SpecResponsesToChatConverterProcessEventArgumentsAnySchedule`: for **any legal event schedule** (deltas or `.done` only, chosen by a generated field), the client assembles the response's arguments | hit, trial 610 | the earlier stream specs replayed one fixed schedule (always deltas), which hid the bug: the schedule has to be an input of the property |
+| Chat -> Anthropic stream: DeepSeek's `reasoning_content: null` opens a second block | `SpecOpenAIToAnthropicConverterProcessChunkOneOpenBlock`: for any sequence of deltas, one block is open at a time and deltas go to it | see below | the converter reads `delta.RawJSON()` (an unexported field the generator left empty) and decodes it with `json.Unmarshal` (havoc): **JSON metadata of SDK types, JSON decoding** |
+| Chat -> Anthropic non-stream: thinking is the raw JSON literal | (stream/non-stream agreement) | out of reach | the converter builds its result by `json.Marshal` of a struct and `json.Unmarshal` into an SDK type: encoding and decoding of structs is not modelled |
+| non-stream usage counts cache reads twice | (handler-level) | out of reach | the bug sits inline in a gin handler that forwards over HTTP |
+| env credentials sent upstream | (SDK client options) | out of reach | the process environment is read inside the SDK's request building |
+
+Changes made for the misses (each with a ground-truth example, `examples/inputs`):
+
+- **Map and interface inputs.** Maps with string, integer or bool keys are
+  generated as maps the program built (`.boxed 1 p`), keys mostly from the
+  string constants the call tree uses as map keys (`MapKeys`); an empty
+  interface holds nil or a string, bool, int, `map[string]interface{}` or
+  `[]interface{}` boxed with its type tag (the interface costs no depth;
+  the exhaustive engine takes nil and the first eight values of each
+  type). ABI kinds `map` and `any`; the harness writes map literals and
+  typed interface declarations. Type tags are alias-insensitive (`any`
+  and `interface{}` are one type at run time). `Weight` (a map entry 0)
+  and `Label` (an interface holding `{"role": "system"}`) are confirmed.
+- **`json.Unmarshal`** into a string, bool, `interface{}`,
+  `map[string]interface{}` or `[]interface{}` (`jsonUnmarshal`, on
+  `Lean.Json`): Go's rules for null, type errors and merging into a
+  non-nil map; invalid UTF-8 becomes U+FFFD. When a call tree decodes
+  JSON, JSON texts built from its literals join the string pool (random
+  bytes are never valid JSON). `Role` (a JSON object with `"role":"tool"`)
+  is confirmed; `Text` gets a certificate.
+- **SDK JSON metadata.** The unexported `JSON.raw` of OpenAI/Anthropic SDK
+  response types (behind `RawJSON()`) is generated as an empty text or an
+  object of one or two members whose keys come from the map keys and the
+  strings the call tree compares with `==` (`CmpStrs`), values null, a
+  bool, 0, "" or a literal. The harness cannot set it, so it builds the
+  value by a round trip: marshal the typed literal, merge the members,
+  unmarshal into a fresh value. `JSON.ExtraFields` stays nil in the model
+  (decoding derives it from the raw JSON; the metadata struct cannot be
+  spelled in a test), so code reading both may give spurious results.
+- **Documented enums.** The SDKs' enum-like fields are plain strings
+  documented `// Any of "stop", "length", ...` (1567 fields in the two
+  SDKs). The frontend reads that comment above a string field and gives
+  its values to the generator as the field's enum (drawn three times in
+  four), as it does for named string types. Before, `FinishReason` was a
+  random string and a spec skipping finished chunks saw almost none.
+- **Empty maps are not nil.** The harness left out empty composite
+  literals as zero values; for a map that turned an empty map into a nil
+  one and a write into a panic the model did not have (an inconclusive
+  verdict for the first Chat -> Anthropic stream counterexample).
+
 ## 10. Milestones
 
 - **Done — end-to-end PoC slice.** Contract and workspace; Lean SSA core;

@@ -60,6 +60,10 @@ inductive Gen where
   /-- An empty interface: nil, or the value of one of `alts` boxed with its
   type tag. -/
   | anyOf (name : String) (alts : List (Nat × Gen))
+  /-- The raw JSON of an SDK response type (behind `RawJSON()`): empty, or
+  an object of one or two members, keys from `keys`, values null, a bool,
+  0, an empty string or a string from `vals`. -/
+  | jsonText (name : String) (keys vals : List (List Nat))
 
 /-- The type table: field generators per named struct type. -/
 abbrev TypeTable := Array (List Gen)
@@ -140,7 +144,8 @@ def topDepth : Nat := 4
 /-- The field name a generator stands for. -/
 def Gen.name : Gen → String
   | .int n .. | .bool n | .err n | .slice n .. | .sliceOf n .. | .structv n _ | .ptr n _
-  | .link n _ | .str n .. | .nilptr n | .ref n _ | .opaque n _ | .arrOf n .. | .mapOf n .. | .anyOf n _ => n
+  | .link n _ | .str n .. | .nilptr n | .ref n _ | .opaque n _ | .arrOf n .. | .mapOf n .. | .anyOf n _
+  | .jsonText n .. => n
 
 /-- The SDKs of OpenAI and Anthropic spell a union as a struct whose
 fields are all named `Of<Variant>` (pointers, slices, `param.Opt` values):
@@ -163,6 +168,7 @@ partial def zeroGen (table : TypeTable) : Gen → Gen
   | .str n .. => .str n 0 []
   | .structv n fs => .structv n (fs.map (zeroGen table))
   | .mapOf n .. | .anyOf n _ => .opaque n .opaqueNil
+  | .jsonText n .. => .str n 0 []
   | .ref n idx =>
     match table[idx]? with
     | some fs => .structv n (fs.map (zeroGen table))
@@ -189,6 +195,24 @@ def chooseFields (table : TypeTable) (g : StdGen) (fields : List Gen) : List Gen
     let (k, g) := randNat g 0 (n - 1)
     (selectVariant table fields k, g)
   else (fields, g)
+
+/-- `bs` as a JSON string literal (quotes, backslash and control
+characters escaped). -/
+def jsonQuote (bs : List Nat) : List Nat :=
+  let hex (d : Nat) : Nat := if d < 10 then 48 + d else 87 + d
+  [34] ++ bs.flatMap (fun b =>
+    if b == 34 then [92, 34] else if b == 92 then [92, 92]
+    else if b < 32 then [92, 117, 48, 48, hex (b / 16), hex (b % 16)] else [b]) ++ [34]
+
+/-- The JSON values a generated member takes: null, true, false, 0, "",
+and the given strings. -/
+def jsonValues (vals : List (List Nat)) : List (List Nat) :=
+  ["null".toUTF8.toList.map (·.toNat), "true".toUTF8.toList.map (·.toNat),
+   "false".toUTF8.toList.map (·.toNat), [48], [34, 34]] ++ vals.map jsonQuote
+
+/-- `{"k1":v1,...}` -/
+def jsonObject (members : List (List Nat × List Nat)) : List Nat :=
+  [123] ++ ((members.map fun (k, v) => jsonQuote k ++ [58] ++ v).intersperse [44]).flatten ++ [125]
 
 /-- Generate one value. Slices and pointees are materialised on the heap,
 so stores through them are exact and the report can dump them. -/
@@ -282,6 +306,19 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
       -- The interface itself costs no depth: its map or slice does.
       let (v, g, heap) := genVal pf extra g heap pool table depth allowNil a
       (.boxed tag v, g, heap)
+  | .jsonText _ keys vals =>
+    -- Empty half the time (the typed fields alone); otherwise one or two
+    -- members.
+    let (roll, g) := randNat g 0 1
+    if roll == 0 || keys.isEmpty then let (v, heap) := strAlloc heap []; (v, g, heap) else
+    let values := jsonValues vals
+    let (n, g) := randNat g 1 2
+    let (members, g) := (List.range n).foldl (fun (acc, g) _ =>
+      let (i, g) := randNat g 0 (keys.length - 1)
+      let (j, g) := randNat g 0 (values.length - 1)
+      (acc ++ [(keys[i]!, values[j]!)], g)) ([], g)
+    let (v, heap) := strAlloc heap (jsonObject members)
+    (v, g, heap)
   | .arrOf _ elem n =>
     -- Below the budget an array holds zero values of its element kind:
     -- the generator for the element at depth zero yields nil pointers and
@@ -452,12 +489,13 @@ def flatten : Gen → Val → List (String × Json)
   | .arrOf .., _ => []
   | .mapOf .., _ => []
   | .anyOf .., _ => []
+  | .jsonText .., _ => []
   | g, _ => [(genName g, "?")]
 where
   genName : Gen → String
     | .int n .. => n | .bool n => n | .err n => n | .slice n .. => n | .structv n .. => n | .ptr n .. => n
     | .str n .. => n | .nilptr n => n | .ref n _ => n | .sliceOf n .. => n | .opaque n _ => n | .arrOf n .. => n | .link n _ => n
-    | .mapOf n .. => n | .anyOf n _ => n
+    | .mapOf n .. => n | .anyOf n _ => n | .jsonText n .. => n
 
 /-- Bytes as a JSON string (UTF-8 decoded; invalid sequences become U+FFFD). -/
 def bytesToJson (bs : List Nat) : Json :=
@@ -529,6 +567,7 @@ def objectsOf (heap : Heap Val) (gens : List Gen) (args : List Val) : List (Stri
     | (.arrOf name _ _, v) => some (name, renderObj heap true v)
     | (.mapOf name .., v) => some (name, renderObj heap true v)
     | (.anyOf name _, v) => some (name, renderObj heap true v)
+    | (.jsonText name .., v) => some (name, renderObj heap true v)
     | _ => none
 
 partial def renderVal : Val → Json
@@ -745,6 +784,10 @@ partial def enumGen (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
         match kv with
         | [k, v] => let (p, heap) := heapAlloc heap (mapObj [(k, v)]); (.boxed 1 p, heap)
         | _ => (.unit, heap))
+  | .jsonText _ keys vals =>
+    -- Empty, and one member for each of the first keys with each value.
+    let objs := (keys.take 8).flatMap fun k => (jsonValues (vals.take 3)).map fun v => jsonObject [(k, v)]
+    ([] :: objs).map fun bs heap => strAlloc heap bs
   | .anyOf _ alts =>
     -- The interface itself costs no depth: its map or slice does, and at
     -- depth zero only scalars are left.
@@ -822,6 +865,7 @@ partial def genSize (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (
   | .opaque .. => 1
   | .arrOf _ elem n => (genSize extra maxLen pool table (depth - 1) allowNil elem) ^ n
   | .nilptr _ => 1
+  | .jsonText _ keys vals => 1 + (keys.take 8).length * (jsonValues (vals.take 3)).length
   | .mapOf _ key val _ =>
     (if allowNil then 1 else 0) + 1 + (if depth == 0 then 0 else
       genSize extra maxLen pool table (depth - 1) allowNil key * genSize extra maxLen pool table (depth - 1) allowNil val)

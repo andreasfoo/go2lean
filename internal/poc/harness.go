@@ -412,7 +412,14 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			return "", fmt.Errorf("%s: type %s lives in an internal package the test cannot import", p.Go, p.GoType)
 		}
 		var parts []string
+		raw := ""
 		for i, f := range p.Fields {
+			if f.JSONText {
+				continue // set by the parent's round trip (rawJSON below)
+			}
+			if f.Go == "JSON" && f.Kind == contract.ABIStruct {
+				raw = jsonText(f, fields[i])
+			}
 			if f.Kind == contract.ABIOpaque {
 				continue // zero value: nil map, nil interface, nil func
 			}
@@ -432,15 +439,20 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if emptyComposite(e) {
-				// An empty composite literal is the zero value: leave it out
+			if emptyComposite(e) && f.Kind != contract.ABIMap {
+				// An empty composite literal is the zero value (an empty map
+				// is not: writes to it work): leave it out
 				// (an anonymous struct with a foreign unexported field, like
 				// the SDKs' JSON metadata, cannot be spelled here at all).
 				continue
 			}
 			parts = append(parts, f.Go+": "+e)
 		}
-		return p.GoType + "{" + strings.Join(parts, ", ") + "}", nil
+		lit := p.GoType + "{" + strings.Join(parts, ", ") + "}"
+		if raw != "" {
+			return rawJSON(p.GoType, lit, raw), nil
+		}
+		return lit, nil
 	case contract.ABISlice, contract.ABIArray:
 		if v == nil {
 			return "(" + p.GoType + ")(nil)", nil
@@ -516,6 +528,30 @@ func literal(abi *contract.ABI, p contract.ABIParam, v any) (string, error) {
 		return fmt.Sprintf("func() %s { v := %s; return &v }()", p.GoType, inner), nil
 	}
 	return "", fmt.Errorf("%s: cannot render kind %s", p.Go, p.Kind)
+}
+
+// jsonText is the generated raw JSON inside an SDK type's JSON metadata
+// field, if any.
+func jsonText(meta contract.ABIParam, v any) string {
+	fields, _ := v.([]any)
+	for i, f := range meta.Fields {
+		if f.JSONText && i < len(fields) {
+			s, _ := fields[i].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+// rawJSON builds a value of the SDK response type typ whose raw JSON
+// carries the members of raw next to the typed fields of lit: the SDK only
+// sets its raw JSON when decoding, so the literal is encoded, the members
+// merged in, and the document decoded into a fresh value.
+func rawJSON(typ, lit, raw string) string {
+	return fmt.Sprintf("func() %[1]s { go2leanB, _ := json.Marshal(%[2]s); go2leanM := map[string]json.RawMessage{}; "+
+		"_ = json.Unmarshal(go2leanB, &go2leanM); go2leanE := map[string]json.RawMessage{}; _ = json.Unmarshal([]byte(%[3]q), &go2leanE); "+
+		"for go2leanK, go2leanX := range go2leanE { go2leanM[go2leanK] = go2leanX }; go2leanB, _ = json.Marshal(go2leanM); "+
+		"var go2leanOut %[1]s; _ = json.Unmarshal(go2leanB, &go2leanOut); return go2leanOut }()", typ, lit, raw)
 }
 
 // canImport applies Go's internal-package rule: a package under

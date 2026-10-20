@@ -422,6 +422,7 @@ type Func struct {
 	StrConsts  []string         // string literals
 	MapKeys    []string         // string constants used as map keys
 	UsesJSON   bool             // the body decodes JSON (json.Unmarshal)
+	CmpStrs    []string         // string constants compared with == or !=
 	Calls      []int            // callees within the program, by function id
 	XCalls     []contract.XCall // callees in other packages of the same compile
 	Exits      []contract.ExitSite

@@ -199,6 +199,9 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 		if p.MaxLen < 0 {
 			return map[string]any{"k": "str", "name": p.Go, "maxLen": 0}, nil
 		}
+		if p.JSONText {
+			return map[string]any{"k": "jsonText", "name": p.Go}, nil
+		}
 		g := map[string]any{"k": "str", "name": p.Go, "maxLen": maxLen}
 		if len(p.Enum) > 0 {
 			g["enum"] = p.Enum
@@ -263,9 +266,18 @@ func genIn(abi *contract.ABI, p contract.ABIParam, maxLen int, open []string) (m
 	return nil, fmt.Errorf("parameter %s: unsupported kind %s", p.Go, p.Kind)
 }
 
-// literalPool collects the integer and string literals of the given
-// functions and, transitively, of the functions they call.
-func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []int) (consts, strConsts, mapKeys []string, usesJSON bool) {
+// pool is what the engines mine from a call tree: integer and string
+// literals, the strings used as map keys and compared with ==, and whether
+// some function decodes JSON.
+type pool struct {
+	consts, strConsts, mapKeys, cmpStrs []string
+	usesJSON                            bool
+}
+
+// literalPool collects the literals of the given functions and,
+// transitively, of the functions they call.
+func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []int) pool {
+	var pl pool
 	reports := map[string]*contract.ModelReport{report.Package: report}
 	byID := map[contract.XCall]contract.ModelFunc{}
 	index := func(r *contract.ModelReport) {
@@ -275,6 +287,13 @@ func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []in
 	}
 	index(report)
 	seen := map[contract.XCall]bool{}
+	add := func(into *[]string, from []string) {
+		for _, s := range from {
+			if !slices.Contains(*into, s) {
+				*into = append(*into, s)
+			}
+		}
+	}
 	var walk func(x contract.XCall)
 	walk = func(x contract.XCall) {
 		if _, loaded := reports[x.Package]; !loaded {
@@ -290,22 +309,11 @@ func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []in
 			return
 		}
 		seen[x] = true
-		for _, c := range f.Consts {
-			if !slices.Contains(consts, c) {
-				consts = append(consts, c)
-			}
-		}
-		for _, s := range f.StrConsts {
-			if !slices.Contains(strConsts, s) {
-				strConsts = append(strConsts, s)
-			}
-		}
-		for _, s := range f.MapKeys {
-			if !slices.Contains(mapKeys, s) {
-				mapKeys = append(mapKeys, s)
-			}
-		}
-		usesJSON = usesJSON || f.UsesJSON
+		add(&pl.consts, f.Consts)
+		add(&pl.strConsts, f.StrConsts)
+		add(&pl.mapKeys, f.MapKeys)
+		add(&pl.cmpStrs, f.CmpStrs)
+		pl.usesJSON = pl.usesJSON || f.UsesJSON
 		for _, callee := range f.Calls {
 			walk(contract.XCall{Package: x.Package, ID: callee})
 		}
@@ -318,7 +326,7 @@ func literalPool(ws contract.Workspace, report *contract.ModelReport, roots []in
 			walk(contract.XCall{Package: report.Package, ID: r})
 		}
 	}
-	return consts, strConsts, mapKeys, usesJSON
+	return pl
 }
 
 // jsonTexts builds JSON documents from the literals of a call tree that
@@ -347,6 +355,31 @@ func jsonTexts(mapKeys, strConsts []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+// jsonGens gives every JSON text generator its keys and string values.
+func jsonGens(node any, keys, vals []string) {
+	switch n := node.(type) {
+	case map[string]any:
+		if n["k"] == "jsonText" {
+			n["keys"], n["vals"] = keys, vals
+		}
+		for _, v := range n {
+			jsonGens(v, keys, vals)
+		}
+	case []map[string]any:
+		for _, v := range n {
+			jsonGens(v, keys, vals)
+		}
+	case [][]map[string]any:
+		for _, v := range n {
+			jsonGens(v, keys, vals)
+		}
+	case []any:
+		for _, v := range n {
+			jsonGens(v, keys, vals)
+		}
+	}
 }
 
 // keyMaps gives every generated map with string keys and no enum of its
@@ -410,8 +443,9 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	// The literal pool: the target's and the spec's constants and those of
 	// everything they call, so the branch a callee takes on "assistant" is
 	// reachable from the caller's inputs.
-	consts, strConsts, mapKeys, usesJSON := literalPool(ws, report, []int{fid, sid})
-	if usesJSON {
+	pl := literalPool(ws, report, []int{fid, sid})
+	consts, strConsts, mapKeys := pl.consts, pl.strConsts, pl.mapKeys
+	if pl.usesJSON {
 		for _, s := range jsonTexts(mapKeys, strConsts) {
 			if !slices.Contains(strConsts, s) {
 				strConsts = append(strConsts, s)
@@ -449,6 +483,15 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	}
 	keyMaps(g, mapKeys)
 	keyMaps(table, mapKeys)
+	// Generated JSON texts take their keys from the map keys and compared
+	// strings, their string values from those and the other literals.
+	jsonKeys := append(append([]string{}, mapKeys...), pl.cmpStrs...)
+	jsonVals := append(append([]string{}, pl.cmpStrs...), strConsts...)
+	if len(jsonVals) > 64 {
+		jsonVals = jsonVals[:64]
+	}
+	jsonGens(g, jsonKeys, jsonVals)
+	jsonGens(table, jsonKeys, jsonVals)
 
 	extra := []json.Number{}
 	for _, c := range consts {

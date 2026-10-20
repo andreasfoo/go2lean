@@ -54,6 +54,10 @@ partial def genOfJson (j : Json) : Except String Gen := do
   | "arrOf" => return .arrOf name (← genOfJson (← j.getObjVal? "elem")) (← j.getObjValAs? Nat "n")
   | "mapOf" =>
     return .mapOf name (← genOfJson (← j.getObjVal? "key")) (← genOfJson (← j.getObjVal? "val")) (← j.getObjValAs? Nat "maxLen")
+  | "jsonText" =>
+    let strs (key : String) : List (List Nat) :=
+      ((j.getObjValAs? (List String) key).toOption.getD []).map fun s => s.toUTF8.toList.map (·.toNat)
+    return .jsonText name (strs "keys") (strs "vals")
   | "anyOf" =>
     let alts ← (← j.getObjValAs? (Array Json) "alts").toList.mapM fun a => do
       return ((← a.getObjValAs? Nat "tag"), (← genOfJson (← a.getObjVal? "gen")))

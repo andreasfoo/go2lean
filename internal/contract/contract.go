@@ -339,6 +339,11 @@ type ABIParam struct {
 	// Tag the model's type tag of an Alts entry (a hash of the type's name).
 	Alts []ABIParam `json:"alts,omitempty"`
 	Tag  uint32     `json:"tag,omitempty"`
+	// JSONText marks the raw JSON an SDK response type keeps of itself
+	// (the unexported JSON.raw behind RawJSON()): generated as a JSON
+	// object of extra fields, which the harness merges into the typed
+	// value by a marshal / unmarshal round trip.
+	JSONText bool `json:"json_text,omitempty"`
 }
 
 // ABIType is a named struct type in the ABI's type table.
@@ -431,6 +436,9 @@ type ModelFunc struct {
 	// UsesJSON marks a body that decodes JSON: the engines then add JSON
 	// texts built from the literals to the string pool.
 	UsesJSON bool `json:"uses_json,omitempty"`
+	// CmpStrs are the string constants the body compares with == or !=
+	// (k == "reasoning_content"): the keys generated JSON texts use.
+	CmpStrs []string `json:"cmp_strs,omitempty"`
 	// Calls lists the IDs of the package functions this one calls, so the
 	// engines can mine the literals of the whole call tree.
 	Calls []int `json:"calls,omitempty"`
