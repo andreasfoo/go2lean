@@ -661,7 +661,7 @@ def writeAt (es : List Val) (i : Nat) (vs : List Val) : List Val :=
 
 /-- Decode one UTF-8 sequence at `i`: the code point and its width. Invalid
 or truncated input gives U+FFFD of width 1, as Go's range loop does. -/
-def decodeRune (bs : List Nat) (i : Nat) : Nat × Nat :=
+def decodeRuneA (bs : Array Nat) (i : Nat) : Nat × Nat :=
   let cont (b : Option Nat) : Bool := match b with | some b => 0x80 ≤ b && b < 0xC0 | none => false
   let low (b : Option Nat) : Nat := (b.getD 0) % 0x40
   match bs[i]? with
@@ -683,6 +683,10 @@ def decodeRune (bs : List Nat) (i : Nat) : Nat × Nat :=
       else (0xFFFD, 1)
     else (0xFFFD, 1)
 
+/-- `decodeRuneA` on a list (an array of it is built once per call: loops
+over a whole string convert once and use `decodeRuneA`). -/
+def decodeRune (bs : List Nat) (i : Nat) : Nat × Nat := decodeRuneA bs.toArray i
+
 /-- UTF-8 encode one code point; surrogates and values above U+10FFFF
 encode as U+FFFD, as Go's `string(r)` does. -/
 def encodeRune (r : Nat) : List Nat :=
@@ -693,11 +697,16 @@ def encodeRune (r : Nat) : List Nat :=
   else [0xF0 ||| (r >>> 18), 0x80 ||| ((r >>> 12) % 0x40), 0x80 ||| ((r >>> 6) % 0x40), 0x80 ||| (r % 0x40)]
 
 /-- All code points of a byte string. -/
-partial def decodeAll (bs : List Nat) (i : Nat := 0) : List Nat :=
-  if i < bs.length then
-    let (r, n) := decodeRune bs i
-    r :: decodeAll bs (i + n)
-  else []
+def decodeAll (bs : List Nat) : List Nat := go bs.toArray 0 bs.length
+where
+  go (arr : Array Nat) (i fuel : Nat) : List Nat :=
+    match fuel with
+    | 0 => []
+    | fuel + 1 =>
+      if i < arr.size then
+        let (r, n) := decodeRuneA arr i
+        r :: go arr (i + n) fuel
+      else []
 
 /-- Go index semantics: a negative index is out of range, so compare unsigned
 after sign-extending to 64 bits. -/
@@ -987,11 +996,12 @@ def allocStrSlice (heap : Heap Val) (parts : List (List Nat)) : Val × Heap Val 
 
 /-- `bytes` as a string, invalid UTF-8 sequences replaced by U+FFFD. -/
 def utf8Lossy (bytes : List Nat) : String := Id.run do
+  let arr := bytes.toArray
   let mut out := ""
   let mut i := 0
-  for _ in [0:bytes.length] do
-    if i ≥ bytes.length then break
-    let (r, w) := decodeRune bytes i
+  for _ in [0:arr.size] do
+    if i ≥ arr.size then break
+    let (r, w) := decodeRuneA arr i
     out := out.push (Char.ofNat r)
     i := i + w
   return out
@@ -1086,11 +1096,12 @@ default), invalid UTF-8 as `\ufffd`. -/
 def goJsonQuote (bs : List Nat) : List Nat := Id.run do
   let hex (d : Nat) : Nat := if d < 10 then 48 + d else 87 + d
   let u4 (c : Nat) : Array Nat := #[92, 117, hex (c / 4096 % 16), hex (c / 256 % 16), hex (c / 16 % 16), hex (c % 16)]
+  let arr := bs.toArray
   let mut out : Array Nat := #[34]
   let mut i := 0
-  for _ in [0:bs.length] do
-    if i ≥ bs.length then break
-    let b := bs[i]!
+  for _ in [0:arr.size] do
+    if i ≥ arr.size then break
+    let b := arr[i]!
     if b < 0x80 then
       if b == 34 then out := out ++ #[92, 34]
       else if b == 92 then out := out ++ #[92, 92]
@@ -1103,10 +1114,10 @@ def goJsonQuote (bs : List Nat) : List Nat := Id.run do
       else out := out.push b
       i := i + 1
     else
-      let (r, w) := decodeRune bs i
+      let (r, w) := decodeRuneA arr i
       if r == 0xFFFD && w == 1 then out := out ++ u4 0xFFFD
       else if r == 0x2028 || r == 0x2029 then out := out ++ u4 r
-      else out := out ++ ((bs.drop i).take w).toArray
+      else out := out ++ arr.extract i (i + w)
       i := i + w
   return (out.push 34).toList
 
