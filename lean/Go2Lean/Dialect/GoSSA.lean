@@ -303,6 +303,9 @@ inductive Op where
   | base64Decode
   /-- `EncodeToString` of the base64 encoding its second operand names. -/
   | base64Encode
+  /-- `crypto/rand.Read(b)`: `len(b)` and no error (it never fails since
+  Go 1.24); the bytes are left as they were. -/
+  | randRead
   /-- `fmt.Sprintf(format, args...)` for the verbs `%s %d %v %t %%` without
   flags or widths on strings, integers and bools the program boxed; any
   other format or value gets the model stuck (the call is then unmodelled). -/
@@ -2157,6 +2160,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | none => .panic .modelStuck
     | _ => .panic .modelStuck
   | .strItoa, [.int _ v] => .ok (strAlloc heap (itoaBytes v.toInt))
+  | .randRead, [.slice _ _ len _] => .ok (.tuple [.int 64 len, .err false], heap)
   | .strToLower, [s] =>
     match strBytes heap s with
     | some x => .ok (strAlloc heap (x.map lowerByte))

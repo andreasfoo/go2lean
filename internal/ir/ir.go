@@ -330,6 +330,9 @@ var StdlibOps = map[string]Op{
 	// A random UUID: a fresh value, distinct from every other one a run
 	// draws (the real values collide with negligible probability).
 	"github.com/google/uuid.New": FreshArr{N: 16},
+	// crypto/rand.Read never fails (Go 1.24 on) and fills b; the bytes
+	// are left as they were, the model cannot know random ones.
+	"crypto/rand.Read": Simple("randRead"),
 }
 
 // FreshArr is an array of N bytes distinct from every other FreshArr value

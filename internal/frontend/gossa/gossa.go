@@ -3197,9 +3197,22 @@ func docEnum(fset *token.FileSet, fld *types.Var) []string {
 			break
 		}
 		if m := anyOfRe.FindStringSubmatch(l); m != nil {
+			// The list goes on over the next comment lines while a line
+			// ends with a comma.
 			var out []string
-			for _, q := range quotedRe.FindAllStringSubmatch(m[1], -1) {
-				out = append(out, q[1])
+			list := m[1]
+			for j := i + 1; ; j++ {
+				for _, q := range quotedRe.FindAllStringSubmatch(list, -1) {
+					out = append(out, q[1])
+				}
+				if !strings.HasSuffix(strings.TrimSpace(list), ",") || j >= pos.Line-1 {
+					break
+				}
+				next := strings.TrimSpace(lines[j])
+				if !strings.HasPrefix(next, "//") {
+					break
+				}
+				list = strings.TrimPrefix(next, "//")
 			}
 			return out
 		}

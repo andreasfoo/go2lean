@@ -215,6 +215,38 @@ def f7 : GoSSA.Func := {
       term := .ret 3 }
   ] }
 
-def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7], havocWidths := #[2, 2, 0, 0, 2] }
+/-- func() string (status: complete) -/
+def f8 : GoSSA.Func := {
+  name := "TokenPrefix", params := [], nvals := 17, entry := 0,
+  blocks := #[
+    -- 0: entry
+    { params := [],
+      instrs := #[.op 0 (.alloc (.arr (List.replicate 4 (.int 8 0#8)))) [],
+                 .op 1 (.const (.int 64 0#64)) [],
+                 .op 2 (.const (.int 64 4#64)) [],
+                 .op 3 .reslice [0, 1, 2],
+                 .op 4 .randRead [3],
+                 .op 5 (.extract 0) [4],
+                 .op 6 (.extract 1) [4],
+                 .op 7 (.const (.err false)) [],
+                 .op 8 .ne [6, 7]],
+      term := .br 8 1 [] 2 [] },
+    -- 1: if.then
+    { params := [],
+      instrs := #[.op 9 (.strConst []) [],
+                 .op 10 (.const (.int 64 0#64)) [],
+                 .op 11 (.const (.int 64 8#64)) [],
+                 .op 12 .strSlice [9, 10, 11]],
+      term := .ret 12 },
+    -- 2: if.done
+    { params := [],
+      instrs := #[.op 13 .hexEncode [3],
+                 .op 14 (.const (.int 64 0#64)) [],
+                 .op 15 (.const (.int 64 8#64)) [],
+                 .op 16 .strSlice [13, 14, 15]],
+      term := .ret 16 }
+  ] }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3, f4, f5, f6, f7, f8], havocWidths := #[2, 2, 0, 0, 2] }
 
 end Go2Lean.Generated.gossa.github_com_andreasfoo_go2lean_examples_strs

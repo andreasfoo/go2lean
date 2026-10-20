@@ -2,6 +2,8 @@
 package strs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -48,6 +50,17 @@ func Label(kind string, n int) string { return fmt.Sprintf("%s-%d", kind, n) }
 // Short is the first eight bytes of the label. Bug: a short kind and a
 // small number make a label under eight bytes, and the slice panics.
 func Short(kind string, n int) string { return Label(kind, n)[:8] }
+
+// TokenPrefix is the first eight hex digits of a random token. It holds:
+// crypto/rand.Read never fails, so the token always has eight digits.
+func TokenPrefix() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		var none string
+		return none[:8]
+	}
+	return hex.EncodeToString(b)[:8]
+}
 
 // HexTag is the first four hex digits of a key. Bug: a key under two
 // bytes has fewer than four digits, and the slice panics.
