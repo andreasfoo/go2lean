@@ -1,9 +1,10 @@
 package agent
 
 import (
-	"github.com/andreasfoo/go2lean/internal/contract"
 	"strings"
 	"testing"
+
+	"github.com/andreasfoo/go2lean/internal/contract"
 )
 
 func TestExtractGo(t *testing.T) {
