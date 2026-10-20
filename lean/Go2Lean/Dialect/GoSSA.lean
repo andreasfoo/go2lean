@@ -62,6 +62,9 @@ structure JField where
   /-- Not a member: SDK metadata (paramObj, typed `ExtraFields`) that
   changes the encoding when set; the model follows only its zero value. -/
   guard : Bool := false
+  /-- A guard that is the type's typed `ExtraFields` map: decoding fills it
+  with the members no field reads. -/
+  extras : Bool := false
   deriving Repr
 
 /-- The JSON metadata an OpenAI/Anthropic SDK response type keeps (its
@@ -147,7 +150,8 @@ def jFieldOfJson (j : Lean.Json) : JField :=
     omitEmpty := (j.getObjValAs? Bool "oe").toOption.getD false,
     omitZero := (j.getObjValAs? Bool "oz").toOption.getD false,
     inline := (j.getObjValAs? Bool "in").toOption.getD false,
-    guard := (j.getObjValAs? Bool "guard").toOption.getD false }
+    guard := (j.getObjValAs? Bool "guard").toOption.getD false,
+    extras := (j.getObjValAs? Bool "extras").toOption.getD false }
 
 def jDescOfJson (j : Lean.Json) : JDesc :=
   let fields (key : String) : List JField :=
@@ -1266,9 +1270,14 @@ partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Boo
       .ok ([123] ++ jSep (sorted.map fun (key, x) => goJsonQuote key ++ [58] ++ x) 44 ++ [125])
     | none => .error false
   | some .iface, .boxed tag inner =>
-    match t.boxed.lookup tag with
-    | some d' => jEnc t heap d' inner
-    | none => .error false
+    match t.boxed.lookup tag, inner with
+    | some d', _ => jEnc t heap d' inner
+    -- A scalar of a type the program does not box itself (an int an
+    -- interface{} input holds): its JSON does not depend on the type.
+    | none, s@(.str ..) => (strBytes heap s).elim (.error false) (.ok ∘ goJsonQuote)
+    | none, .bool b => .ok (asciiBytes (if b then "true" else "false"))
+    | none, .int _ x => .ok (bvDec true x)
+    | none, _ => .error false
   | some (.strct fields _ _), .structv vs => do
     let ms ← members fields vs
     .ok ([123] ++ jSep (ms.map fun (key, x) => goJsonQuote key ++ [58] ++ x) 44 ++ [125])
@@ -1500,11 +1509,19 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (src :
     | .structv vs => do
       let members := jObjMembers src
       if members.length != kvs.size then .error () else
-      -- Keys no field reads go to a typed ExtraFields (or SDK metadata).
+      -- Members no field reads go to a typed ExtraFields map (apijson;
+      -- set only when there are some), else they are dropped.
       let known := knownKeys fields
-      if fields.any (·.guard) && members.any (fun (k, _) => !known.contains (asciiBytes k)) then .error () else
+      let unknown := members.filter fun (k, _) => !known.contains (asciiBytes k)
+      let (vs, heap) ← match fields.find? (·.extras), unknown with
+        | some f, _ :: _ =>
+          let ukvs := unknown.filterMap fun (k, _) => (kvs.get? k).map (k, ·)
+          match jDec t heap f.ty (.obj (Std.TreeMap.Raw.ofList ukvs)) (wholeObject unknown) .opaqueNil with
+          | .ok (m, heap, false) => .ok (vs.set f.idx m, heap)
+          | _ => .error ()
+        | _, _ => .ok (vs, heap)
       let (vs, heap, err, metas) ←
-        if api then decApi fields members kvs vs heap else do
+        if api then decApi fields members kvs src vs heap else do
           let (vs, heap, err) ← decStruct fields members kvs vs heap
           pure (vs, heap, err, members.map fun (k, v) =>
             (asciiBytes k, (if kvs.get? k matches some .null then 1 else 3, v)))
@@ -1537,7 +1554,41 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (src :
           .ok (.structv (vs.set mt.field (.structv ms)), heap, err)
         | _ => .ok (.structv vs, heap, err)
     | _ => .error ()
-  | some (.strct _ _ true), _ => .error ()
+  | some (.strct fields md true), j' =>
+    -- An SDK union read from a scalar or array (instructions: "text" or a
+    -- list): apijson decodes each inline variant from the whole value.
+    match cur with
+    | .structv vs => do
+      if !(fields.any fun f => f.inline && !f.guard) then .error () else
+      let mut vs := vs
+      let mut heap := heap
+      let mut metas : List (List Nat × (Nat × List Nat)) := []
+      for f in fields do
+        if f.guard || !f.inline then continue
+        if j' matches .null then
+          metas := metas ++ [(f.key, (1, src))]
+          continue
+        let (v, heap', ok) ← inlineVariant f j' src heap
+        vs := vs.set f.idx v
+        heap := heap'
+        if ok then metas := metas ++ [(f.key, (3, src))]
+      let vs' := vs
+      let heap' := heap
+      let metas' := metas
+      match md with
+      | none => .ok (.structv vs', heap', false)
+      | some mt =>
+        match vs'[mt.field]? with
+        | some (.structv ms) =>
+          let (raw, h) := strAlloc heap' src
+          let ms := ms.set mt.raw raw
+          let (ms, h) := mt.members.foldl (fun (ms, h) (key, i) =>
+            match metas'.find? (fun (k, _) => k == key) with
+            | some (_, (st, vsrc)) => let (f, h) := respField h st vsrc; (ms.set i f, h)
+            | none => (ms, h)) (ms, h)
+          .ok (.structv (vs'.set mt.field (.structv ms)), h, false)
+        | _ => .ok (.structv vs', heap', false)
+    | _ => .error ()
   | some (.strct ..), _ => typeErr
   | some (.opt _), .null =>
     match cur with
@@ -1607,7 +1658,7 @@ where
   model gets stuck (apijson would coerce it or mark it invalid). Also the
   status and source of each typed member, for the metadata. -/
   decApi (fields : List JField) (members : List (String × List Nat)) (kvs : Std.TreeMap.Raw String Lean.Json)
-      (vs : List Val) (heap : Heap Val) :
+      (src : List Nat) (vs : List Val) (heap : Heap Val) :
       Except Unit (List Val × Heap Val × Bool × List (List Nat × (Nat × List Nat))) := do
     let mut vs := vs
     let mut heap := heap
@@ -1621,7 +1672,11 @@ where
           if e then .error ()
           vs := vs.set f.idx v
           heap := heap'
-        | _ => .error () -- a variant decoded from the whole value: not modelled
+        | _ =>
+          let (v, heap', ok) ← inlineVariant f (.obj kvs) src heap
+          vs := vs.set f.idx v
+          heap := heap'
+          if ok then metas := metas ++ [(f.key, (3, src))]
       else
         match members.find? fun (k, _) => asciiBytes k == f.key with
         | some (k, vsrc) =>
@@ -1644,6 +1699,16 @@ where
             metas := metas ++ [(f.key, (3, vsrc))]
         | none => pure ()
     return (vs, heap, false, metas)
+  /-- An inline union variant decoded strictly from the whole value
+  (apijson): the value and whether it decoded; one that does not is left
+  zero. -/
+  inlineVariant (f : JField) (j : Lean.Json) (src : List Nat) (heap : Heap Val) :
+      Except Unit (Val × Heap Val × Bool) :=
+    let zero := t.zeros[f.ty]?.getD .unit
+    match jDec t heap f.ty j src zero with
+    | .ok (v, heap, false) => .ok (v, heap, true)
+    | .ok (_, heap, true) => .ok (zero, heap, false)
+    | .error () => .error ()
   /-- An object's source rebuilt from its members (for inline fields, which
   read the whole object). -/
   wholeObject (members : List (String × List Nat)) : List Nat :=
@@ -2063,6 +2128,8 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
   | .makeSlice zero, [len, cap] =>
     match asIndex len, asIndex cap with
     | some len, some cap =>
+      -- A negative length or capacity panics, as in Go.
+      if len.slt 0 || cap.slt 0 then .panic .makeSliceLen else
       if len.ule cap && cap.toNat ≤ 1024 then
         let (p, heap) := heapAlloc heap (.arr (List.replicate cap.toNat zero))
         match p with

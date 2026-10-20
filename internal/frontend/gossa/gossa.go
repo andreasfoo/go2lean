@@ -1948,6 +1948,18 @@ func (t *fnState) call(x *ssa.Call) error {
 		return nil
 	}
 	callee := x.Call.StaticCallee()
+	if callee != nil && callee.Pkg != nil && loggingPkg(callee.Pkg.Pkg.Path()) {
+		// A logger (logrus.WithContext, WithField, Debugf): its results only
+		// feed more logging calls. Not followed, even where its package is
+		// modelled (its internals get stuck on locks and formatting).
+		if _, tuple := x.Type().(*types.Tuple); hasResult && !tuple {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
+			return nil
+		}
+		if !hasResult {
+			return nil
+		}
+	}
 	if callee != nil && callee.Name() == "go2leanProbe" && len(x.Call.Args) == 2 {
 		// A spec's probe: record the value, run nothing.
 		if c, ok := x.Call.Args[0].(*ssa.Const); ok && c.Value != nil && c.Value.Kind() == constant.String {
@@ -2027,14 +2039,6 @@ func (t *fnState) call(x *ssa.Call) error {
 	name := x.Call.Value.Name()
 	if callee != nil {
 		name = callee.String()
-	}
-	if _, tuple := x.Type().(*types.Tuple); hasResult && !tuple && callee != nil && callee.Pkg != nil && loggingPkg(callee.Pkg.Pkg.Path()) {
-		// A logger (logrus.WithContext, WithField): its results only feed
-		// more logging calls, which the model ignores. An opaque value, not
-		// an assumption.
-		t.issue("call to %s: logging, result opaque", name)
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.Opaque{}}})
-		return nil
 	}
 	if hasResult {
 		return t.havoc(x, "call "+name, "unmodeled-call", "")

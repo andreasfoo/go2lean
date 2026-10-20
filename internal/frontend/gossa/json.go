@@ -210,11 +210,18 @@ func (j *jsonTable) structDesc(st *types.Struct, sdk, api bool) map[string]any {
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
 		tag := reflect.StructTag(st.Tag(i)).Get("json")
-		if sdk && ((!f.Exported() && f.Anonymous()) || strings.Contains(reflect.StructTag(st.Tag(i)).Get("api"), "extrafields")) {
+		if sdk && !f.Exported() && f.Anonymous() {
 			// The SDKs' paramObj metadata (SetExtraFields, overrides,
-			// null) and typed ExtraFields change the encoding: the model
-			// follows it only while they are zero.
+			// null) changes the encoding: the model follows it only while
+			// it is zero.
 			fields = append(fields, map[string]any{"key": "", "idx": i, "ty": 0, "guard": true})
+			continue
+		}
+		if sdk && strings.Contains(reflect.StructTag(st.Tag(i)).Get("api"), "extrafields") {
+			// Typed ExtraFields: decoding puts the members no field reads
+			// there; encoding merges them in (the model only encodes it
+			// empty).
+			fields = append(fields, map[string]any{"key": "", "idx": i, "ty": j.desc(f.Type()), "guard": true, "extras": true})
 			continue
 		}
 		name, opts, _ := strings.Cut(tag, ",")

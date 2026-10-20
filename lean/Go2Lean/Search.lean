@@ -285,8 +285,13 @@ partial def genVal (pf : Profile) (extra : List Nat) (g : StdGen) (heap : Heap V
     -- or text the code parses.
     let (roll, g) := randNat g 0 2
     if w == 8 && roll == 0 && !pool.isEmpty then
-      let (i, g) := randNat g 0 (pool.length - 1)
-      let bs := pool[i]!
+      -- Half of those a JSON object or array of the pool, when it has
+      -- some: a json.RawMessage holds JSON.
+      let docs := pool.filter fun bs => bs.head? == some 123 || bs.head? == some 91
+      let (half, g) := randNat g 0 1
+      let from_ := if half == 0 && !docs.isEmpty then docs else pool
+      let (i, g) := randNat g 0 (from_.length - 1)
+      let bs := from_[i]!
       let (p, heap) := heapAlloc heap (.arr (bs.map fun b => .int 8 (BitVec.ofNat 8 b)))
       match p with
       | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 bs.length) (BitVec.ofNat 64 bs.length), g, heap)
