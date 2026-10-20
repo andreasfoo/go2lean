@@ -104,7 +104,9 @@ exhausted portable_first_nopanic
 inconclusive portable_group_nopanic
 confirmed portable_head_nopanic
 exhausted portable_intpart_nopanic
+confirmed portable_label_nopanic
 exhausted portable_meta_get_nopanic
+exhausted portable_meta_newsession_nopanic
 confirmed portable_minor_nopanic
 exhausted portable_month_nopanic
 confirmed portable_parse_c0_nopanic

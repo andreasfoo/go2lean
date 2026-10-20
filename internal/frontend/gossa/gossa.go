@@ -1827,6 +1827,10 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			t.issue("store to global %s ignored", x.Addr.Name())
 			return nil
 		}
+		if t.intoHandle(x.Addr) {
+			t.issue("store into handle %s ignored", x.Addr.Name())
+			return nil
+		}
 		p, err := t.val(x.Addr)
 		if err != nil {
 			return err
@@ -1899,6 +1903,10 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
+		if t.intoHandle(x.X) {
+			// A handle is opaque: what its fields hold is havoc.
+			return t.havoc(x, "load "+x.X.Name()+" through a handle", "unmodeled-load", "")
+		}
 		if s, ok := sentinelErr(x); ok {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
 			return nil
@@ -3653,6 +3661,22 @@ func isForeignOpaqueStruct(pkg *types.Package, t types.Type) bool {
 		}
 	}
 	return true
+}
+
+// intoHandle says whether addr points into a handle (isHandle): a field
+// of one, or of a struct or array inside one. The model holds a handle as
+// an opaque pointer, so such a load is havoc, not a read of its memory.
+func (t *fnState) intoHandle(addr ssa.Value) bool {
+	switch a := addr.(type) {
+	case *ssa.FieldAddr:
+		if pt, ok := a.X.Type().Underlying().(*types.Pointer); ok && isHandle(funcPkg(t.f), pt.Elem()) {
+			return true
+		}
+		return t.intoHandle(a.X)
+	case *ssa.IndexAddr:
+		return t.intoHandle(a.X)
+	}
+	return false
 }
 
 // isHandle says whether t is a struct type of another package, outside

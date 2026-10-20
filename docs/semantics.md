@@ -225,7 +225,7 @@ writes the same value as a Go literal.
 | unexported fields of another package's struct | their zero value (a test cannot set them) |
 | SDK response types (with JSON metadata) | generated field by field plus a raw JSON object of one or two members keyed by strings the call tree compares with `==`, then written as the JSON document the harness builds for the value and decoded by the JSON model: typed fields, `RawJSON()`, per-member `respjson.Field` and `ExtraFields` agree as decoding makes them; the harness decodes the same document |
 | documented enums (`// Any of ...`) | one of the values three times in four; the values the call tree compares make half of the choices |
-| pointers to another package's struct with an unexported field, whose package exports a function returning one (a handle) | opaque non-nil; a struct of exported fields is generated field by field |
+| pointers to another package's struct with an unexported field, whose package exports a function returning one (a handle) | opaque non-nil (the PoC passes a zero one: a panic through it is inconclusive); a field read through it is havoc, a store into it ignored; a struct of exported fields is generated field by field |
 | receiver of a method whose type has `NewT` | built by `NewT` (`T.M~NewT`) |
 
 ## 8. Not modelled (rejected functions)

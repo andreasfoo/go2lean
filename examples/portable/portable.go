@@ -168,3 +168,9 @@ func Month(s string) string {
 	}
 	return "JFMAMJJASOND"[n-1 : n]
 }
+
+// Label tags a name with the session's model. Bug: an empty name divides
+// by zero (a field read through a handle is havoc, not the end of the run).
+func Label(s *meta.Session, name string) string {
+	return s.Model + "/" + strconv.Itoa(100/len(name))
+}
