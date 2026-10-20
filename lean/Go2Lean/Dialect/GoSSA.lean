@@ -1242,19 +1242,51 @@ def utf8Lossy (bytes : List Nat) : String := Id.run do
     i := i + w
   return out
 
+/-- Does a JSON document hold the token `-0` (a negative zero, or a number
+starting `-0.`)? Lean's parser reads `-0` as 0, so zeros are then unknown. -/
+def hasNegZero (bs : List Nat) : Bool :=
+  (bs.zip (bs.drop 1)).any fun (a, b) => a == 45 && b == 48
+
+/-- A float decoded from JSON whose `json.Marshal` output the model knows:
+`.tuple [.arr bytes]` (the bytes Go writes), else `.unit` (unknown). Go
+writes a float64 with 1e-6 <= |v| < 1e21 in the shortest decimal that reads
+back as the same float; for a number written with at most 15 significant
+digits that is the number itself (any two such decimals are distinct
+floats), without trailing zeros. -/
+def knownFloat (n : Lean.JsonNumber) (negZero : Bool) : Val :=
+  let digitsOf (k : Nat) : List Nat := (toString k).toUTF8.toList.map (·.toNat)
+  let rec strip : Nat → Nat → Nat → Nat × Nat
+    | 0, m, e => (m, e)
+    | fuel + 1, m, e => if e > 0 && m % 10 == 0 then strip fuel (m / 10) (e - 1) else (m, e)
+  let rec sig : Nat → Nat → Nat
+    | 0, m => m
+    | fuel + 1, m => if m > 0 && m % 10 == 0 then sig fuel (m / 10) else m
+  let a := n.mantissa.natAbs
+  if a == 0 then
+    if negZero then .unit else .tuple [.arr [.int 8 48#8]]
+  else
+    let (m, e) := strip 400 a n.exponent
+    if (digitsOf (sig 400 m)).length > 15 || m ≥ 10 ^ (21 + e) || m * 10 ^ 6 < 10 ^ e then .unit
+    else
+      let ds := digitsOf m
+      let ds := List.replicate (e + 1 - min ds.length (e + 1)) 48 ++ ds
+      let body := if e == 0 then ds else ds.take (ds.length - e) ++ [46] ++ ds.drop (ds.length - e)
+      let out := (if n.mantissa < 0 then [45] else []) ++ body
+      .tuple [.arr (out.map fun b => .int 8 (BitVec.ofNat 8 b))]
+
 /-- A decoded JSON value as the program would hold it in an interface:
 strings, bools, numbers (opaque), `map[string]interface{}` and
 `[]interface{}` boxed with their `tags`, null as the nil interface. -/
-partial def jsonToVal (tags : List Nat) (heap : Heap Val) : Lean.Json → Val × Heap Val
+partial def jsonToVal (tags : List Nat) (heap : Heap Val) (negZero : Bool := true) : Lean.Json → Val × Heap Val
   | .null => (.opaqueNil, heap)
   | .bool b => (.boxed (tags.getD 1 0) (.bool b), heap)
-  | .num _ => (.boxed (tags.getD 2 0) .unit, heap)
+  | .num n => (.boxed (tags.getD 2 0) (knownFloat n negZero), heap)
   | .str s =>
     let (v, heap) := strAlloc heap (s.toUTF8.toList.map (·.toNat))
     (.boxed (tags.getD 0 0) v, heap)
   | .arr es =>
     let (vs, heap) := es.toList.foldl (fun (acc, heap) e =>
-      let (v, heap) := jsonToVal tags heap e
+      let (v, heap) := jsonToVal tags heap negZero e
       (acc ++ [v], heap)) ([], heap)
     let (p, heap) := heapAlloc heap (.arr vs)
     let n := BitVec.ofNat 64 vs.length
@@ -1264,7 +1296,7 @@ partial def jsonToVal (tags : List Nat) (heap : Heap Val) : Lean.Json → Val ×
   | .obj kvs =>
     let (es, heap) := kvs.toList.foldl (fun (acc, heap) (k, e) =>
       let (kv, heap) := strAlloc heap (k.toUTF8.toList.map (·.toNat))
-      let (v, heap) := jsonToVal tags heap e
+      let (v, heap) := jsonToVal tags heap negZero e
       (acc ++ [(kv, v)], heap)) ([], heap)
     let (p, heap) := heapAlloc heap (mapObj es)
     (.boxed (tags.getD 3 0) (.boxed 1 p), heap)
@@ -1294,10 +1326,10 @@ def jsonUnmarshalOp (heap : Heap Val) (kind : Nat) (tags : List Nat) (bytes : Li
     | 0, _ => typeErr
     | 1, .bool b => store heap (.bool b)
     | 1, _ => typeErr
-    | 2, j => let (v, heap) := jsonToVal tags heap j; store heap v
+    | 2, j => let (v, heap) := jsonToVal tags heap (hasNegZero bytes) j; store heap v
     | 3, .null => store heap .opaqueNil
     | 3, .obj _ =>
-      match jsonToVal tags heap j, heapLoad heap p with
+      match jsonToVal tags heap (hasNegZero bytes) j, heapLoad heap p with
       | (.boxed _ fresh, heap), .ok .opaqueNil => store heap fresh
       | (.boxed _ fresh, heap), .ok old =>
         -- Merge into the map the target already holds.
@@ -1316,7 +1348,7 @@ def jsonUnmarshalOp (heap : Heap Val) (kind : Nat) (tags : List Nat) (bytes : Li
     | 3, _ => typeErr
     | 4, .null => store heap (.slice 0 0#64 0#64 0#64)
     | 4, .arr _ =>
-      match jsonToVal tags heap j with
+      match jsonToVal tags heap (hasNegZero bytes) j with
       | (.boxed _ sl, heap) => store heap sl
       | _ => .panic .modelStuck
     | 4, _ => typeErr
@@ -1448,6 +1480,7 @@ def jIsEmpty (heap : Heap Val) : Val → Bool
   | .slice _ _ len _ => len == 0
   | .arr es => es.isEmpty
   | m@(.boxed 1 _) => match mapEntries heap m with | some (_, es) => es.isEmpty | none => false
+  | .tuple [.arr [.int _ b]] => b.toNat == 48 -- a known float: zero
   | _ => false
 
 def jSep (parts : List (List Nat)) (sep : Nat) : List Nat := (parts.intersperse [sep]).flatten
@@ -1497,6 +1530,7 @@ partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Boo
     | none => .error false
   | some .bool, .bool b => .ok (asciiBytes (if b then "true" else "false"))
   | some (.int _ signed), .int _ x => .ok (bvDec signed x)
+  | some .float, .tuple [.arr bs] => .ok (bs.map fun | .int _ b => b.toNat | _ => 0)
   | some .bytes, .slice 0 .. | some .raw, .slice 0 .. | some (.slice _), .slice 0 .. => .ok (asciiBytes "null")
   | some .bytes, .slice ref off len _ =>
     match strBytes heap (.str ref off len) with
@@ -1713,7 +1747,7 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (src :
       let m := n.mantissa
       let ok := if signed then -(2 ^ (w - 1) : Int) ≤ m && m < 2 ^ (w - 1) else 0 ≤ m && m < 2 ^ w
       if ok then .ok (.int w (BitVec.ofInt w m), heap, false) else typeErr
-    | some .float, .num _ => .ok (.unit, heap, false)
+    | some .float, .num n => .ok (knownFloat n (hasNegZero src), heap, false)
     | _, _ => typeErr
   | some .bytes, .null => .ok (.slice 0 0#64 0#64 0#64, heap, false)
   | some .bytes, .str s =>
@@ -1791,7 +1825,7 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (src :
     | .ok h => .ok (m, h, err)
     | _ => .error ()
   | some (.map ..), _ => typeErr
-  | some .iface, j' => let (v, heap) := jsonToVal t.basic heap j'; .ok (v, heap, false)
+  | some .iface, j' => let (v, heap) := jsonToVal t.basic heap (hasNegZero src) j'; .ok (v, heap, false)
   | some (.strct _ _ false), .null => keep
   | some (.strct fields md api), .obj kvs =>
     match cur with
@@ -2055,6 +2089,7 @@ partial def jsZero : Val → Bool
   | .err b => !b
   | .str _ _ len => len == 0
   | .ptr 0 _ | .slice 0 .. | .opaqueNil | .unit | .boxed 0 _ => true
+  | .tuple [.arr [.int _ b]] => b.toNat == 48 -- a known float: zero
   | .structv vs | .arr vs => vs.all jsZero
   | _ => false
 

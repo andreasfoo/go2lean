@@ -66,6 +66,9 @@ jobs:
       - name: json.Valid model against Go
         run: PKG=testdata/jsonvalid scripts/json-diff.sh "$RUNNER_TEMP/valid-diff" 6 | tail -5
 
+      - name: JSON number round trips against Go
+        run: PKG=testdata/numdiff scripts/json-diff.sh "$RUNNER_TEMP/num-diff" 6 | tail -5
+
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -78,4 +81,5 @@ jobs:
             ${{ runner.temp }}/re-diff/*.log
             ${{ runner.temp }}/conv-diff/*.log
             ${{ runner.temp }}/valid-diff/*.log
+            ${{ runner.temp }}/num-diff/*.log
           if-no-files-found: ignore
