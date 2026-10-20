@@ -359,6 +359,7 @@ var StdlibOps = map[string]Op{
 	"strings.TrimSuffix":             Simple("strTrimSuffix"),
 	"strconv.Atoi":                   Simple("strAtoi"),
 	"strconv.Itoa":                   Simple("strItoa"),
+	"encoding/json.Valid":            Simple("jsonValid"),
 	"strconv.ParseInt":               Simple("strParseInt"),
 	"strconv.ParseUint":              Simple("strParseUint"),
 	"strconv.ParseBool":              Simple("strParseBool"),

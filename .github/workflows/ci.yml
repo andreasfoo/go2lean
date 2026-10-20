@@ -63,6 +63,9 @@ jobs:
       - name: strconv model against Go
         run: PKG=testdata/convdiff scripts/json-diff.sh "$RUNNER_TEMP/conv-diff" 6 | tail -5
 
+      - name: json.Valid model against Go
+        run: PKG=testdata/jsonvalid scripts/json-diff.sh "$RUNNER_TEMP/valid-diff" 6 | tail -5
+
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -74,4 +77,5 @@ jobs:
             ${{ runner.temp }}/json-diff/*.log
             ${{ runner.temp }}/re-diff/*.log
             ${{ runner.temp }}/conv-diff/*.log
+            ${{ runner.temp }}/valid-diff/*.log
           if-no-files-found: ignore

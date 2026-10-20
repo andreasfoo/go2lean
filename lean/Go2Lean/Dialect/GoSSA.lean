@@ -391,6 +391,8 @@ inductive Op where
   | unbox (tag : Nat) (commaOk : Bool) (zero : Val)
   /-- `c ? a : b` (the builtins min and max) -/
   | ite
+  /-- encoding/json.Valid on a byte slice -/
+  | jsonValid
   /-- Is it known whether this func/map/channel/interface value is nil? -/
   | nilKnown
   /-- Is this error value one whose identity the model knows: nil, a
@@ -2245,6 +2247,10 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | _ => .panic .modelStuck
     | .error true => .ok (.tuple [.slice 0 0#64 0#64 0#64, .err true], heap)
     | .error false => .panic .modelStuck
+  | .jsonValid, [.slice ref off len _] =>
+    match strBytes heap (.str ref off len) with
+    | some bs => .ok (.bool (match Lean.Json.parse (utf8Lossy bs) with | .ok _ => true | .error _ => false), heap)
+    | none => .panic .modelStuck
   | .jsonDecode t root, [data, p] =>
     match data with
     | .slice ref off len _ =>
