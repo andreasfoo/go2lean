@@ -227,16 +227,17 @@ def deriveExtraFields (heap : Heap Val) (fields : List Gen) (vs : List Val) : Li
     match vs[ri]? >>= strBytes heap with
     | some bs =>
       match String.fromUTF8? (ByteArray.mk (bs.map UInt8.ofNat).toArray) >>= (Lean.Json.parse · |>.toOption) with
-      | some (.obj kvs) =>
+      | some (.obj _) =>
         -- Members a typed field reads are not extra: the metadata struct
         -- names those fields (ToolCalls for tool_calls).
         let norm (s : String) : String := (s.toList.filter (· != '_')).asString.toLower
         let typed := fields.map fun g => norm g.name
-        let kvs := kvs.toList.filter fun (k, _) => !typed.contains (norm k)
-        if kvs.isEmpty then (vs, heap) else
-        let (es, heap) := kvs.foldl (fun (acc, heap) (k, jv) =>
+        let members := (jObjMembers (jTrim bs)).filter fun (k, _) => !typed.contains (norm k)
+        if members.isEmpty then (vs, heap) else
+        -- As apijson records an extra member: invalid unless null.
+        let (es, heap) := members.foldl (fun (acc, heap) (k, src) =>
           let (kv, heap) := strAlloc heap (k.toUTF8.toList.map (·.toNat))
-          let (f, heap) := respField heap jv
+          let (f, heap) := respField heap (if src == asciiBytes "null" then 1 else 2) src
           (acc ++ [(kv, f)], heap)) ([], heap)
         let (p, heap) := heapAlloc heap (mapObj es)
         (vs.set ei (.boxed 1 p), heap)

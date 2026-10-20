@@ -96,8 +96,10 @@ inductive JDesc where
   /-- `interface{}`: encoded by the dynamic type (`JTable.boxed`), decoded
   as strings, bools, numbers, maps and slices. -/
   | iface
-  /-- A struct; `meta` for SDK response types. -/
-  | strct (fields : List JField) (md : Option JMeta)
+  /-- A struct; `meta` for SDK response types. `api`: the SDKs' own
+  decoder (apijson) reads it: exact keys, null leaves a member unchanged,
+  members that do not decode are skipped (the model gets stuck there). -/
+  | strct (fields : List JField) (md : Option JMeta) (api : Bool)
   /-- An SDK param union: exactly one variant field present is encoded. -/
   | union (variants : List JField)
   /-- `param.Opt[T]` (`Value`, `status`): omitted, null or the value. -/
@@ -167,7 +169,7 @@ def jDescOfJson (j : Lean.Json) : JDesc :=
                match x with
                | .arr #[.str k, .num n] => some (k.toUTF8.toList.map (·.toNat), n.mantissa.toNat)
                | _ => none }
-    .strct (fields "fields") md
+    .strct (fields "fields") md ((j.getObjValAs? Bool "api").toOption.getD false)
   | some "union" => .union (fields "variants")
   | some "opt" => .opt (jNatOf j "e")
   | _ => .opaque
@@ -1175,6 +1177,39 @@ def jIsEmpty (heap : Heap Val) : Val → Bool
 
 def jSep (parts : List (List Nat)) (sep : Nat) : List Nat := (parts.intersperse [sep]).flatten
 
+/-- Go's HTML escaping of encoded JSON (`<`, `>`, `&`, U+2028, U+2029), as
+`json.Marshal` applies it to a Marshaler's output (`json.RawMessage`). -/
+def htmlEscape : List Nat → List Nat
+  | 60 :: bs => asciiBytes "\\u003c" ++ htmlEscape bs
+  | 62 :: bs => asciiBytes "\\u003e" ++ htmlEscape bs
+  | 38 :: bs => asciiBytes "\\u0026" ++ htmlEscape bs
+  | 0xE2 :: 0x80 :: 0xA8 :: bs => asciiBytes "\\u2028" ++ htmlEscape bs
+  | 0xE2 :: 0x80 :: 0xA9 :: bs => asciiBytes "\\u2029" ++ htmlEscape bs
+  | b :: bs => b :: htmlEscape bs
+  | [] => []
+
+/-- `omitzero`, and whether an SDK union variant is set (`param.IsOmitted`):
+is `v` the zero value of entry `d`? A `param.Opt` is zero when omitted with
+a zero value; the SDKs set `Value` only together with the status, so an
+omitted Opt counts as zero also where the model does not know the value
+(floats). `none`: unknown. -/
+partial def jIsZero (t : JTable) (d : Nat) (v : Val) : Option Bool :=
+  match t.descs[d]?, v with
+  | some (.opt e), .structv (x :: .int _ st :: _) =>
+    if st != 0 then some false else if jIsZero t e x == some false then some false else some true
+  | some (.strct fields _ _), .structv vs => byFields fields vs
+  | some (.union variants), .structv vs => byFields variants vs
+  | _, _ => isZeroVal v
+where
+  /-- Described fields by their type, the others (metadata) as values. -/
+  byFields (fields : List JField) (vs : List Val) : Option Bool :=
+    let flags := vs.zipIdx.map fun (x, i) =>
+      match fields.find? (·.idx == i) with
+      | some f => jIsZero t f.ty x
+      | none => isZeroVal x
+    if flags.any (· == some false) then some false
+    else if flags.all (· == some true) then some true else none
+
 /-- `json.Marshal` of `v` as entry `d` of `t`: the bytes, `.error true` for
 an error Go reports, `.error false` where the model is stuck. -/
 partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Bool (List Nat) :=
@@ -1196,7 +1231,7 @@ partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Boo
     match strBytes heap (.str ref off len) with
     | some bs =>
       match Lean.Json.parse (utf8Lossy bs) with
-      | .ok _ => .ok (compactJson bs)
+      | .ok _ => .ok (htmlEscape (compactJson bs))
       | .error _ => .error true
     | none => .error false
   | some (.slice e), .slice ref off len _ =>
@@ -1228,13 +1263,15 @@ partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Boo
     match t.boxed.lookup tag with
     | some d' => jEnc t heap d' inner
     | none => .error false
-  | some (.strct fields _), .structv vs => do
+  | some (.strct fields _ _), .structv vs => do
     let ms ← members fields vs
     .ok ([123] ++ jSep (ms.map fun (key, x) => goJsonQuote key ++ [58] ++ x) 44 ++ [125])
   | some (.union variants), .structv vs =>
-    let present := variants.filter fun f => match vs[f.idx]? with
-      | some x => isZeroVal x != some true
-      | none => false
+    let zero := variants.map fun f => (f, match vs[f.idx]? with
+      | some x => jIsZero t f.ty x
+      | none => some true)
+    if zero.any (·.2 == none) then .error false else
+    let present := (zero.filter (·.2 == some false)).map (·.1)
     match present with
     | [] => .ok (asciiBytes "null")
     | [f] => jEnc t heap f.ty (vs[f.idx]!)
@@ -1261,24 +1298,100 @@ where
           | some (.ptr e) => t.descs[e]?
           | dd => dd
         match innerDesc, inner with
-        | some (.strct fs _), some (.structv ws) => out := out ++ (← members fs ws)
+        | some (.strct fs _ _), some (.structv ws) => out := out ++ (← members fs ws)
         | _, none => pure ()
         | _, _ => .error false
       else if f.omitEmpty && jIsEmpty heap x then pure ()
-      else if f.omitZero && isZeroVal x == some true then pure ()
+      else if f.omitZero && jIsZero t f.ty x == some true then pure ()
+      else if f.omitZero && jIsZero t f.ty x == none then .error false
       else out := out ++ [(f.key, ← jEnc t heap f.ty x)]
     return out
 
-/-- A respjson.Field for a decoded member: status null (1) or valid (3),
-and its raw text. -/
-def respField (heap : Heap Val) (j : Lean.Json) : Val × Heap Val :=
-  let (r, heap) := strAlloc heap (asciiBytes j.compress)
-  (.structv [.int 8 (if j matches .null then 1#8 else 3#8), r], heap)
+/-! Byte-level scanning of a valid JSON document: the source bytes of each
+value. Go keeps them where it keeps raw text (`json.RawMessage`, the SDKs'
+`raw` and `respjson.Field`), and checks integer literals on them; Lean's
+parsed `Json` has sorted keys and normalised numbers and strings. -/
 
-/-- Decode `j` into the current value `cur` of entry `d`: the new value,
-the heap, and whether some member had the wrong JSON type (Go keeps going
-and reports the first such error). `.error ()`: the model is stuck. -/
-partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur : Val) :
+def jWs (b : Nat) : Bool := b == 32 || b == 9 || b == 10 || b == 13
+
+def jSkipWs : List Nat → List Nat
+  | b :: bs => if jWs b then jSkipWs bs else b :: bs
+  | [] => []
+
+/-- The value at the start of `bs` (no leading whitespace) and the rest. -/
+def jSplitValue (bs : List Nat) : List Nat × List Nat := Id.run do
+  let arr := bs.toArray
+  let mut depth := 0
+  let mut inStr := false
+  let mut esc := false
+  for i in [0:arr.size] do
+    let b := arr[i]!
+    if inStr then
+      if esc then esc := false
+      else if b == 92 then esc := true
+      else if b == 34 then
+        inStr := false
+        if depth == 0 then return (bs.take (i + 1), bs.drop (i + 1))
+    else if b == 34 then inStr := true
+    else if b == 123 || b == 91 then depth := depth + 1
+    else if b == 125 || b == 93 then
+      if depth == 0 then return (bs.take i, bs.drop i)
+      depth := depth - 1
+      if depth == 0 then return (bs.take (i + 1), bs.drop (i + 1))
+    else if depth == 0 && (b == 44 || b == 58 || jWs b) then return (bs.take i, bs.drop i)
+  return (bs, [])
+
+/-- The source of a whole document without surrounding whitespace. -/
+def jTrim (bs : List Nat) : List Nat := (jSplitValue (jSkipWs bs)).1
+
+/-- An object's members in source order: the key (decoded) and the value's
+source. -/
+partial def jObjMembers (src : List Nat) : List (String × List Nat) :=
+  match src with
+  | 123 :: rest => go (jSkipWs rest) []
+  | _ => []
+where
+  go (bs : List Nat) (acc : List (String × List Nat)) : List (String × List Nat) :=
+    match bs with
+    | [] | 125 :: _ => acc.reverse
+    | 44 :: rest => go (jSkipWs rest) acc
+    | _ =>
+      let (k, rest) := jSplitValue bs
+      let key := match Lean.Json.parse (utf8Lossy k) with | .ok (.str s) => s | _ => ""
+      match jSkipWs rest with
+      | 58 :: rest =>
+        let (v, rest) := jSplitValue (jSkipWs rest)
+        go (jSkipWs rest) ((key, v) :: acc)
+      | _ => acc.reverse
+
+/-- An array's element sources in order. -/
+partial def jArrElems (src : List Nat) : List (List Nat) :=
+  match src with
+  | 91 :: rest => go (jSkipWs rest) []
+  | _ => []
+where
+  go (bs : List Nat) (acc : List (List Nat)) : List (List Nat) :=
+    match bs with
+    | [] | 93 :: _ => acc.reverse
+    | 44 :: rest => go (jSkipWs rest) acc
+    | _ => let (v, rest) := jSplitValue bs; go (jSkipWs rest) (v :: acc)
+
+/-- Go's integer literal syntax (strconv.ParseInt on the literal): an
+optional minus and digits only (`1e2`, `1.0` do not decode into an int). -/
+def jIntLiteral (src : List Nat) : Bool :=
+  let ds := match src with | 45 :: ds => ds | ds => ds
+  !ds.isEmpty && ds.all fun b => 48 ≤ b && b ≤ 57
+
+/-- A respjson.Field: its status (1 null, 2 invalid, 3 valid) and raw text. -/
+def respField (heap : Heap Val) (status : Nat) (src : List Nat) : Val × Heap Val :=
+  let (r, heap) := strAlloc heap src
+  (.structv [.int 8 (BitVec.ofNat 8 status), r], heap)
+
+/-- Decode `j` (whose source bytes are `src`) into the current value `cur`
+of entry `d`: the new value, the heap, and whether some member had the
+wrong JSON type (Go keeps going and reports the first such error).
+`.error ()`: the model is stuck. -/
+partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (src : List Nat) (cur : Val) :
     Except Unit (Val × Heap Val × Bool) :=
   let keep := Except.ok (cur, heap, false)
   let typeErr := Except.ok (cur, heap, true)
@@ -1290,7 +1403,7 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
     match t.descs[d]?, j with
     | some .bool, .bool b => .ok (.bool b, heap, false)
     | some (.int w signed), .num n =>
-      if n.exponent != 0 then typeErr else
+      if n.exponent != 0 || !jIntLiteral src then typeErr else
       let m := n.mantissa
       let ok := if signed then -(2 ^ (w - 1) : Int) ≤ m && m < 2 ^ (w - 1) else 0 ≤ m && m < 2 ^ w
       if ok then .ok (.int w (BitVec.ofInt w m), heap, false) else typeErr
@@ -1302,10 +1415,12 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
     | some bs => .ok (byteSlice heap bs)
     | none => typeErr
   | some .bytes, _ => typeErr
-  | some .raw, j' => .ok (byteSlice heap (asciiBytes j'.compress))
+  | some .raw, _ => .ok (byteSlice heap src)
   | some (.slice _), .null => .ok (.slice 0 0#64 0#64 0#64, heap, false)
   | some (.slice e), .arr js => do
-    let (vs, heap, err) ← decList e js.toList (List.replicate js.size (t.zeros[e]?.getD .unit)) heap
+    let srcs := jArrElems src
+    if srcs.length != js.size then .error () else
+    let (vs, heap, err) ← decList e (js.toList.zip srcs) (List.replicate js.size (t.zeros[e]?.getD .unit)) heap
     let (p, heap) := heapAlloc heap (.arr vs)
     match p with
     | .ptr ref _ => .ok (.slice ref 0#64 (BitVec.ofNat 64 vs.length) (BitVec.ofNat 64 vs.length), heap, err)
@@ -1314,7 +1429,9 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
   | some (.arr n e), .arr js =>
     match cur with
     | .arr old => do
-      let js := (js.toList.take n)
+      let srcs := jArrElems src
+      if srcs.length != js.size then .error () else
+      let js := (js.toList.zip srcs).take n
       let (vs, heap, err) ← decList e js (old.take js.length) heap
       .ok (.arr (vs ++ (old.drop js.length).map fun _ => t.zeros[e]?.getD .unit), heap, err)
     | _ => .error ()
@@ -1324,13 +1441,13 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
   | some (.ptr e), j' =>
     match cur with
     | .ptr 0 _ => do
-      let (v, heap, err) ← jDec t heap e j' (t.zeros[e]?.getD .unit)
+      let (v, heap, err) ← jDec t heap e j' src (t.zeros[e]?.getD .unit)
       let (p, heap) := heapAlloc heap v
       .ok (p, heap, err)
     | p@(.ptr ..) =>
       match heapLoad heap p with
       | .ok old => do
-        let (v, heap, err) ← jDec t heap e j' old
+        let (v, heap, err) ← jDec t heap e j' src old
         match heapStore heap p v with
         | .ok heap => .ok (p, heap, err)
         | _ => .error ()
@@ -1338,6 +1455,10 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
     | _ => .error ()
   | some (.map _ _), .null => .ok (.opaqueNil, heap, false)
   | some (.map k vd), .obj kvs => do
+    let members := jObjMembers src
+    -- Duplicate keys: Go decodes each occurrence in turn; Lean's Json
+    -- keeps the last one only.
+    if members.length != kvs.size then .error () else
     let (m, heap) := match cur with
       | .opaqueNil => let (p, heap) := heapAlloc heap (mapObj []); (Val.boxed 1 p, heap)
       | m => (m, heap)
@@ -1345,7 +1466,8 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
     let mut es := old
     let mut heap := heap
     let mut err := false
-    for (key, jv) in kvs.toList do
+    for (key, vsrc) in members do
+      let jv ← (kvs.get? key).elim (.error ()) .ok
       let (kv, heap') ← match t.descs[k]? with
         | some (.str _) => .ok (strAlloc heap (asciiBytes key))
         | some (.int w sg) =>
@@ -1353,7 +1475,7 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
           | some n => if sg || n ≥ 0 then .ok (.int w (BitVec.ofInt w n), heap) else .error ()
           | none => .error ()
         | _ => .error ()
-      let (v, heap'', e) ← jDec t heap' vd jv (t.zeros[vd]?.getD .unit)
+      let (v, heap'', e) ← jDec t heap' vd jv vsrc (t.zeros[vd]?.getD .unit)
       heap := heap''
       err := err || e
       es := if es.any (fun (k', _) => keyEq heap kv k') then
@@ -1364,31 +1486,39 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
     | _ => .error ()
   | some (.map ..), _ => typeErr
   | some .iface, j' => let (v, heap) := jsonToVal t.basic heap j'; .ok (v, heap, false)
-  | some (.strct _ _), .null => keep
-  | some (.strct fields md), .obj kvs =>
+  | some (.strct _ _ false), .null => keep
+  | some (.strct fields md api), .obj kvs =>
     match cur with
     | .structv vs => do
-      let (vs, heap, err) ← decStruct fields (kvs.toList) vs heap
+      let members := jObjMembers src
+      if members.length != kvs.size then .error () else
+      let (vs, heap, err, metas) ←
+        if api then decApi fields members kvs vs heap else do
+          let (vs, heap, err) ← decStruct fields members kvs vs heap
+          pure (vs, heap, err, members.map fun (k, v) =>
+            (asciiBytes k, (if kvs.get? k matches some .null then 1 else 3, v)))
       -- An SDK response type: its JSON metadata.
       match md with
       | none => .ok (.structv vs, heap, err)
       | some mt =>
         match vs[mt.field]? with
         | some (.structv ms) =>
-          let (raw, heap) := strAlloc heap (asciiBytes j.compress)
+          let (raw, heap) := strAlloc heap src
           let ms := ms.set mt.raw raw
           let (ms, heap) := mt.members.foldl (fun (ms, heap) (key, i) =>
-            match kvs.toList.find? (fun (k, _) => asciiBytes k == key) with
-            | some (_, jv) => let (f, heap) := respField heap jv; (ms.set i f, heap)
+            match metas.find? (fun (k, _) => k == key) with
+            | some (_, (st, vsrc)) => let (f, heap) := respField heap st vsrc; (ms.set i f, heap)
             | none => (ms, heap)) (ms, heap)
           let known := knownKeys fields
-          let extras := kvs.toList.filter fun (k, _) => !known.contains (asciiBytes k)
+          let extras := members.filter fun (k, _) => !known.contains (asciiBytes k)
           let (ms, heap) := match mt.extra with
             | some ei =>
               if extras.isEmpty then (ms, heap) else
-              let (es, heap) := extras.foldl (fun (acc, heap) (k, jv) =>
+              let (es, heap) := extras.foldl (fun (acc, heap) (k, vsrc) =>
                 let (kv, heap) := strAlloc heap (asciiBytes k)
-                let (f, heap) := respField heap jv
+                -- apijson has no decoder for an extra key: invalid unless null.
+                let st := if (kvs.get? k) matches some .null then 1 else 2
+                let (f, heap) := respField heap st vsrc
                 (acc ++ [(kv, f)], heap)) ([], heap)
               let (p, heap) := heapAlloc heap (mapObj es)
               (ms.set ei (.boxed 1 p), heap)
@@ -1396,6 +1526,7 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
           .ok (.structv (vs.set mt.field (.structv ms)), heap, err)
         | _ => .ok (.structv vs, heap, err)
     | _ => .error ()
+  | some (.strct _ _ true), _ => .error ()
   | some (.strct ..), _ => typeErr
   | some (.opt _), .null =>
     match cur with
@@ -1404,8 +1535,11 @@ partial def jDec (t : JTable) (heap : Heap Val) (d : Nat) (j : Lean.Json) (cur :
   | some (.opt e), j' =>
     match cur with
     | .structv (x :: _ :: rest) => do
-      let (v, heap, err) ← jDec t heap e j' x
-      .ok (.structv (v :: .int 8 2#8 :: rest), heap, err)
+      let (v, heap, err) ← jDec t heap e j' src x
+      -- Opt.UnmarshalJSON leaves the option as it was when the value
+      -- does not decode.
+      if err then .ok (cur, heap, true) else
+      .ok (.structv (v :: .int 8 2#8 :: rest), heap, false)
     | _ => .error ()
   | some _, _ => .error ()
 where
@@ -1414,9 +1548,9 @@ where
     match p with
     | .ptr ref _ => (.slice ref 0#64 (BitVec.ofNat 64 bs.length) (BitVec.ofNat 64 bs.length), heap, false)
     | _ => (.unit, heap, false)
-  decList (e : Nat) : List Lean.Json → List Val → Heap Val → Except Unit (List Val × Heap Val × Bool)
-    | j :: js, c :: cs, heap => do
-      let (v, heap, e1) ← jDec t heap e j c
+  decList (e : Nat) : List (Lean.Json × List Nat) → List Val → Heap Val → Except Unit (List Val × Heap Val × Bool)
+    | (j, s) :: js, c :: cs, heap => do
+      let (v, heap, e1) ← jDec t heap e j s c
       let (vs, heap, e2) ← decList e js cs heap
       .ok (v :: vs, heap, e1 || e2)
     | _, _, heap => .ok ([], heap, false)
@@ -1425,34 +1559,81 @@ where
     fields.flatMap fun f =>
       if f.inline then
         match t.descs[f.ty]? with
-        | some (.strct fs _) => knownKeys fs
-        | some (.ptr e) => match t.descs[e]? with | some (.strct fs _) => knownKeys fs | _ => []
+        | some (.strct fs _ _) => knownKeys fs
+        | some (.ptr e) => match t.descs[e]? with | some (.strct fs _ _) => knownKeys fs | _ => []
         | _ => []
       else [f.key]
-  /-- Members into fields: the exact key, else a case-insensitive match
-  (Go's rule); inline fields take the whole object. -/
-  decStruct (fields : List JField) (kvs : List (String × Lean.Json)) (vs : List Val) (heap : Heap Val) :
-      Except Unit (List Val × Heap Val × Bool) := do
+  /-- Members into fields (encoding/json): the exact key, else a
+  case-insensitive match; inline fields take the whole object. -/
+  decStruct (fields : List JField) (members : List (String × List Nat)) (kvs : Std.TreeMap.Raw String Lean.Json)
+      (vs : List Val) (heap : Heap Val) : Except Unit (List Val × Heap Val × Bool) := do
     let mut vs := vs
     let mut heap := heap
     let mut err := false
     for f in fields do
       if f.inline then
-        let (v, heap', e) ← jDec t heap f.ty (.obj (Std.TreeMap.Raw.ofList kvs)) (vs[f.idx]?.getD .unit)
+        let (v, heap', e) ← jDec t heap f.ty (.obj kvs) (wholeObject members) (vs[f.idx]?.getD .unit)
         vs := vs.set f.idx v
         heap := heap'
         err := err || e
       else
-        let hit := (kvs.find? fun (k, _) => asciiBytes k == f.key) <|>
-          (kvs.find? fun (k, _) => (asciiBytes k).map lowerByte == f.key.map lowerByte)
+        let hit := (members.find? fun (k, _) => asciiBytes k == f.key) <|>
+          (members.find? fun (k, _) => (asciiBytes k).map lowerByte == f.key.map lowerByte)
         match hit with
-        | some (_, jv) =>
-          let (v, heap', e) ← jDec t heap f.ty jv (vs[f.idx]?.getD .unit)
+        | some (k, vsrc) =>
+          let jv ← (kvs.get? k).elim (.error ()) .ok
+          let (v, heap', e) ← jDec t heap f.ty jv vsrc (vs[f.idx]?.getD .unit)
           vs := vs.set f.idx v
           heap := heap'
           err := err || e
         | none => pure ()
     return (vs, heap, err)
+  /-- Members into fields as the SDKs' apijson decoder does: exact keys
+  only; null leaves a field unchanged (an Opt becomes null); pointers and
+  maps are decoded afresh; a member that does not decode is where the
+  model gets stuck (apijson would coerce it or mark it invalid). Also the
+  status and source of each typed member, for the metadata. -/
+  decApi (fields : List JField) (members : List (String × List Nat)) (kvs : Std.TreeMap.Raw String Lean.Json)
+      (vs : List Val) (heap : Heap Val) :
+      Except Unit (List Val × Heap Val × Bool × List (List Nat × (Nat × List Nat))) := do
+    let mut vs := vs
+    let mut heap := heap
+    let mut metas := []
+    for f in fields do
+      if f.inline then
+        match t.descs[f.ty]? with
+        | some (.strct ..) =>
+          let (v, heap', e) ← jDec t heap f.ty (.obj kvs) (wholeObject members) (vs[f.idx]?.getD .unit)
+          if e then .error ()
+          vs := vs.set f.idx v
+          heap := heap'
+        | _ => .error () -- a variant decoded from the whole value: not modelled
+      else
+        match members.find? fun (k, _) => asciiBytes k == f.key with
+        | some (k, vsrc) =>
+          let jv ← (kvs.get? k).elim (.error ()) .ok
+          if jv matches .null then
+            if let some (.opt _) := t.descs[f.ty]? then
+              let (v, heap', _) ← jDec t heap f.ty jv vsrc (vs[f.idx]?.getD .unit)
+              vs := vs.set f.idx v
+              heap := heap'
+            metas := metas ++ [(f.key, (1, vsrc))]
+          else
+            let start := match t.descs[f.ty]? with
+              | some (.ptr _) => .ptr 0 []
+              | some (.map ..) => .opaqueNil
+              | _ => vs[f.idx]?.getD .unit
+            let (v, heap', e) ← jDec t heap f.ty jv vsrc start
+            if e then .error ()
+            vs := vs.set f.idx v
+            heap := heap'
+            metas := metas ++ [(f.key, (3, vsrc))]
+        | none => pure ()
+    return (vs, heap, false, metas)
+  /-- An object's source rebuilt from its members (for inline fields, which
+  read the whole object). -/
+  wholeObject (members : List (String × List Nat)) : List Nat :=
+    [123] ++ jSep (members.map fun (k, v) => goJsonQuote (asciiBytes k) ++ [58] ++ v) 44 ++ [125]
 
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
@@ -1479,7 +1660,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
         | .ok j =>
           match heapLoad heap p with
           | .ok cur =>
-            match jDec t heap root j cur with
+            match jDec t heap root j (jTrim bs) cur with
             | .ok (v, heap, err) =>
               match heapStore heap p v with
               | .ok heap => .ok (.err err, heap)

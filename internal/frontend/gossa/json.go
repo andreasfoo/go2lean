@@ -141,8 +141,10 @@ func (j *jsonTable) build(t types.Type) map[string]any {
 	if isString(t) && inSDK && hasMethod(t, "Default") {
 		return kind("str", "dflt", j.constDefault(t))
 	}
-	if !inSDK && (hasMethod(t, "MarshalJSON") || hasMethod(t, "UnmarshalJSON")) {
-		return opaqueDesc // a custom encoding the model does not follow
+	if named && !inSDK && (hasMethod(t, "MarshalJSON") || hasMethod(t, "UnmarshalJSON")) {
+		// A custom encoding the model does not follow (a pointer has its
+		// element's methods: its description is the element's).
+		return opaqueDesc
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
@@ -176,7 +178,8 @@ func (j *jsonTable) build(t types.Type) map[string]any {
 			return kind("iface")
 		}
 	case *types.Struct:
-		return j.structDesc(u)
+		// The SDKs' types decode with their own apijson decoder.
+		return j.structDesc(u, inSDK && hasMethod(t, "UnmarshalJSON"))
 	}
 	return opaqueDesc
 }
@@ -198,7 +201,7 @@ func isUnionStruct(st *types.Struct) bool {
 	return seen
 }
 
-func (j *jsonTable) structDesc(st *types.Struct) map[string]any {
+func (j *jsonTable) structDesc(st *types.Struct, api bool) map[string]any {
 	fields := []any{}
 	var meta any
 	jsonKeys := map[string]string{} // Go field name -> JSON key
@@ -236,7 +239,7 @@ func (j *jsonTable) structDesc(st *types.Struct) map[string]any {
 		fields = append(fields, map[string]any{"key": key, "idx": i, "ty": j.desc(f.Type()),
 			"oe": contains(optList, "omitempty"), "oz": contains(optList, "omitzero"), "in": inline})
 	}
-	return kind("strct", "fields", fields, "meta", meta)
+	return kind("strct", "fields", fields, "meta", meta, "api", api)
 }
 
 // metaDesc describes the JSON metadata field (index fi) of an SDK response

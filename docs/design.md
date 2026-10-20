@@ -727,6 +727,33 @@ keys of decoded struct types join the key pool. The harness keeps empty
 slice literals (an empty slice encodes as `[]`, a nil one as `null`).
 Regression: 38 of 38 confirmed, 84 certificates.
 
+**Round 2** (go2lean-tingly-box findings 13-20, eight more bugs found by
+reading code). Each got a general spec before any search, checked to fail
+on the hand-found trigger. Blind with go2lean `3191ef8`: 10 of the 11
+reachable cases found and confirmed (stream usage after the finish chunk,
+dense tool_call indexes, developer roles, abnormal stop reasons on two
+paths, empty tool ids on two paths, three request-coverage cases); the
+error-translation finding sits in the HTTP handlers. The one miss, and the
+round-1 non-stream thinking case, got stuck in `json.Marshal` of an
+`interface{}` holding SDK param unions: the frontend described each
+pointer variant (`*BetaTextBlockParam`) as an opaque custom marshaler,
+since a pointer type has its element's `MarshalJSON`. With pointers
+described by their element, both are found (trials 4 and 160) and
+confirmed: **17 of 17 reachable cases**.
+
+The JSON model was then reviewed against Go's and the SDKs' sources, and
+the deviations that gave wrong results (not just stuck ones) fixed:
+`omitzero` and union variant presence follow the type (an omitted
+`param.Opt[float64]` is zero; unknown zero-ness is stuck, not "non-zero");
+`json.RawMessage` output is HTML-escaped; raw text (`RawMessage`, the SDKs'
+`raw` and `respjson.Field`) is the input's own bytes, taken from a
+byte-level scan instead of Lean's re-serialised `Json`; integers take Go's
+literal syntax only; duplicate keys are stuck; SDK types decode by apijson's
+rules (exact keys, null leaves a member unchanged, fresh pointers and maps,
+extra members recorded as invalid, coercions and whole-value union variants
+stuck). `testdata/jsondiff` with `scripts/json-diff.sh` checks the model
+against Go on random structs and documents (80 of 80 identical).
+
 Changes made for the misses (each with a ground-truth example, `examples/inputs`):
 
 - **Map and interface inputs.** Maps with string, integer or bool keys are

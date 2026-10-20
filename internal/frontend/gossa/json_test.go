@@ -31,7 +31,12 @@ type Node struct {
 	Err    error             ` + "`json:\"err\"`" + `
 	When   time.Time         ` + "`json:\"when\"`" + `
 	Inner
+	C      *Custom           ` + "`json:\"c\"`" + `
 }
+
+type Custom struct{}
+
+func (Custom) MarshalJSON() ([]byte, error) { return nil, nil }
 `
 
 func checkJSONSrc(t *testing.T) *types.Package {
@@ -92,6 +97,8 @@ func TestJSONStructDescription(t *testing.T) {
 	for typ, want := range map[string]string{
 		"[]byte": "bytes", "any": "iface", "error": "opaque", "time.Time": "opaque",
 		"*p.Node": "ptr", "map[string]*p.Node": "map", "int8": "int",
+		// a pointer has its element's methods; the element is the opaque one
+		"*p.Custom": "ptr", "p.Custom": "opaque",
 	} {
 		if kinds[typ]["k"] != want {
 			t.Errorf("%s: description %v, want kind %s", typ, kinds[typ], want)
