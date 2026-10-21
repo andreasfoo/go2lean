@@ -1,6 +1,7 @@
 /out/
 /out-*/
 /lean/.lake/
+/lean-llvm/.lake/
 *.test
 # Models and search files live in each workspace's own lake project; these
 # are left over from checkouts that predate it.

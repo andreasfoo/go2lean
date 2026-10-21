@@ -2,10 +2,13 @@ module github.com/andreasfoo/go2lean
 
 go 1.26.0
 
-require golang.org/x/tools v0.52.0
+require (
+	github.com/anthropics/anthropic-sdk-go v1.82.0
+	golang.org/x/tools v0.52.0
+	tinygo.org/x/go-llvm v0.0.0-20261019104553-b75cf7a8b7bc
+)
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.82.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect

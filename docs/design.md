@@ -299,41 +299,98 @@ the shape of our heap model while pointing at two things to borrow:
 - Their model has no deallocation and models a single function body; ours
   allocates across calls and never frees, which Go's GC makes sound.
 
-### 4.4 `LLVM` dialect (not built yet)
+### 4.4 `LLVM` dialect (M0 built, 2026-10-21)
 
-**Build it on lean-mlir.** lean-mlir already defines per-operation semantics
-for the LLVM dialect in Lean (integer arithmetic with poison/UB, `icmp`,
-`select`, bit manipulation, and recently multi-block control flow). When
-F-LLVM is started, the first step is to read that dialect and either port its
-`denote` definitions into `Go2Lean.Dialect.LLVM` or depend on it directly;
-the only go2lean-specific parts are Go's panic checks and the mapping of
-TinyGo runtime calls. Writing LLVM integer semantics from scratch is a
-mistake we should not make.
+The LLVM line takes C (or any LLVM IR) through the same SSA core and the
+same engine ideas, with **VeIR's semantics as a dependency** instead of
+semantics written here.
 
-Same core; ops `add … icmp select zext sext trunc`, `llvm.*.with.overflow`,
-`br condbr switch ret unreachable`, with `call @runtime.*Panic; unreachable`
-mapped to `Term.panic`. `sdiv`/`srem` get Go's panic checks inserted at
-translation time (recorded in the model report). Memory starts as havoc.
+**Semantics: VeIR, required by lake.** [VeIR](https://github.com/opencompl/veir)
+(opencompl, Apache-2.0 WITH LLVM-exception) defines LLVM integers as a bit
+vector or poison (`Veir.Data.LLVM.Int`) with every flag (`nsw`, `nuw`,
+`exact`) and UB condition, and a byte-addressed memory (`Veir.MemoryState`:
+objects, poison bytes, an access outside its object is UB). Its whole
+dependency closure (ExArray, lean-ctrees, Coinductive) uses Lean's core
+library only, and it builds with our v4.35.0 although it pins
+v4.35.0-rc4 (checked: the whole library, 278 jobs, 0 errors, about 14 min
+cold; what the dialect imports, 31 jobs, 79 s, 67 MB). We use
+its data layer as pure functions inside our `denote`, not its CTree
+interpreter: the engines, havoc and certificates stay the core's. lean-mlir,
+the earlier plan, was dropped: it pins a Lean nightly and Mathlib.
 
-Pipeline: `tinygo build` IR export (`-o x.ll` or `-printir`, **unverified**) →
-`opt -passes=mem2reg,instnamer` → `github.com/llir/llvm` → emitter. The
-target must be pinned to a 64-bit native target so `int` matches `go test`;
-wasm has a special i64 ABI and is excluded.
+**Package layout.** `lean-llvm/` is a lake package of its own
+(`go2lean-llvm`) that requires the core (`../lean`, by path) and VeIR
+(git, pinned revision), so the Go line keeps no dependency beyond Lean's
+core. VeIR builds once in `lean-llvm/.lake` and every workspace requires
+`lean-llvm` by path, so workspaces share that build.
 
-Value of this route: other LLVM languages, cross-checking GoSSA, and catching
-TinyGo-vs-gc differences. Its memory model is much weaker, so memory
-properties stay with GoSSA.
+**Dialect** (`Go2LeanLLVM/Dialect.lean`). Values are `int w (LLVM.Int w)`,
+`ptr (LLVM.Ptr)`, and the memory state, which lives in heap slot 1. Ops:
+`const poison null`, `add sub mul` (with `nsw nuw` and `cUB`), `udiv sdiv
+urem srem` (with `exact`), `shl lshr ashr and or xor`, `icmp`, `icmpPtr`,
+`select`, `trunc zext sext`, `alloca load loadPtr store`, `gep` (constant
+offset plus signed index × stride), `cond`, `unreachable`, `unsupported`.
+UB stops the run as a core panic: through null `nilDereference`, outside
+the object `indexOutOfRange`, division by zero `divideByZero`, any other
+kind the new `undefinedBehavior` (a poison branch condition, `unreachable`,
+`INT_MIN / -1`). **C's signed overflow**: LLVM only makes `add nsw` poison;
+for C sources the frontend sets `cUB`, and a poison result from operands that
+were not poison is UB where it happens, as C (and UBSan) say.
+
+**Frontend** (`internal/frontend/llvm`, built only with `-tags llvm18` or
+another go-llvm version tag, because it links libLLVM through cgo):
+`clang -O0 -Xclang -disable-O0-optnone`, `opt -passes=mem2reg`, then
+[go-llvm](https://github.com/tinygo-org/go-llvm) (tinygo, the LLVM C API).
+llir/llvm, the earlier plan, cannot parse opaque pointers, which every
+current clang emits. Phis become block parameters, a call to a function of
+the module is the core's call terminator (a fallback block havocs the result
+if the callee gets stuck), a call to a declaration is havoc, constant
+`getelementptr` indices fold into the offset, `switch` becomes a chain of
+equality tests. The `nsw`/`nuw`/`exact` flags are read from the
+instruction's text (go-llvm has no accessors). What is not lowered becomes
+`unsupported` (the model is stuck there, never a false UB) and is listed
+per function.
+
+**Inputs.** A pointer parameter points to a fresh object of 0 to 8
+elements whose size is the stride of the first `getelementptr` on it (else
+the width of the first load or store through it); an integer parameter right
+after a pointer is that buffer's element count. The property, the C
+analogue of `no_panic`, is therefore *no UB for a caller that passes a buffer
+with its real length*; a caller passing a wrong length is not reported.
+
+**Engines** (`Go2LeanLLVM/Search.lean`): seeded random trials, then exhaustive
+enumeration (integers from {0, 1, -1, 2, INT_MAX, INT_MIN}, buffers of up to
+3 elements from {0, 1, -1}); an exhaustive run without UB, stuck or
+out-of-fuel trials is a certificate for that domain.
+
+**M3** (`internal/llvmhunt`): the counterexample becomes a C program that
+`#include`s the source (its `main` renamed) and calls the function with
+buffers from `malloc` of exactly their size, built with
+`-fsanitize=address,undefined -fno-sanitize-recover=all`. A sanitizer report
+confirms; a clean exit is spurious. Needs `llvm-18-dev` and
+`libclang-rt-18-dev` (or the version's equivalents).
+
+**First run** (`go2lean llvm examples/llvm/oob.c`): `sum`'s off-by-one read
+and `avg`'s signed overflow are found and confirmed (ASan heap-buffer-overflow;
+UBSan "signed integer overflow: 2147483647 + 7"), and `max_of` gets the
+exhaustive certificate over 40 inputs.
+
+Not yet: globals, `ptrtoint`/`inttoptr`, floats, `freeze`, intrinsics
+(`memcpy`, `memset`), aggregates in registers, `malloc`/`free` and other
+library calls (havoc today), the GoSSA-style ABI and properties (the LLVM
+line has its own CLI subcommand and no spec-in-C yet), and TinyGo's IR.
 
 ### 4.5 Frontend emitters (Go side)
 
 ```
-internal/frontend/gossa/   go/packages + go/ssa → ir.Prog            (built)
-internal/frontend/llvm/    tinygo + opt + llir  → ir.Prog            (later)
-internal/ir/               frontend-independent program representation
-internal/ssaout/           Lean printer, abi.json, model report, targets
+internal/frontend/gossa/   go/packages + go/ssa → ir.Prog → internal/ssaout   (built)
+internal/frontend/llvm/    clang + opt + go-llvm → Lean (own printer)        (M0 built)
+internal/ir/               the Go line's program representation
+internal/ssaout/           Lean printer, abi.json, model report, targets (Go line)
 ```
 
-Both emitters produce the same `ir.Prog`; the Lean printer is written once.
+The LLVM frontend prints its Lean directly: `ir.Prog` and `ssaout` are
+shaped by GoSSA (its ops, heap and JSON tables).
 
 ### 4.6 ABI bridge
 
@@ -914,6 +971,8 @@ Decided:
 - A read-only memory oracle, shared by all functions in a run, instead of
   site-keyed havoc for loads (v0.3).
 - No Mathlib, no `plausible`; Lean core plus our own engine.
+- LLVM semantics are VeIR's, required by lake at a pinned revision in a
+  separate package (`lean-llvm/`); the Go line stays core-only (2026-10-21).
 - All documentation and code comments in English.
 
 ## 13. References
@@ -924,4 +983,6 @@ Decided:
 - TinyGo data type layout: https://tinygo.org/docs/concepts/compiler-internals/datatypes/
 - TinyGo compiler pipeline: https://tinygo.org/docs/concepts/compiler-internals/pipeline/
 - Lean 4.12 `bv_decide` (built-in CaDiCaL, counterexample assignments): https://lean-lang.org/blog/2024-10-3-lean-4120
-- llir/llvm (pure-Go LLVM IR parser): https://github.com/llir/llvm
+- VeIR (LLVM integer and memory semantics in Lean, core library only): https://github.com/opencompl/veir
+- go-llvm (Go bindings to the LLVM C API, tinygo): https://github.com/tinygo-org/go-llvm
+- llir/llvm (pure-Go LLVM IR parser; no opaque pointers, not used): https://github.com/llir/llvm

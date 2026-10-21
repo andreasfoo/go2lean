@@ -215,18 +215,49 @@ this models 7112 (2025 completely); most of the 427 rejected are test
 helpers taking `*testing.T`, `select` statements and `defer` of modelled
 functions.
 
+## C and LLVM IR
+
+The LLVM line runs C (or any LLVM IR) through the same SSA core, with
+LLVM's integer and memory semantics taken from
+[VeIR](https://github.com/opencompl/veir): integers that can be poison,
+byte-addressed objects, and undefined behaviour where LLVM (and, for
+signed overflow, C) says so. It needs LLVM's development files and the
+sanitizer runtime (`llvm-18-dev`, `libclang-rt-18-dev` on Ubuntu) and a
+build with the LLVM tag:
+
+```
+go build -tags llvm18 -o go2lean ./cmd/go2lean
+./go2lean llvm -workspace out examples/llvm/oob.c
+```
+
+```
+  sum      random: model index_out_of_range ... -> confirmed ERROR: AddressSanitizer: heap-buffer-overflow
+  avg      random: model undefined_behavior ...  -> confirmed runtime error: signed integer overflow: 2147483647 + 7 ...
+  max_of   no UB in 2000 trials; exhaustive: no UB on all 40 inputs
+```
+
+Each function is searched for inputs with undefined behaviour, assuming a
+pointer parameter followed by an integer is a buffer and its length; a
+counterexample is replayed as a C program under AddressSanitizer and
+UndefinedBehaviorSanitizer. The first build of `lean-llvm/` fetches VeIR and
+compiles the part of it the dialect imports (under two minutes); later runs
+reuse it. What is modelled so far is in
+[docs/design.md §4.4](docs/design.md).
+
 ## Layout
 
 ```
 cmd/go2lean/           CLI
 internal/contract/     shared JSON records and the workspace layout
-internal/frontend/     M1 frontends (go/ssa now; LLVM via TinyGo planned)
+internal/frontend/     M1 frontends: gossa (go/ssa), llvm (go-llvm, -tags llvm18)
 internal/ir, ssaout/   program representation, validation, Lean printer
 internal/constraint/   M2 core: property templates and engine runners
 internal/agent/        M2 agent: LLM interface, Claude, mock, prompts, loop
 internal/poc/          M3: harness generation, execution, verdicts
+internal/llvmhunt/     the LLVM line: model, search, C replay under ASan/UBSan
 internal/pipeline/     the steps the CLI and the agent share
 lean/                  Lean 4 project: SSA core, GoSSA dialect, search engines
+lean-llvm/             Lean 4 project: LLVM dialect over VeIR, its search driver
 <workspace>/lean/      a workspace's own Lean project: its models and search driver
 examples/              ground-truth packages
 docs/design.md         design and roadmap
@@ -236,8 +267,8 @@ docs/semantics.md      the Go semantics modelled, by construct, with status
 ## Roadmap
 
 1. GoSSA heap model (stage B): writes through slices, `make`, arrays, structs.
-2. LLVM frontend via TinyGo, built on lean-mlir's LLVM dialect semantics, as a
-   cross-check and the entry point for other languages.
+2. LLVM line beyond M0: globals, intrinsics, library calls, specs in C, and
+   TinyGo's IR as a cross-check of the Go line.
 3. Proof engines for properties the random and exhaustive engines cannot
    settle: `bv_omega` for linear functions, `bv_decide` conditionally.
 4. Agent: ranking by expected yield, `ModelGap` feedback into the frontend,

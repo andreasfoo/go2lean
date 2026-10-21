@@ -84,7 +84,10 @@ const (
 	PanicTypeAssertion   PanicKind = "type_assertion"
 	PanicNilMapWrite     PanicKind = "nil_map_write"
 	PanicExplicit        PanicKind = "explicit"
-	PanicOther           PanicKind = "other"
+	// PanicUndefined is undefined behaviour of a C/LLVM program that is not
+	// one of the kinds above (signed overflow, a poison branch condition).
+	PanicUndefined PanicKind = "undefined_behavior"
+	PanicOther     PanicKind = "other"
 )
 
 // HavocValue is the value the counterexample assigns to one havoc site on

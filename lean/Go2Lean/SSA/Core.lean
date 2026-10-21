@@ -32,6 +32,9 @@ inductive PanicKind where
   /-- A write to a nil map ("assignment to entry in nil map"). -/
   | nilMapWrite
   | explicit
+  /-- Undefined behaviour of a C/LLVM program that is not one of the kinds
+  above (signed overflow, a poison branch condition, `unreachable`). -/
+  | undefinedBehavior
   | other
   /-- Not a Go panic: the model got stuck (ill-typed operands, missing block).
   Signals a frontend bug; M3 reports it as inconclusive. -/
@@ -54,6 +57,7 @@ def PanicKind.tag : PanicKind → String
   | .typeAssertion => "type_assertion"
   | .nilMapWrite => "nil_map_write"
   | .explicit => "explicit"
+  | .undefinedBehavior => "undefined_behavior"
   | .other => "other"
   | .modelStuck => "model_stuck"
 

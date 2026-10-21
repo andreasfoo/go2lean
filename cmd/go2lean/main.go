@@ -35,6 +35,8 @@ func main() {
 		err = cmdAgent(os.Args[2:])
 	case "summary":
 		err = cmdSummary(os.Args[2:])
+	case "llvm":
+		err = cmdLLVM(os.Args[2:])
 	default:
 		usage()
 	}
@@ -54,7 +56,9 @@ func usage() {
   go2lean run     [-workspace out] <package>      all of the above
   go2lean summary [-workspace out]                 all verdicts and proofs of a workspace as Markdown
   go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>
-                                                  M2 agent: propose spec-in-Go properties, run, report`)
+                                                  M2 agent: propose spec-in-Go properties, run, report
+  go2lean llvm    [-workspace out] <file.c|.ll|.bc> C / LLVM IR: model every function, search for UB,
+                                                  replay counterexamples under ASan/UBSan (build with -tags llvm18)`)
 	os.Exit(2)
 }
 

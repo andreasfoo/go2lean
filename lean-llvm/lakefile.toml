@@ -1,0 +1,22 @@
+name = "go2lean-llvm"
+version = "0.1.0"
+defaultTargets = ["Go2LeanLLVM"]
+
+# The LLVM line: an LLVM dialect over go2lean's SSA core whose instruction
+# semantics are VeIR's (integers with poison, byte-addressed memory with
+# bounds), and its search driver. A package of its own so that the Go line
+# (lean/) keeps no dependency beyond Lean's core library.
+[[require]]
+name = "go2lean"
+path = "../lean"
+
+# VeIR (opencompl/veir, Apache-2.0 WITH LLVM-exception), pinned: it has no
+# dependency beyond Lean's core library and builds with this toolchain
+# although it pins v4.35.0-rc4. Upgrade the revision deliberately.
+[[require]]
+name = "VeIR"
+git = "https://github.com/opencompl/veir.git"
+rev = "1d28db9d434d8bec78a006eafbaa86ec5db0cf23"
+
+[[lean_lib]]
+name = "Go2LeanLLVM"
