@@ -15,6 +15,10 @@ in 2–5 s each; every planted bug is confirmed by a real Go run and every
 correct function gets a bounded certificate or "no counterexample". The design
 and roadmap are in [docs/design.md](docs/design.md); the Go semantics
 modelled (and how faithfully) are listed in [docs/semantics.md](docs/semantics.md).
+What it does not deliver yet (no proofs in the pipeline; certificates are
+bounded searches the Lean kernel does not check; findings are not ranked by
+reachability; evidence from one codebase; no sandbox for M3) is in
+[docs/limitations.md](docs/limitations.md).
 
 ## Quick start
 
@@ -188,7 +192,8 @@ issue #1924).
 
 ## Supported Go subset
 
-Legend: ✅ exact (counterexamples and certificates are sound) · 🟡 havoc or
+Legend: ✅ exact (the model follows Go's semantics; a counterexample
+reproduces, and a bounded search finds what Go would do on its domain) · 🟡 havoc or
 assumption (may give spurious counterexamples, which `go test` rejects, or
 miss behaviours) · ❌ the function is rejected and listed in the model report.
 Construct-by-construct detail: [docs/semantics.md](docs/semantics.md).

@@ -1,0 +1,147 @@
+# Limitations and open problems
+
+What go2lean does not deliver yet, stated against what the design promises.
+Written from an outside review (2026-10-21); each item names what exists, the
+gap, and the planned work. The README and the design doc should not claim
+more than this page allows.
+
+## 1. No proofs in the pipeline yet
+
+The design promises two outputs: a confirmed PoC, or a Lean theorem
+(`proved` / `bounded_proved`). What exists:
+
+- One hand-written proof, `lean/Proofs/OobClampIdentity.lean`, for one
+  function. The `bv_decide` engine (M1b) is not in the pipeline, and the next
+  harder case (`SpecClampIdempotent`) does not go through yet.
+- The "exhausted" certificates are computed by `go2lean-search`, compiled Lean
+  running the same `denote` interpreter that finds counterexamples. The Lean
+  kernel checks none of them. Their trust base is the model's semantics, the
+  Lean compiler and the enumeration code.
+- `bv_decide` itself checks its LRAT certificate through `ofReduceBool`, so
+  it also trusts the compiler. Only proofs by kernel-checked tactics (`omega`,
+  `bv_omega`, `simp`, `decide` on tiny domains) avoid that.
+
+So today Lean is a bit-exact interpreter plus a search loop, and all
+confidence in a finding comes from `go test`. What Lean adds over the same
+model written in Go is a semantics that can also be the subject of a
+theorem; that path is not walked yet.
+
+Planned: proof engines in the pipeline, each result labelled with its trust
+base (`kernel`, `compiler`), and certificates named for what they are
+(`bounded_search`), not proofs.
+
+## 2. Under-approximations are not tracked mechanically
+
+P1 says the model may over-approximate, never under-approximate.
+`docs/semantics.md` lists places where it does under-approximate: a loop over
+an unknown map runs zero times, an update to one is dropped, `len` of one is
+havoc below 16; writes to globals are dropped, `init` does not run, `defer`
+of an unmodelled function and calls without results are ignored; two non-nil
+errors compare equal; a slice from an unmodelled function has 0 to 3 zero
+elements. A spec verdict that read a havoc value is reported as unknown, but
+the other assumptions flow silently through a run, and the exhaustive engine
+does not enumerate havoc sites.
+
+So an `exhausted` result means: no counterexample on a small finite domain,
+havoc sites not enumerated, and the run may have taken an
+under-approximating branch. Which assumptions invalidate a given certificate
+is not recorded.
+
+Planned: every under-approximation site carries a named assumption tag; a run
+records the tags it hit; a certificate that hit any is downgraded to
+"bounded, assuming X". A future theorem states those assumptions as
+hypotheses.
+
+## 3. Confirmed is not the same as actionable
+
+M3 shows that the model's counterexample reproduces in Go, not that a real
+caller can build that input. In the sixth full pass, 741 of 912 confirmed
+results involved a nil input; in the seventh, 231 came from constructors
+handed forged third-party structs (a `*gorm.DB` whose internal maps are
+nil), a class "handles" (design §9b) later removed, one heuristic at a
+time. In
+the blind-spec experiment, 5 of 39 confirmed results came from wrong specs:
+confirmed measures a violated oracle, and sometimes the oracle is the bug.
+The 82 bugs published for tingly-box are the result of hand triage; the
+tool itself does not rank. `nil_opaque_input` is a first tag, not a ranking.
+
+Since 2026-10-21 every confirmed verdict carries a `rank`
+(`internal/poc/rank.go`; `go2lean rank` re-ranks an existing workspace):
+
+| tier | input |
+|---|---|
+| 1 | plain values any caller of the package's API can pass, or a call site in the module passes the same nil |
+| 2 | plain values to an unexported function (depends on its callers), or a hand-written spec violated |
+| 3 | a nil argument no call site in the module passes, or an agent-written spec violated |
+| 4 | an input the test forged: an opaque value left nil, package state the program may initialise first |
+
+On the 53 confirmed results of an older tingly-box workspace
+(`out-tingly6`) this gives 1 / 9 / 43 / 0: 33 are nil receivers or
+arguments of functions with no static call site (methods called through an
+interface, mostly `Error()` on a nil pointer), 10 have call sites none of
+which passes nil. Call sites are found syntactically (a literal `nil` at
+the position); a nil that flows in from a variable is not traced yet.
+
+## 4. Evidence comes from one codebase
+
+The heuristics of design §9c (documented enums, Stainless SDK `param.Opt` and
+`apijson`, SDK unions, GORM handles, lookup tables, Gin contexts) were
+written for tingly-box, and the benchmarks (17/17, 31/34) are bugs found by
+hand in the same codebase: read, find, write a spec, tune go2lean until it
+finds it. one-api and spf13/cast were used only to collect constructs
+(`examples/portable`), with no yield reported.
+
+Planned: a blind run with a frozen tool version and a protocol fixed in
+advance on codebases of other kinds (a CLI, a pure-Go database, a Kubernetes
+controller), with no tool changes during the measurement.
+
+## 5. Hand-written semantics; the cross-check
+
+About 2,860 lines of GoSSA dialect and hand reimplementations of strings,
+`strconv`, `regexp`, `encoding/json`, `apijson`, `net/url` are checked only
+by sampled differential tests (`scripts/json-diff.sh`). Several model bugs
+gave wrong answers rather than getting stuck (`RawMessage` HTML escaping,
+`omitzero`, `apijson` coercion); each such bug can hide a real one.
+
+The independent check is the TinyGo line (design §4.4): the same package
+compiled by TinyGo to LLVM IR, with the standard library and runtime taken
+from their real source and run with VeIR's semantics, so it shares none of
+the hand-written models. It compares verdicts per function today; it does
+not share `ir.Prog`, and it does not yet compare return values on the same
+inputs, which is what would catch a model that runs but computes the wrong
+value.
+
+## 6. M3 runs generated code without a sandbox
+
+The history records `log.Fatal`/`os.Exit` killing a test batch (four
+rounds), functions writing files, a 14 GB build cache filling the disk and a
+9 GB search killed by the OOM killer. The docs advise a scratch clone; the
+tool does not enforce isolation, and the `agent` subcommand has an LLM write
+specs that then run in the user's repository.
+
+Since 2026-10-21 (`internal/sandbox`): the harness joins the package
+through `go test -overlay` (nothing is written into the package), the test
+binary is built with `-c` and runs in a fresh copy of the package
+directory under `prlimit` (8 GB address space, 300 s CPU, 256 MB files,
+10 min wall clock, process group killed on timeout). Where user namespaces
+are available (`unshare -r`), the run also has no network and every mount
+is read-only except that copy. Otherwise go2lean says so on stderr;
+`GO2LEAN_SANDBOX=off` disables the sandbox. The C and TinyGo replays use
+the same runner (ASan runs without the address-space limit). The build
+step itself (`go test -c`) still runs the module's code generators and cgo
+outside the sandbox, as any build does. Not covered: the `agent`
+subcommand's own LLM calls, and the M2 search, which runs only the
+generated Lean model.
+
+## 7. Smaller items
+
+- Unit tests are thin (7 test files for 35 Go files); the gates are the
+  end-to-end regression and differential scripts, which are slow.
+- Concurrency is out of scope: `sync.Mutex` is ignored and runs are single
+  threaded. Reports on concurrent code should say so prominently.
+- The agent comparison (Opus vs MiniMax-M3) rests on single runs, without
+  repetitions, cost accounting or ablations.
+- Resource limits are ad hoc (64 KB strings, 8 GB cache sweep, 24 leaves
+  for exhaustive search, 64 type-switch cases).
+- `docs/design.md` mixes the current design, superseded plans and a
+  development log; it should split into design, history and results.
