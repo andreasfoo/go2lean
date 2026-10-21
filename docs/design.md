@@ -229,7 +229,7 @@ closures, goroutines, `select`, `defer` of modelled functions.
 The original design notes (the parts not built yet) are in
 [history.md](history.md) §4.3b.
 
-### 4.4 `LLVM` dialect (M0 built, 2026-10-21)
+### 4.4 `LLVM` dialect: C and TinyGo (built, 2026-10-21)
 
 The LLVM line takes C (or any LLVM IR) through the same SSA core and the
 same engine ideas, with **VeIR's semantics as a dependency** instead of
@@ -259,7 +259,9 @@ core. VeIR builds once in `lean-llvm/.lake` and every workspace requires
 `const poison null`, `add sub mul` (with `nsw nuw` and `cUB`), `udiv sdiv
 urem srem` (with `exact`), `shl lshr ashr and or xor`, `icmp`, `icmpPtr`,
 `select`, `trunc zext sext`, `alloca load loadPtr store`, `gep` (constant
-offset plus signed index × stride), `cond`, `unreachable`, `unsupported`.
+offset plus signed index × stride), `cond`, `unreachable`, `unsupported`. For TinyGo's IR also
+`agg` and `fn` values and the ops `zero extract insert goAlloc global
+resolveFn memcpy memset minmax abs bitCount fshl opaque`.
 UB stops the run as a core panic: through null `nilDereference`, outside
 the object `indexOutOfRange`, division by zero `divideByZero`, any other
 kind the new `undefinedBehavior` (a poison branch condition, `unreachable`,
@@ -305,10 +307,74 @@ and `avg`'s signed overflow are found and confirmed (ASan heap-buffer-overflow;
 UBSan "signed integer overflow: 2147483647 + 7"), and `max_of` gets the
 exhaustive certificate over 40 inputs.
 
-Not yet: globals, `ptrtoint`/`inttoptr`, floats, `freeze`, intrinsics
-(`memcpy`, `memset`), aggregates in registers, `malloc`/`free` and other
-library calls (havoc today), the GoSSA-style ABI and properties (the LLVM
-line has its own CLI subcommand and no spec-in-C yet), and TinyGo's IR.
+**TinyGo line** (`go2lean tinygo [-compare] <pkg>`, `-tags llvm22`,
+`internal/llvmhunt/tinygo.go`). A Go package goes through TinyGo 0.43
+(`tinygo build -opt=0`, LLVM 22) to LLVM IR: a temporary `main` package
+keeps every exported function alive, and the frontend models them with the
+whole program they reach. The standard library and the runtime are not
+hand-written models here but their own Go source, compiled by TinyGo:
+`strings.Builder`, `append` (`runtime.sliceAppend`), maps
+(`runtime.hashmap*`), interfaces and `errors.New` run as TinyGo implements
+them, under VeIR's semantics. This is the cross-check of the hand-written
+GoSSA models (docs/limitations.md §5): the two lines share no model code.
+
+What the frontend handles for TinyGo's IR, beyond C's:
+- Go's ABI: slices and strings as `{ptr, len, cap}` aggregates
+  (`insertvalue`/`extractvalue`, loads and stores of aggregates field by
+  field), the trailing `context` parameter, function values `{ctx, fn}`
+  called through a table that maps function objects to the program's
+  functions;
+- globals with initializers (bytes and relocations, through nested constant
+  `getelementptr`s; a global modelled only in part records an `assume`),
+  function objects, constant structs (interface constants), and the
+  package's `init`, run before each trial;
+- TinyGo's runtime panics (`runtime.lookupPanic` → index out of range,
+  `slicePanic`, `nilPanic`, `divideByZeroPanic`, `_panic`, ...) as the
+  core's panic kinds; `runtime.alloc` as a zeroed allocation (above 1 MiB:
+  stuck); `inttoptr` constants (GC layout tags) as opaque values;
+- intrinsics `memcpy memmove memset smin smax umin umax abs ctlz cttz
+  ctpop fshl`;
+- the callees, found breadth-first from the targets through instruction
+  operands and global initializers (a compile-time map keeps its
+  key-equality function there), up to 400 functions; a callee the model
+  gets stuck in makes the result havoc for an integer (and records an
+  assumption), stuck otherwise.
+
+Inputs come from the Go signature: integers; slices and strings as buffers
+of their element size (zeroed when the element holds pointers); half of the
+string inputs are the package's own string literals; pointers point to one
+object of the pointee's size; maps, channels, funcs and interfaces are nil.
+The search prefers a counterexample that read no havoc and took no
+assumption, as the Go line's does. A counterexample is replayed as a
+`go test` of the real package (in the sandbox), which confirms it or calls
+it spurious.
+
+**Comparison** (`go2lean tinygo -compare`: both lines on the same package,
+the go/ssa line with `-deps`; verdicts after replay; 2026-10-21, all 22
+example packages, 94 exported functions):
+
+| outcome | functions |
+|---|---|
+| both lines agree | **73** of 94: 29 the same bug, confirmed by `go test` on both lines (index and slice bounds, division by zero, nil dereference, type assertion, explicit panics, across 18 packages); 44 no bug on either (4 of them with a TinyGo counterexample that the replay rejected, each through havoc) |
+| they differ | **6**: the TinyGo line passes nil for interfaces and maps, so it misses inputs `Label`, `Weight` and portable `Per`; it gets stuck in `sync.Once.Do` (`regexp`, `math/rand`) and reports a havoc-dependent, spurious nil dereference for portable `Minor` and `Pick`; for xpkg `Post` it builds a `*money.Ledger` field by field with a nil map and confirms a nil map write, an input the Go line does not generate for a handle (its own result there is `exhausted_assuming`: `Ledger.Add` got stuck) |
+| not comparable | **15**: the TinyGo line is stuck in 14 (`strconv.Atoi`, `encoding/json.Marshal`, `runtime.stringToBytes`, `strings.TrimSpace`, `regexp.MustCompile`, `crypto/rand.Read`, a `inttoptr` of a variable), and one counterexample cannot be replayed (an unexported struct argument) |
+
+No difference came from the two models computing different results on the
+same input. The comparison did find model bugs, all on the TinyGo side and
+fixed before the final run: `inttoptr` GC tags, `ctlz` (a havoc that made
+`append` allocate gigabytes), constant aggregates, map parameters from
+random bytes, a key-equality function held in a global initializer (the
+map lookups were havoc, giving spurious panics), and an initializer with a
+nested constant `getelementptr` left half zero, which made `ErrEmpty` nil
+and hid a real division by zero (`portable.Head`). It also showed the Go
+line missing two bugs when run without `-deps` (xpkg `Share`, portable
+`Port`), which the comparison now always passes.
+
+Not yet: floats, `ptrtoint`, `freeze`, `malloc`/`free` and other C library
+calls (havoc), specs and properties beyond "no undefined behaviour" in the
+LLVM line, inputs for interfaces and maps in the TinyGo line, `sync.Once`
+and reflection-heavy code (`encoding/json`) on the TinyGo line, and CI for
+the LLVM line (it needs LLVM's development files).
 
 ### 4.5 Frontend emitters (Go side)
 

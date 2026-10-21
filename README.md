@@ -307,14 +307,15 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ⬜ Floats; `init` functions and package state
 - ⬜ Goroutines, `select`, channels, `defer` of modelled functions
 
-**LLVM line (C, LLVM IR, TinyGo → VeIR semantics)**: 5 / 10
+**LLVM line (C, LLVM IR, TinyGo → VeIR semantics)**: 7 / 11
 - ✅ `lean-llvm/`: LLVM dialect over the same core with [VeIR](https://github.com/opencompl/veir)'s integer and memory semantics
 - ✅ C frontend (clang + mem2reg + go-llvm); random and exhaustive search; replay under ASan/UBSan
 - ✅ TinyGo IR (LLVM 22): Go's ABI, runtime panics, aggregates, function values, globals, callees from the standard library and runtime lowered from their IR
 - ✅ `go2lean tinygo -compare`: the same package through both lines, side by side
-- ✅ Agreement on the example packages where both lines model the code (design doc §4.4)
-- 🚧 Replay of TinyGo-line counterexamples with `go test`
-- 🚧 Package `init` functions, inputs for strings and interfaces in the TinyGo line
+- ✅ Cross-check on all 22 example packages: 73 of 94 functions agree (29 on the same confirmed bug), no semantic disagreement; the rest are TinyGo-line gaps (design doc §4.4)
+- ✅ Replay of TinyGo-line counterexamples with `go test`, in the sandbox
+- ✅ Package `init` functions and string constants as inputs in the TinyGo line
+- 🚧 Inputs for interfaces and maps; `sync.Once`, `strconv`, `encoding/json` on the TinyGo line
 - ⬜ Specs in C; properties beyond "no undefined behaviour"
 - ⬜ Floats, `ptrtoint`/`inttoptr`, more intrinsics, `malloc`/`free`
 - ⬜ CI for the LLVM line (needs LLVM development files)

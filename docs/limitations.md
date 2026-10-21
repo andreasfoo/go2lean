@@ -124,6 +124,15 @@ not share `ir.Prog`, and it does not yet compare return values on the same
 inputs, which is what would catch a model that runs but computes the wrong
 value.
 
+First result (2026-10-21, design §4.4): on the 94 exported functions of
+the example packages the two lines agree on 73, 29 of them on the same
+confirmed bug; none of the 6 differences was the two models computing
+different values, and 15 functions the TinyGo line does not model yet
+(stuck in `strconv`, `encoding/json`, `regexp`). The examples are small and
+were written for the Go line, so this says little about the hand-written
+models on real code; running the comparison on tingly-box packages, and
+comparing return values, are next.
+
 ## 6. M3 runs generated code without a sandbox
 
 The history records `log.Fatal`/`os.Exit` killing a test batch (four
