@@ -69,6 +69,12 @@ jobs:
       - name: JSON number round trips against Go
         run: PKG=testdata/numdiff scripts/json-diff.sh "$RUNNER_TEMP/num-diff" 6 | tail -5
 
+      - name: net/url (translated from source) against Go
+        run: DEPS=1 PKG=testdata/urldiff scripts/json-diff.sh "$RUNNER_TEMP/url-diff" 6 | tail -5
+
+      - name: reflect Kind/IsNil and utf16.Encode against Go
+        run: PKG=testdata/miscdiff scripts/json-diff.sh "$RUNNER_TEMP/misc-diff" 6 | tail -5
+
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -82,4 +88,6 @@ jobs:
             ${{ runner.temp }}/conv-diff/*.log
             ${{ runner.temp }}/valid-diff/*.log
             ${{ runner.temp }}/num-diff/*.log
+            ${{ runner.temp }}/url-diff/*.log
+            ${{ runner.temp }}/misc-diff/*.log
           if-no-files-found: ignore

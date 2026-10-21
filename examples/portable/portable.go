@@ -247,3 +247,28 @@ func Drain(n int) int64 {
 	}
 	return 100 / c.n.Load()
 }
+
+// Kind is an enum with a stringer-style String (go generate's layout).
+type Kind int
+
+const _Kind_name = "TextImageTool"
+
+var _Kind_index = [...]uint8{0, 4, 9, 13}
+
+// String reads the names table: in range for 0..2, Kind(n) otherwise
+// (holds: the bounds check covers the table).
+func (i Kind) String() string {
+	if i < 0 || i >= Kind(len(_Kind_index)-1) {
+		return "Kind(" + strconv.FormatInt(int64(i), 10) + ")"
+	}
+	return _Kind_name[_Kind_index[i]:_Kind_index[i+1]]
+}
+
+// Label2 is the name of a kind, read off by one. Bug: Kind 2 reads past
+// the table.
+func Label2(k Kind) string {
+	if k < 0 || k > 2 {
+		return ""
+	}
+	return _Kind_name[_Kind_index[k+1]:_Kind_index[k+2]]
+}

@@ -108,6 +108,8 @@ inconclusive portable_group_nopanic
 confirmed portable_head_nopanic
 exhausted portable_initencoder_nopanic
 exhausted portable_intpart_nopanic
+exhausted portable_kind_string_nopanic
+confirmed portable_label2_nopanic
 confirmed portable_label_nopanic
 exhausted portable_meta_get_nopanic
 exhausted portable_meta_newsession_nopanic

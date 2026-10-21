@@ -274,7 +274,7 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 					// except instances of its generic functions.
 					// The generic helpers of package slices (ContainsFunc,
 					// IndexFunc) are plain loops over func values: modelled.
-					if (mainPaths[path] && !instance) || (isStdlib(path) && !(instance && path == "slices")) {
+					if (mainPaths[path] && !instance) || (isStdlib(path) && !(instance && path == "slices") && !modelledStdlib[path]) {
 						continue
 					}
 					if _, std := ir.StdlibOps[callee.String()]; std {
@@ -286,7 +286,13 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 					seen[callee] = true
 					count++
 					out[path] = append(out[path], callee)
-					visit(callee, depth+1)
+					if modelledStdlib[path] {
+						// Within a modelled standard-library package, every
+						// helper is needed (unescape calls ishex calls ...).
+						visit(callee, depth)
+					} else {
+						visit(callee, depth+1)
+					}
 				}
 			}
 		}
@@ -809,6 +815,13 @@ func invokedNames(sprog *ssa.Program) map[string]bool {
 
 // isStdlib says whether an import path belongs to the standard library
 // (no dot in its first element).
+// modelledStdlib lists standard-library packages whose functions are
+// modelled from their Go source under -deps, like any dependency, instead
+// of being unmodelled calls: their code only uses what the model covers.
+var modelledStdlib = map[string]bool{
+	"net/url": true,
+}
+
 func isStdlib(path string) bool {
 	first, _, _ := strings.Cut(path, "/")
 	return !strings.Contains(first, ".")
@@ -962,6 +975,230 @@ type progState struct {
 	json *jsonTable
 	// regexps caches packageRegexps.
 	regexps map[*ssa.Package][]string
+	// tables caches arrayTable; nil until first used.
+	tables map[*ssa.Global]ir.Val
+}
+
+// arrayTable is the value of a package-level array a lookup table: its
+// initializer sets elements with constant indices to constants (var
+// table = [256]encoding{'a': ..., ...}), and everything else only reads
+// elements (*&table[i]). Such reads are indexes into the constant array.
+func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
+	if s.tables == nil {
+		s.tables = map[*ssa.Global]ir.Val{}
+		elems := map[*ssa.Global]map[int64]*ssa.Const{}
+		bad := map[*ssa.Global]bool{}
+		for f := range ssautil.AllFunctions(s.sprog) {
+			pkgInit := f.Name() == "init" && f.Synthetic != ""
+			for _, b := range f.Blocks {
+				for _, in := range b.Instrs {
+					for _, op := range in.Operands(nil) {
+						g, ok := (*op).(*ssa.Global)
+						if !ok {
+							continue
+						}
+						if st, ok := in.(*ssa.Store); ok && pkgInit && st.Addr == g {
+							// var table = [N]T{...}: the literal is built in a
+							// local array, element by element, then stored.
+							es, ok := localArrayLit(st.Val)
+							if !ok || elems[g] != nil {
+								bad[g] = true
+								continue
+							}
+							elems[g] = es
+							continue
+						}
+						ia, ok := in.(*ssa.IndexAddr)
+						if !ok || ia.X != g {
+							bad[g] = true
+							continue
+						}
+						for _, r := range *ia.Referrers() {
+							switch r := r.(type) {
+							case *ssa.UnOp:
+								if r.Op != token.MUL {
+									bad[g] = true
+								}
+							case *ssa.Store:
+								k, kok := ia.Index.(*ssa.Const)
+								v, vok := r.Val.(*ssa.Const)
+								if !pkgInit || r.Addr != ia || !kok || !vok || k.Value == nil {
+									bad[g] = true
+									continue
+								}
+								i, ok := constant.Int64Val(k.Value)
+								if !ok {
+									bad[g] = true
+									continue
+								}
+								if elems[g] == nil {
+									elems[g] = map[int64]*ssa.Const{}
+								}
+								elems[g][i] = v
+							default:
+								bad[g] = true
+							}
+						}
+					}
+				}
+			}
+		}
+		for g, es := range elems {
+			if bad[g] {
+				continue
+			}
+			arr, ok := g.Type().(*types.Pointer).Elem().Underlying().(*types.Array)
+			if !ok {
+				continue
+			}
+			zero, ok := zeroVal(arr.Elem())
+			if !ok || arr.Len() > 4096 {
+				continue
+			}
+			vals := make([]ir.Val, arr.Len())
+			for i := range vals {
+				vals[i] = zero
+			}
+			okAll := true
+			for i, c := range es {
+				v, err := constVal(c)
+				if err != nil || i < 0 || i >= arr.Len() {
+					okAll = false
+					break
+				}
+				vals[i] = v
+			}
+			if okAll {
+				s.tables[g] = ir.ArrVal{Elems: vals}
+			}
+		}
+	}
+	v, ok := s.tables[g]
+	return v, ok
+}
+
+// localArrayLit reads an array composite literal go/ssa built in a local
+// array: v loads an Alloc whose only other uses are stores of constants
+// at constant indices. It returns those elements.
+func localArrayLit(v ssa.Value) (map[int64]*ssa.Const, bool) {
+	u, ok := v.(*ssa.UnOp)
+	if !ok || u.Op != token.MUL {
+		return nil, false
+	}
+	a, ok := u.X.(*ssa.Alloc)
+	if !ok {
+		return nil, false
+	}
+	es := map[int64]*ssa.Const{}
+	for _, r := range *a.Referrers() {
+		if r == u {
+			continue
+		}
+		ia, ok := r.(*ssa.IndexAddr)
+		if !ok || ia.X != a {
+			return nil, false
+		}
+		k, ok := ia.Index.(*ssa.Const)
+		if !ok || k.Value == nil {
+			return nil, false
+		}
+		i, ok := constant.Int64Val(k.Value)
+		if !ok {
+			return nil, false
+		}
+		for _, rr := range *ia.Referrers() {
+			st, ok := rr.(*ssa.Store)
+			c, cok := st.Val.(*ssa.Const)
+			if !ok || st.Addr != ia || !cok {
+				return nil, false
+			}
+			es[i] = c
+		}
+	}
+	return es, true
+}
+
+// kindTable lists the reflect.Kind of each type an interface value the
+// model holds can carry: the types modelled code boxes, and those the
+// search and the JSON model put in an any (string, bool, int, float64,
+// map[string]any, []any).
+func (s *progState) kindTable() [][2]uint32 {
+	empty := types.NewInterfaceType(nil, nil)
+	ts := append([]types.Type{types.Typ[types.String], types.Typ[types.Bool], types.Typ[types.Int], types.Typ[types.Float64],
+		types.NewMap(types.Typ[types.String], empty), types.NewSlice(empty)}, s.boxed...)
+	var out [][2]uint32
+	seen := map[uint32]bool{}
+	for _, t := range ts {
+		tag := typeTag(t)
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, [2]uint32{tag, uint32(reflectKindOf(t))})
+	}
+	return out
+}
+
+// reflectKindOf is the reflect.Kind of t (reflect's numbering).
+func reflectKindOf(t types.Type) int {
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		switch u.Kind() {
+		case types.Bool:
+			return 1
+		case types.Int:
+			return 2
+		case types.Int8:
+			return 3
+		case types.Int16:
+			return 4
+		case types.Int32:
+			return 5
+		case types.Int64:
+			return 6
+		case types.Uint:
+			return 7
+		case types.Uint8:
+			return 8
+		case types.Uint16:
+			return 9
+		case types.Uint32:
+			return 10
+		case types.Uint64:
+			return 11
+		case types.Uintptr:
+			return 12
+		case types.Float32:
+			return 13
+		case types.Float64:
+			return 14
+		case types.Complex64:
+			return 15
+		case types.Complex128:
+			return 16
+		case types.String:
+			return 24
+		case types.UnsafePointer:
+			return 26
+		}
+	case *types.Array:
+		return 17
+	case *types.Chan:
+		return 18
+	case *types.Signature:
+		return 19
+	case *types.Interface:
+		return 20
+	case *types.Map:
+		return 21
+	case *types.Pointer:
+		return 22
+	case *types.Slice:
+		return 23
+	case *types.Struct:
+		return 25
+	}
+	return 0
 }
 
 // maxImplementers bounds the boxed types an interface assertion or a
@@ -1574,6 +1811,11 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.ChangeType:
 		return t.conv(x, x.X)
 	case *ssa.IndexAddr:
+		if g, ok := x.X.(*ssa.Global); ok {
+			if _, ok := t.prog.arrayTable(g); ok {
+				return nil // read through by the load (unop)
+			}
+		}
 		if !isSlice(x.X.Type()) && !isPointerToArray(x.X.Type()) {
 			return fmt.Errorf("index into non-slice type %s", x.X.Type())
 		}
@@ -1920,6 +2162,20 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
+		if ia, ok := x.X.(*ssa.IndexAddr); ok {
+			if g, ok := ia.X.(*ssa.Global); ok {
+				if tbl, ok := t.prog.arrayTable(g); ok {
+					a := t.fresh()
+					t.emit(ir.Instr{Dst: a, Op: ir.Const{V: tbl}})
+					i, err := t.val(ia.Index)
+					if err != nil {
+						return err
+					}
+					t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("arrIndex"), Args: []ir.Var{a, i}})
+					return nil
+				}
+			}
+		}
 		if t.intoHandle(x.X) {
 			// A handle is opaque: what its fields hold is havoc.
 			return t.havoc(x, "load "+x.X.Name()+" through a handle", "opaque-handle", "")
@@ -2295,6 +2551,14 @@ func (t *fnState) call(x *ssa.Call) error {
 		if done, err := t.jsonDecode(x); done || err != nil {
 			return err
 		}
+	}
+	if callee != nil && (callee.String() == "(reflect.Value).Kind" || callee.String() == "(reflect.Value).IsNil") && len(x.Call.Args) == 1 {
+		v, err := t.val(x.Call.Args[0])
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.ReflectKind{Table: t.prog.kindTable(), IsNil: callee.Name() == "IsNil"}, Args: []ir.Var{v}})
+		return nil
 	}
 	if callee != nil && callee.String() == "errors.Is" && len(x.Call.Args) == 2 {
 		if s, ok := sentinelErr(x.Call.Args[1]); ok {

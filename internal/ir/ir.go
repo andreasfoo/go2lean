@@ -141,6 +141,25 @@ type ReIn struct{ IDs []string }
 
 func (o ReIn) Lean() string { return "(.reIn [" + strings.Join(o.IDs, ", ") + "])" }
 
+// ReflectKind is reflectKind, or reflectIsNil when IsNil: the reflect.Kind
+// of each type tag the value may carry.
+type ReflectKind struct {
+	Table [][2]uint32
+	IsNil bool
+}
+
+func (o ReflectKind) Lean() string {
+	parts := make([]string, len(o.Table))
+	for i, e := range o.Table {
+		parts[i] = fmt.Sprintf("(%d, %d)", e[0], e[1])
+	}
+	name := "reflectKind"
+	if o.IsNil {
+		name = "reflectIsNil"
+	}
+	return fmt.Sprintf("(.%s [%s])", name, strings.Join(parts, ", "))
+}
+
 // ErrTagKnown is errTagKnown: is this error nil or boxed with Tag?
 type ErrTagKnown struct{ Tag uint32 }
 
@@ -360,6 +379,9 @@ var StdlibOps = map[string]Op{
 	"strconv.Atoi":                   Simple("strAtoi"),
 	"strconv.Itoa":                   Simple("strItoa"),
 	"encoding/json.Valid":            Simple("jsonValid"),
+	"unicode/utf16.Encode":           Simple("utf16Encode"),
+	"strings.Cut":                    Simple("strCut"),
+	"strings.LastIndexByte":          Simple("strLastIndexByte"),
 	"strconv.ParseInt":               Simple("strParseInt"),
 	"strconv.ParseUint":              Simple("strParseUint"),
 	"strconv.ParseBool":              Simple("strParseBool"),

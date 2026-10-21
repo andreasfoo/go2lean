@@ -158,6 +158,7 @@ memory).
 | Go | model | status |
 |---|---|---|
 | a variable nothing writes after init, initialised to a constant or a function | its value | exact (writes from `…ForTest` helpers ignored) |
+| an array its initializer fills with constants and nothing else writes, read by element (`var table = [256]encoding{...}`, a stringer's `_X_index`) | the constant array; `table[i]` indexes it (out of range panics, as in Go) | exact |
 | a variable initialised to a constant expression over constants and such variables (`var mb = kb * 1024`) | its value, folded at compile time | exact (an expression that would wrap or divide by zero is not folded: havoc) |
 | a zero-valued variable no function writes | the zero value | exact |
 | any other load | havoc (a confirmed panic whose run read one carries the verdict note `reads_unknown_state`, naming it: the program may initialise it first) | havoc |
@@ -200,6 +201,10 @@ Calls not listed here are unmodelled (§4.6).
 | `encoding/json.Unmarshal` into structs and the types above | exact for the same types (exact key then case-insensitive match, unknown keys ignored, type errors reported while decoding goes on, maps merged, nil pointers allocated); `json.RawMessage` and all raw text are the input's own bytes (a byte-level scan gives each value's source); integers take Go's literal syntax only (`1e2`, `1.0` are errors); duplicate keys: stuck. SDK types decode by the SDKs' apijson rules: exact keys only, null leaves a member unchanged (an Opt becomes null), pointers and maps decoded afresh, metadata with raw text, per-member `respjson.Field` (null or valid) and `ExtraFields` (invalid unless null, as apijson has no decoder for them); a member that does not decode (apijson would coerce or mark it invalid), an SDK struct from a non-object, and union variants decoded from the whole value, members no field reads in an SDK type with metadata or typed `ExtraFields`: stuck |
 | `encoding/hex.EncodeToString` | exact |
 | `reflect.ValueOf`, `(reflect.Value).IsZero` | §4.5 |
+| `(reflect.Value).Kind`, `IsNil` | exact for the types modelled code boxes and the ones the search and the JSON model put in an `any` (the frontend lists each tag's kind); `IsNil` panics for kinds that cannot be nil, as Go does; any other type: stuck. Checked by `PKG=testdata/miscdiff` |
+| `unicode/utf16.Encode` | exact (surrogate pairs; invalid runes and surrogates become U+FFFD); checked by `PKG=testdata/miscdiff` |
+| `strings.Cut`, `strings.LastIndexByte` | exact |
+| `net/url` | translated from its Go source under `-deps` (the standard-library packages listed in `modelledStdlib`), like a dependency: `url.Parse`, `Hostname`, `Port`, `Query` and the rest are the library's own code. Not modelled inside it: IPv6 literals (`netip.ParseAddr`) and the `urlstrictcolons` GODEBUG setting (a host with two colons), both havoc. Checked by `DEPS=1 PKG=testdata/urldiff` (90 same, 0 different) |
 | `github.com/google/uuid.New` | a fresh value distinct from every other in the run (real UUIDs collide with negligible probability) |
 | `time.Now` and other clocks, `os.Getenv`, I/O, network | havoc |
 

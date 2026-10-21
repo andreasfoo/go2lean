@@ -297,6 +297,13 @@ inductive Op where
   | strToRunes
   /-- `string(rs)` for a slice of runes. -/
   | runesToStr
+  /-- unicode/utf16.Encode: []rune to []uint16 (surrogate pairs above
+  U+FFFF; invalid runes and surrogates become U+FFFD) -/
+  | utf16Encode
+  /-- strings.Cut: `(before, after, found)` -/
+  | strCut
+  /-- strings.LastIndexByte -/
+  | strLastIndexByte
   /-- `string(r)` for one rune. -/
   | runeToStr
   /-- One step of `for i, r := range s`: the argument points at a heap cell
@@ -342,6 +349,13 @@ inductive Op where
   | reflectOf
   /-- `reflect.ValueOf(x).IsZero()` on a value the program boxed. -/
   | reflectIsZero
+  /-- (reflect.Value).Kind: the kind of the reflected value's dynamic type,
+  looked up by its tag (`(tag, kind)` pairs the frontend lists); the nil
+  interface gives Invalid (0). An unknown tag gets the model stuck. -/
+  | reflectKind (kinds : List (Nat × Nat))
+  /-- (reflect.Value).IsNil, with the same table: Go's answer for the kinds
+  that can be nil, a panic for the others (and for Invalid). -/
+  | reflectIsNil (kinds : List (Nat × Nat))
   /-- An array of `n` bytes distinct from every other `freshArr` value of
   the run (a random UUID): the bytes spell the heap size, which the op
   grows by one. -/
@@ -902,6 +916,29 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | .opaqueNil => .ok .opaqueNil
     | _ => .ok .unit
   | .reflectOf, [x] => .ok x
+  | .reflectKind kinds, [x] =>
+    match x with
+    | .opaqueNil => .ok (.int 64 0#64)
+    | .boxed t _ =>
+      match kinds.lookup t with
+      | some k => .ok (.int 64 (BitVec.ofNat 64 k))
+      | none => .panic .modelStuck
+    | _ => .panic .modelStuck
+  | .reflectIsNil kinds, [x] =>
+    match x with
+    | .boxed t v =>
+      match kinds.lookup t with
+      | some k =>
+        -- Chan, Func, Interface, Map, Pointer, Slice, UnsafePointer
+        if [18, 19, 20, 21, 22, 23, 26].contains k then
+          match v with
+          | .ptr 0 _ | .slice 0 .. | .opaqueNil => .ok (.bool true)
+          | .unit => .panic .modelStuck
+          | _ => .ok (.bool false)
+        else .panic .explicit
+      | none => .panic .modelStuck
+    | .opaqueNil => .panic .explicit -- IsNil on the zero Value
+    | _ => .panic .modelStuck
   | .reflectIsZero, [.boxed _ v] =>
     match isZeroVal v with | some b => .ok (.bool b) | none => .panic .modelStuck
   | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
@@ -1086,6 +1123,20 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .strIndexByte, [s, .int _ b] =>
     match strBytes heap s with
     | some x => .ok (.int 64 (match listIndexOf x [b.toNat % 256] with | some i => BitVec.ofNat 64 i | none => -1#64))
+    | none => .panic .modelStuck
+  | .strCut, [s, p] =>
+    match s, strBytes heap s, strBytes heap p with
+    | .str ref off len, some x, some y =>
+      match listIndexOf x y with
+      | some i =>
+        let i' := BitVec.ofNat 64 i
+        let skip := BitVec.ofNat 64 (i + y.length)
+        .ok (.tuple [.str ref off i', .str ref (off + skip) (len - skip), .bool true])
+      | none => .ok (.tuple [s, .str 0 0#64 0#64, .bool false])
+    | _, _, _ => .panic .modelStuck
+  | .strLastIndexByte, [s, .int _ b] =>
+    match strBytes heap s with
+    | some x => .ok (.int 64 (match (allIndexOf x [b.toNat % 256]).getLast? with | some i => BitVec.ofNat 64 i | none => -1#64))
     | none => .panic .modelStuck
   | .strLastIndex, [s, p] =>
     match strBytes heap s, strBytes heap p with
@@ -2436,6 +2487,23 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | none => .panic .modelStuck
     | none => .panic .modelStuck
   | .runeToStr, [.int _ v] => .ok (strAlloc heap (encodeRune v.toNat))
+  | .utf16Encode, [rs] =>
+    match sliceElems heap rs with
+    | some es =>
+      match es.mapM (fun | .int _ v => some v.toInt | _ => none) with
+      | some rs =>
+        let units := rs.flatMap fun r =>
+          if (0 ≤ r && r < 0xD800) || (0xE000 ≤ r && r < 0x10000) then [r.toNat]
+          else if 0x10000 ≤ r && r ≤ 0x10FFFF then
+            let r' := r.toNat - 0x10000
+            [0xD800 + r' / 0x400, 0xDC00 + r' % 0x400]
+          else [0xFFFD]
+        let (p, heap) := heapAlloc heap (.arr (units.map fun u => .int 16 (BitVec.ofNat 16 u)))
+        match p with
+        | .ptr ref _ => .ok (.slice ref 0#64 (BitVec.ofNat 64 units.length) (BitVec.ofNat 64 units.length), heap)
+        | _ => .panic .modelStuck
+      | none => .panic .modelStuck
+    | none => .panic .modelStuck
   | .strNext, [p] =>
     match heapLoad heap p with
     | .ok (.tuple [s, .int _ pos]) =>
