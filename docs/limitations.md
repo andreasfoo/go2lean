@@ -122,13 +122,15 @@ specs that then run in the user's repository.
 Since 2026-10-21 (`internal/sandbox`): the harness joins the package
 through `go test -overlay` (nothing is written into the package), the test
 binary is built with `-c` and runs in a fresh copy of the package
-directory under `prlimit` (8 GB address space, 300 s CPU, 256 MB files,
-10 min wall clock, process group killed on timeout). Where user namespaces
-are available (`unshare -r`), the run also has no network and every mount
-is read-only except that copy. Otherwise go2lean says so on stderr;
-`GO2LEAN_SANDBOX=off` disables the sandbox. The C and TinyGo replays use
-the same runner (ASan runs without the address-space limit). The build
-step itself (`go test -c`) still runs the module's code generators and cgo
+directory under [bubblewrap](https://github.com/containers/bubblewrap)
+(`bwrap`, the unprivileged sandbox Flatpak uses: the file system read-only
+except that copy, a private `/tmp`, no network, its own PID namespace,
+killed with go2lean) and `prlimit` (8 GB address space, 300 s CPU, 256 MB
+files, 10 min wall clock). Without a usable `bwrap` (not installed, or
+user namespaces disabled) only the limits apply and go2lean says so on
+stderr; `GO2LEAN_SANDBOX=off` disables the sandbox. The C and TinyGo
+replays use the same runner (ASan runs without the address-space limit).
+The build step itself (`go test -c`) still runs cgo and the toolchain
 outside the sandbox, as any build does. Not covered: the `agent`
 subcommand's own LLM calls, and the M2 search, which runs only the
 generated Lean model.

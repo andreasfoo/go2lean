@@ -9,7 +9,7 @@ import (
 )
 
 func TestRunIsolation(t *testing.T) {
-	if Mode() != ModeNamespaces {
+	if Mode() != ModeBwrap {
 		t.Skipf("sandbox mode %s", Mode())
 	}
 	dir := t.TempDir()

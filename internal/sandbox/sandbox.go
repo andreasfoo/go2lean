@@ -5,9 +5,11 @@
 // Generated tests are added to a package through `go test -overlay`, so
 // nothing is written into the package directory, and built with `-c`. The
 // binary then runs in a fresh copy of the package directory (its files and
-// testdata). Where user namespaces are available (`unshare -r`), the run has
-// no network and every mount is read-only except that copy; elsewhere only
-// the resource limits apply, and Mode says so.
+// testdata). Isolation is bubblewrap (`bwrap`, the unprivileged sandbox
+// Flatpak uses): the file system read-only except that copy, a private
+// /tmp, no network, its own PID namespace, killed with go2lean. Resource
+// limits are `prlimit`'s. Without bwrap only the limits apply, and Mode
+// says so.
 package sandbox
 
 import (
@@ -40,12 +42,11 @@ type Limits struct {
 var Default = Limits{MemBytes: 8 << 30, CPUSeconds: 300, FileBytes: 256 << 20, Wall: 10 * time.Minute}
 
 const (
-	// ModeNamespaces: no network, read-only file system except the run's
-	// copy of the package, resource limits.
-	ModeNamespaces = "namespaces"
-	// ModeLimits: resource limits only (no user namespaces here).
+	// ModeBwrap: bubblewrap isolation and resource limits.
+	ModeBwrap = "bwrap"
+	// ModeLimits: resource limits only (no usable bwrap here).
 	ModeLimits = "rlimits"
-	// ModeNone: GO2LEAN_SANDBOX=off, or neither tool is installed.
+	// ModeNone: GO2LEAN_SANDBOX=off, or prlimit is not installed.
 	ModeNone = "none"
 )
 
@@ -58,8 +59,8 @@ var (
 func Mode() string {
 	modeOnce.Do(func() {
 		mode = detect()
-		if mode != ModeNamespaces {
-			fmt.Fprintf(os.Stderr, "go2lean: sandbox: %s (no user namespaces): generated tests can reach the network and the file system; run on a scratch clone\n", mode)
+		if mode != ModeBwrap {
+			fmt.Fprintf(os.Stderr, "go2lean: sandbox: %s (bwrap missing or not usable; install bubblewrap): generated tests can reach the network and the file system; run on a scratch clone\n", mode)
 		}
 	})
 	return mode
@@ -72,30 +73,33 @@ func detect() string {
 	if _, err := exec.LookPath("prlimit"); err != nil {
 		return ModeNone
 	}
-	if _, err := exec.LookPath("unshare"); err != nil {
+	if _, err := exec.LookPath("bwrap"); err != nil {
 		return ModeLimits
 	}
-	w, err := os.MkdirTemp("", "go2lean-sbx-probe-")
-	if err != nil {
+	// bwrap needs user namespaces, which some kernels and containers
+	// disable.
+	if exec.Command("bwrap", "--ro-bind", "/", "/", "--unshare-all", "--die-with-parent", "true").Run() != nil {
 		return ModeLimits
 	}
-	defer os.RemoveAll(w)
-	cmd := exec.Command("unshare", "-r", "-n", "-m", "--propagation", "private", "sh", "-c", script, "sh", w, "true")
-	if cmd.Run() != nil {
-		return ModeLimits
-	}
-	return ModeNamespaces
+	return ModeBwrap
 }
 
-// script runs inside the new namespaces: keep the work directory writable,
-// make every other mount read-only, then run the command from the copy.
-const script = `w=$1; shift
-mount --bind "$w" "$w" || exit 125
-awk '{print $2}' /proc/self/mounts | while read -r m; do
-  case "$m" in /proc|/proc/*|/sys|/sys/*|/dev|/dev/*|"$w") ;; *) mount -o remount,bind,ro "$m" 2>/dev/null ;; esac
-done
-mkdir -p "$w/pkg" && cd "$w/pkg" || exit 125
-exec "$@"`
+// bwrapArgs isolates a run: everything read-only, a private /tmp, the work
+// directory w writable, the binary's directory visible, no network.
+func bwrapArgs(w, bin string) []string {
+	return []string{
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--proc", "/proc",
+		"--tmpfs", "/tmp",
+		"--ro-bind", filepath.Dir(bin), filepath.Dir(bin),
+		"--bind", w, w,
+		"--chdir", filepath.Join(w, "pkg"),
+		"--unshare-all",
+		"--die-with-parent",
+		"--new-session",
+	}
+}
 
 // BuildTest compiles pkg's tests plus the given files (base name to
 // source, placed in pkgDir through an overlay) into the binary out. The
@@ -164,8 +168,8 @@ func Run(bin, dir string, args, env []string, lim Limits) (stdout, stderr string
 	defer cancel()
 	var cmd *exec.Cmd
 	switch Mode() {
-	case ModeNamespaces:
-		cmd = exec.CommandContext(ctx, "unshare", append([]string{"-r", "-n", "-m", "--propagation", "private", "sh", "-c", script, "sh", w}, limited...)...)
+	case ModeBwrap:
+		cmd = exec.CommandContext(ctx, "bwrap", append(append(bwrapArgs(w, bin), "--"), limited...)...)
 	case ModeLimits:
 		cmd = exec.CommandContext(ctx, limited[0], limited[1:]...)
 		cmd.Dir = filepath.Join(w, "pkg")

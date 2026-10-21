@@ -566,9 +566,9 @@ is violated".
 All counterexamples of a package go into one test file, added to the
 package through `go test -c -overlay` (nothing is written into the
 package; the package's tests compile once), and the test binary runs in
-the sandbox (`internal/sandbox`: a copy of the package directory,
-resource limits, and where user namespaces exist no network and a
-read-only file system; see docs/limitations.md §6). Results are mapped
+the sandbox (`internal/sandbox`: a copy of the package directory under
+bubblewrap and `prlimit`: read-only file system, no network, resource
+limits; see docs/limitations.md §6). Results are mapped
 back by test name, and a batch that does not compile falls back to one
 run per test. Each PoC directory still holds a standalone file, run with
 plain `go test`. (`tinygo test` for `crosscheck` properties,

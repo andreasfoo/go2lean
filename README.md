@@ -17,13 +17,16 @@ and roadmap are in [docs/design.md](docs/design.md); the Go semantics
 modelled (and how faithfully) are listed in [docs/semantics.md](docs/semantics.md).
 What it does not deliver yet (no proofs in the pipeline; certificates are
 bounded searches the Lean kernel does not check; findings are not ranked by
-reachability; evidence from one codebase; no sandbox for M3) is in
+reachability; evidence from one codebase) is in
 [docs/limitations.md](docs/limitations.md).
 
 ## Quick start
 
 Requirements: Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
 toolchain pinned in `lean/lean-toolchain` is fetched on the first build.
+Recommended: [bubblewrap](https://github.com/containers/bubblewrap)
+(`apt install bubblewrap`), which isolates the replayed tests (M3); without
+it they run with resource limits only.
 
 ```sh
 go run ./cmd/go2lean run ./examples/overflow
