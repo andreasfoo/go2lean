@@ -437,6 +437,11 @@ inductive Op where
   /-- `json.Marshal(v)` for `v` described by entry `root` of `t`; yields
   `(bytes, error)`. -/
   | jsonMarshal (t : JTable) (root : Nat)
+  /-- `(*json.Encoder).Encode(v)` for an encoder writing to a
+  `strings.Builder`: args `[builder, v]`, `v` described by entry `root`;
+  `html` is the encoder's `SetEscapeHTML` setting. Appends the JSON and a
+  newline to the builder; yields the error. -/
+  | jsonEncodeTo (t : JTable) (root : Nat) (html : Bool)
   /-- `json.Unmarshal(data, p)` for `*p` described by entry `root` of `t`;
   args `[data, p]`, yields the error. -/
   | jsonDecode (t : JTable) (root : Nat)
@@ -1564,6 +1569,16 @@ def htmlEscape : List Nat → List Nat
   | b :: bs => b :: htmlEscape bs
   | [] => []
 
+/-- Undoes `htmlEscape` of `<`, `>` and `&` on encoded JSON: the output of
+an encoder with `SetEscapeHTML(false)` (U+2028 and U+2029 stay escaped). -/
+def htmlUnescape : List Nat → List Nat
+  | 92 :: 117 :: 48 :: 48 :: 51 :: 99 :: bs => 60 :: htmlUnescape bs
+  | 92 :: 117 :: 48 :: 48 :: 51 :: 101 :: bs => 62 :: htmlUnescape bs
+  | 92 :: 117 :: 48 :: 48 :: 50 :: 54 :: bs => 38 :: htmlUnescape bs
+  | 92 :: b :: bs => 92 :: b :: htmlUnescape bs
+  | b :: bs => b :: htmlUnescape bs
+  | [] => []
+
 /-- `omitzero`, and whether an SDK union variant is set (`param.IsOmitted`):
 is `v` the zero value of entry `d`? A `param.Opt` is zero when omitted with
 a zero value; the SDKs set `Value` only together with the status, so an
@@ -2349,6 +2364,23 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
       | .ptr ref _ => .ok (.tuple [.slice ref 0#64 (BitVec.ofNat 64 bs.length) (BitVec.ofNat 64 bs.length), .err false], heap)
       | _ => .panic .modelStuck
     | .error true => .ok (.tuple [.slice 0 0#64 0#64 0#64, .err true], heap)
+    | .error false => .panic .modelStuck
+  | .jsonEncodeTo t root html, [p, v] =>
+    match jEnc t heap root v with
+    | .ok bs =>
+      let bs := (if html then bs else htmlUnescape bs) ++ [10]
+      match heapLoad heap p with
+      | .ok cur =>
+        let old := match strBytes heap cur with | some x => x | none => []
+        if old.length + bs.length > strLimit then .panic .modelStuck else
+        let (s, heap) := strAlloc heap (old ++ bs)
+        match heapStore heap p s with
+        | .ok heap => .ok (.err false, heap)
+        | .panic k => .panic k
+        | .outOfFuel => .outOfFuel
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .error true => .ok (.err true, heap)
     | .error false => .panic .modelStuck
   | .jsonValid, [.slice ref off len _] =>
     match strBytes heap (.str ref off len) with

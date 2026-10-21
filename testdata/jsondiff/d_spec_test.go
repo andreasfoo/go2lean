@@ -55,3 +55,9 @@ func SpecDecode64Diff(s string, ret string) bool {
 	go2leanProbe("b64", ret)
 	return false
 }
+
+// go2lean:spec EncodeStream
+func SpecEncodeStreamDiff(s string, d Doc, ret string) bool {
+	go2leanProbe("enc", ret)
+	return false
+}

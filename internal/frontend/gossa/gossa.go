@@ -2623,6 +2623,11 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil && callee.String() == "encoding/json.Marshal" && len(x.Call.Args) == 1 {
 		return t.jsonMarshal(x)
 	}
+	if callee != nil {
+		if done, err := t.jsonEncoder(x, callee); done || err != nil {
+			return err
+		}
+	}
 	if callee != nil && len(x.Call.Args) == 2 {
 		// DecodeString and EncodeToString of the four encodings package
 		// base64 defines (others, from NewEncoding, stay unmodelled).
@@ -2942,6 +2947,129 @@ func (t *fnState) jsonMarshal(x *ssa.Call) error {
 	t.emit(ir.Instr{Dst: t.def(x), Op: ir.JSONMarshal{Root: t.prog.json.desc(ty)}, Args: []ir.Var{v}})
 	t.out.UsesJSON = true
 	return nil
+}
+
+// jsonEncoder lowers a json.Encoder that writes to a strings.Builder and
+// is used only for SetEscapeHTML with a constant and Encode (the
+// encode-a-string idiom): NewEncoder(&b) stands for the builder's pointer,
+// SetEscapeHTML does nothing, and Encode appends the JSON to the builder.
+func (t *fnState) jsonEncoder(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.String() {
+	case "encoding/json.NewEncoder":
+		b, _, ok := builderEncoder(x)
+		if !ok {
+			return false, nil
+		}
+		p, err := t.val(b)
+		if err != nil {
+			return true, err
+		}
+		t.vars[x] = p
+		return true, nil
+	case "(*encoding/json.Encoder).SetEscapeHTML":
+		nc, ok := x.Call.Args[0].(*ssa.Call)
+		if !ok {
+			return false, nil
+		}
+		_, _, ok = builderEncoder(nc)
+		return ok, nil
+	case "(*encoding/json.Encoder).Encode":
+		nc, ok := x.Call.Args[0].(*ssa.Call)
+		if !ok {
+			return false, nil
+		}
+		b, html, ok := builderEncoder(nc)
+		if !ok {
+			return false, nil
+		}
+		arg := x.Call.Args[1]
+		ty := arg.Type()
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			arg, ty = mi.X, mi.X.Type()
+		}
+		p, err := t.val(b)
+		if err != nil {
+			return true, err
+		}
+		v, err := t.val(arg)
+		if err != nil {
+			return true, err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.JSONEncode{Root: t.prog.json.desc(ty), HTML: html}, Args: []ir.Var{p, v}})
+		t.out.UsesJSON = true
+		return true, nil
+	}
+	return false, nil
+}
+
+// builderEncoder says whether nc is json.NewEncoder(&b) for a
+// strings.Builder b whose result only SetEscapeHTML(constant) and Encode
+// use, and returns &b and the HTML escaping its Encode calls get (Go's
+// default, true, unless every SetEscapeHTML call says false).
+func builderEncoder(nc *ssa.Call) (ssa.Value, bool, bool) {
+	f := nc.Call.StaticCallee()
+	if f == nil || f.String() != "encoding/json.NewEncoder" || len(nc.Call.Args) != 1 {
+		return nil, false, false
+	}
+	mi, ok := nc.Call.Args[0].(*ssa.MakeInterface)
+	if !ok {
+		return nil, false, false
+	}
+	pt, ok := mi.X.Type().(*types.Pointer)
+	if !ok || !isStringsBuilder(pt.Elem()) {
+		return nil, false, false
+	}
+	html, set := true, false
+	var sets, encodes []*ssa.Call
+	for _, r := range *nc.Referrers() {
+		c, ok := r.(*ssa.Call)
+		if !ok || len(c.Call.Args) == 0 || c.Call.Args[0] != nc || c.Call.StaticCallee() == nil {
+			return nil, false, false
+		}
+		switch c.Call.StaticCallee().String() {
+		case "(*encoding/json.Encoder).Encode":
+			encodes = append(encodes, c)
+		case "(*encoding/json.Encoder).SetEscapeHTML":
+			sets = append(sets, c)
+			k, ok := c.Call.Args[1].(*ssa.Const)
+			if !ok || k.Value == nil {
+				return nil, false, false
+			}
+			v := constant.BoolVal(k.Value)
+			if set && v != html {
+				return nil, false, false
+			}
+			html, set = v, true
+		default:
+			return nil, false, false
+		}
+	}
+	// Every Encode must come after every SetEscapeHTML.
+	for _, st := range sets {
+		for _, e := range encodes {
+			if !precedes(st, e) {
+				return nil, false, false
+			}
+		}
+	}
+	return mi.X, html, true
+}
+
+// precedes says whether instruction a runs before b on every path to b:
+// earlier in the same block, or in a block that dominates b's.
+func precedes(a, b ssa.Instruction) bool {
+	if a.Block() != b.Block() {
+		return a.Block().Dominates(b.Block())
+	}
+	for _, in := range a.Block().Instrs {
+		switch in {
+		case a:
+			return true
+		case b:
+			return false
+		}
+	}
+	return false
 }
 
 // jsonDecode lowers json.Unmarshal(data, &v) for a v of any type by its JSON

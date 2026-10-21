@@ -7,6 +7,7 @@ package jsondiff
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -148,4 +149,18 @@ func DecodeCitations(s string) string {
 		out += "E"
 	}
 	return out
+}
+
+// EncodeStream encodes with json.Encoders into strings.Builders: a string
+// holding HTML characters, U+2028 and a literal `<`, and a Doc, with
+// HTML escaping off, then a string with the default escaping.
+func EncodeStream(s string, d Doc) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.Encode("<a&b> \\u003c" + s)
+	enc.Encode(d)
+	var c strings.Builder
+	json.NewEncoder(&c).Encode("<x>&" + s)
+	return b.String() + c.String()
 }

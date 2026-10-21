@@ -318,6 +318,18 @@ type JSONMarshal struct{ Root int }
 
 func (j JSONMarshal) Lean() string { return fmt.Sprintf("(.jsonMarshal jsonTable %d)", j.Root) }
 
+// JSONEncode is (*json.Encoder).Encode(v) for an encoder writing to a
+// strings.Builder: args [builder, v], v described by entry Root; HTML is
+// the encoder's SetEscapeHTML setting. Yields the error.
+type JSONEncode struct {
+	Root int
+	HTML bool
+}
+
+func (j JSONEncode) Lean() string {
+	return fmt.Sprintf("(.jsonEncodeTo jsonTable %d %t)", j.Root, j.HTML)
+}
+
 // JSONDecode is json.Unmarshal(data, p) into *p described by entry Root.
 type JSONDecode struct{ Root int }
 
