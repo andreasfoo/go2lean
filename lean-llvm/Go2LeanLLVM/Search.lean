@@ -75,7 +75,8 @@ def randInt (g : StdGen) (w : Nat) (extra : List Int := []) : Int × StdGen :=
     ((BitVec.ofNat w v).toInt, g)
 
 /-- Random arguments: buffers first (their lengths feed `len`). -/
-def genArgs (gens : List Gen) (g : StdGen) (extra : List Int := []) : List Arg × StdGen := Id.run do
+def genArgs (gens : List Gen) (g : StdGen) (extra : List Int := []) (strs : List (List Nat) := []) :
+    List Arg × StdGen := Id.run do
   let mut g := g
   let mut out : Array Arg := #[]
   for gen in gens do
@@ -84,6 +85,15 @@ def genArgs (gens : List Gen) (g : StdGen) (extra : List Int := []) : List Arg �
       let (v, g') := randInt g w extra
       g := g'; out := out.push (.int w v)
     | .buf _ eb maxLen =>
+      -- A byte buffer (a string): half the time one of the program's own
+      -- string constants, so that comparisons against them can succeed.
+      let pool := strs.filter (·.length ≤ maxLen)
+      let (k, g') := randNat g 0 1
+      g := g'
+      if eb == 1 && k == 0 && !pool.isEmpty then
+        let (i, g') := randNat g 0 (pool.length - 1)
+        g := g'; out := out.push (.buf 1 (pool[i]!.map Int.ofNat))
+        continue
       let (n, g') := randNat g 0 maxLen
       g := g'
       let mut es : Array Int := #[]
@@ -229,7 +239,12 @@ def report (gens : List Gen) (args : List Arg) (k : PanicKind) (s : HState Val)
     ("model_output", Json.mkObj [("res", "panic"), ("panic", k.tag)]),
     ("panic_at", (s.panicAt.map Json.str).getD Json.null),
     ("havoc", Json.arr (s.log.map fun (site, iter, v) =>
-      Json.mkObj [("idx", site), ("iter", iter), ("value", (repr v).pretty)]))]
+      Json.mkObj [("idx", site), ("iter", iter), ("value", (repr v).pretty)])),
+    ("assumptions", Json.arr (s.assumed.map Json.str))]
+
+/-- A run that read no havoc value and took no under-approximation: its
+counterexample is the model's own, not a guess about unmodelled code. -/
+def clean (s : HState Val) : Bool := s.log.isEmpty && s.assumed.isEmpty
 
 /-- Small values for exhaustive enumeration. -/
 def smallInts (w : Nat) (extra : List Int := []) : List Int :=
@@ -243,22 +258,24 @@ def tuples (xs : List α) : Nat → List (List α)
   | 0 => [[]]
   | n + 1 => xs.flatMap fun x => (tuples xs n).map (x :: ·)
 
-def genChoices (exLen : Nat) (extra : List Int := []) : Gen → List Arg
+def genChoices (exLen : Nat) (extra : List Int := []) (strs : List (List Nat) := []) : Gen → List Arg
   | .int _ w => (smallInts w extra).map (.int w)
   | .buf _ eb maxLen =>
-    (List.range (min exLen maxLen + 1)).flatMap fun n =>
-      (tuples [0, 1, -1] n).map (.buf eb)
+    (List.range (min exLen maxLen + 1)).flatMap (fun n =>
+      (tuples [0, 1, -1] n).map (.buf eb)) ++
+    (if eb == 1 then (strs.filter (·.length ≤ maxLen)).map fun s => .buf 1 (s.map Int.ofNat) else [])
   | .len _ w _ => [.int w 0]
   | .null _ => [.null]
   | .obj _ size _ => [.obj (List.replicate size 0)]
   | .agg _ t => [.val t.zero]
   | .zbuf _ eb maxLen => (List.range (min exLen maxLen + 1)).map (.zbuf eb)
 
-def domainSize (exLen : Nat) (gens : List Gen) (extra : List Int := []) : Nat :=
-  gens.foldl (fun acc g => acc * (genChoices exLen extra g).length) 1
+def domainSize (exLen : Nat) (gens : List Gen) (extra : List Int := []) (strs : List (List Nat) := []) : Nat :=
+  gens.foldl (fun acc g => acc * (genChoices exLen extra strs g).length) 1
 
-def enumArgs (exLen : Nat) (gens : List Gen) (extra : List Int := []) : List (List Arg) :=
-  let raw := gens.foldr (fun g acc => (genChoices exLen extra g).flatMap fun a => acc.map (a :: ·)) [[]]
+def enumArgs (exLen : Nat) (gens : List Gen) (extra : List Int := []) (strs : List (List Nat) := []) :
+    List (List Arg) :=
+  let raw := gens.foldr (fun g acc => (genChoices exLen extra strs g).flatMap fun a => acc.map (a :: ·)) [[]]
   raw.map fun args => (gens.zip args).map fun (gen, a) =>
     match gen with
     | .len _ w of => match args[of]? with
@@ -278,6 +295,8 @@ structure Spec where
   exhaustLimit : Nat := 300000
   /-- Constants of the program, tried as integer values. -/
   extra : List Int := []
+  /-- String constants of the program (bytes), tried as byte buffers. -/
+  strs : List (List Nat) := []
   /-- The package's initialisation function, run before each trial. -/
   init : Option FuncId := none
 
@@ -285,13 +304,20 @@ def search (p : Prog) (globals : List GlobalInit) (sp : Spec) : Json := Id.run d
   let mut stuck := 0
   let mut fuelOut := 0
   let mut sites : List (String × Nat) := []
+  -- The first counterexample that went through havoc or an assumption is
+  -- kept while the search looks for one that did not (as the Go line's
+  -- engines do), and reported, marked, only if none turns up.
+  let mut fallback : Option Json := none
   if sp.engine != "exhaustive" then
     let mut g := mkStdGen sp.seed
     for t in [0:sp.trials] do
-      let (args, g') := genArgs sp.gens g sp.extra
+      let (args, g') := genArgs sp.gens g sp.extra sp.strs
       g := g'
       match runOnce p globals sp.func args (sp.seed + t) sp.fuel sp.init with
-      | (.ub k, s) => return report sp.gens args k s t sp.seed "random"
+      | (.ub k, s) =>
+        let j := report sp.gens args k s t sp.seed "random"
+        if clean s then return j
+        if fallback.isNone then fallback := some j
       | (.stuck, s) =>
         stuck := stuck + 1
         let site := (s.stuck.getD "argument setup").take 120 |>.toString
@@ -300,23 +326,29 @@ def search (p : Prog) (globals : List GlobalInit) (sp : Spec) : Json := Id.run d
           | none => if sites.length < 20 then (site, 1) :: sites else sites
       | (.outOfFuel, _) => fuelOut := fuelOut + 1
       | _ => pure ()
-  let dom := domainSize sp.exhaustLen sp.gens sp.extra
+  let dom := domainSize sp.exhaustLen sp.gens sp.extra sp.strs
   let mut exhausted := false
   -- Under-approximations the exhaustive runs took (a callee the model got
   -- stuck in, whose effects are dropped).
   let mut assumed : Array String := #[]
   if sp.engine != "random" && dom ≤ sp.exhaustLimit then
     let mut i := 0
-    let mut clean := true
-    for args in enumArgs sp.exhaustLen sp.gens sp.extra do
+    let mut clean' := true
+    for args in enumArgs sp.exhaustLen sp.gens sp.extra sp.strs do
       match runOnce p globals sp.func args 0 sp.fuel sp.init with
-      | (.ub k, s) => return report sp.gens args k s i 0 "exhaustive"
+      | (.ub k, s) =>
+        let j := report sp.gens args k s i 0 "exhaustive"
+        if clean s then return j
+        if fallback.isNone then fallback := some j
+        clean' := false
       | (.holds, s) =>
         for a in s.assumed do
           if !assumed.contains a && assumed.size < 32 then assumed := assumed.push a
-      | _ => clean := false
+      | _ => clean' := false
       i := i + 1
-    exhausted := clean
+    exhausted := clean'
+  if let some j := fallback then
+    return j.setObjVal! "havoc_dependent" true
   let top := (sites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 3
   return Json.mkObj [("found", false), ("trials", sp.trials), ("stuck", stuck),
     ("out_of_fuel", fuelOut), ("domain", dom), ("exhausted", exhausted),
@@ -351,6 +383,8 @@ def specOfJson (j : Json) : Except String Spec := do
            engine := (j.getObjValAs? String "engine").toOption.getD "all",
            exhaustLen := opt "exhaustLen" 3, exhaustLimit := opt "exhaustLimit" 300000,
            extra := ((j.getObjValAs? (Array Int) "extra").toOption.getD #[]).toList,
+           strs := ((j.getObjValAs? (Array String) "strs").toOption.getD #[]).toList.map
+             fun s => s.toUTF8.toList.map (·.toNat),
            init := (j.getObjValAs? Nat "init").toOption }
 
 /-- The driver: `go2lean-llvm-search <spec.json>` with the spec naming a

@@ -321,15 +321,19 @@ func (t *fnState) val(v llvm.Value) int {
 		if i := t.l.global(v); i >= 0 {
 			if slices.Contains(t.l.partial, v.Name()) {
 				t.issue("global %s: initial value modelled in part (the rest is zero)", v.Name())
+				t.cur.instrs = append(t.cur.instrs, fmt.Sprintf(".assume %q", "global "+v.Name()+": initial value modelled in part (the rest is zero)"))
 			}
 			t.emit(d, fmt.Sprintf("(.global %d)", i))
 		} else {
 			t.issue("global %s: initializer not modelled", v.Name())
 			t.emit(d, fmt.Sprintf("(.unsupported %q)", "global "+v.Name()))
 		}
-	case !v.IsAConstantExpr().IsNil() && v.Opcode() == llvm.GetElementPtr && !v.Operand(0).IsAGlobalVariable().IsNil():
-		off, ok := t.l.constGEPOffset(v)
-		i := t.l.global(v.Operand(0))
+	case !v.IsAConstantExpr().IsNil() && v.Opcode() == llvm.GetElementPtr:
+		base, off, ok := t.l.constPtr(v)
+		i := -1
+		if ok {
+			i = t.l.global(base)
+		}
 		if !ok || i < 0 {
 			t.issue("constant %s not modelled", strings.TrimSpace(v.String()))
 			t.emit(d, `(.unsupported "constant getelementptr")`)
@@ -403,12 +407,41 @@ func bool2(b bool) string { return fmt.Sprint(b) }
 // referenced are the functions f calls directly or takes the address of.
 func referenced(f llvm.Value) []llvm.Value {
 	var out []llvm.Value
+	seen := map[llvm.Value]bool{}
 	for b := f.FirstBasicBlock(); !b.IsNil(); b = llvm.NextBasicBlock(b) {
 		for in := b.FirstInstruction(); !in.IsNil(); in = llvm.NextInstruction(in) {
 			for i := 0; i < in.OperandsCount(); i++ {
-				if op := in.Operand(i); !op.IsAFunction().IsNil() {
-					out = append(out, op)
-				}
+				out = constFuncs(in.Operand(i), seen, out)
+			}
+		}
+	}
+	return out
+}
+
+// constFuncs adds the functions a constant names: itself, the elements of
+// a constant aggregate or expression, and what a global's initializer holds
+// (a map TinyGo builds at compile time keeps its key-equality function
+// there).
+func constFuncs(v llvm.Value, seen map[llvm.Value]bool, out []llvm.Value) []llvm.Value {
+	if v.IsNil() || seen[v] || !v.IsConstant() {
+		return out
+	}
+	seen[v] = true
+	switch {
+	case !v.IsAFunction().IsNil():
+		return append(out, v)
+	case !v.IsAGlobalVariable().IsNil():
+		if init := v.Initializer(); !init.IsNil() {
+			out = constFuncs(init, seen, out)
+		}
+	case !v.IsAConstantExpr().IsNil():
+		for i := 0; i < v.OperandsCount(); i++ {
+			out = constFuncs(v.Operand(i), seen, out)
+		}
+	case isAgg(v.Type()) && !v.IsNull() && v.IsAUndefValue().IsNil():
+		if n := aggLen(v.Type()); n <= 4096 {
+			for i := 0; i < n; i++ {
+				out = constFuncs(aggElem(v, i), seen, out)
 			}
 		}
 	}
@@ -535,22 +568,36 @@ func (l *lowerer) constBytes(c llvm.Value, ty llvm.Type, g *globalInit, off int6
 	}
 	if !c.IsAConstantExpr().IsNil() && c.Opcode() == llvm.GetElementPtr {
 		// A pointer into a global: base global plus constant offset.
-		base := c.Operand(0)
-		if base.IsAGlobalVariable().IsNil() {
+		base, addend, ok := l.constPtr(c)
+		if !ok {
 			return false
 		}
 		j := l.global(base)
 		if j < 0 {
 			return false
 		}
-		addend, ok := l.constGEPOffset(c)
-		if !ok {
-			return false
-		}
 		g.relocs = append(g.relocs, [3]int64{off, int64(j), addend})
 		return true
 	}
 	return false
+}
+
+// constPtr resolves a constant pointer to the global it points into and
+// the byte offset, through nested constant getelementptrs (TinyGo writes a
+// type code as gep(gep(@type, -8), 8)).
+func (l *lowerer) constPtr(c llvm.Value) (llvm.Value, int64, bool) {
+	if !c.IsAGlobalVariable().IsNil() {
+		return c, 0, true
+	}
+	if c.IsAConstantExpr().IsNil() || c.Opcode() != llvm.GetElementPtr {
+		return llvm.Value{}, 0, false
+	}
+	base, off0, ok := l.constPtr(c.Operand(0))
+	if !ok {
+		return llvm.Value{}, 0, false
+	}
+	off, ok := l.constGEPOffset(c)
+	return base, off0 + off, ok
 }
 
 // constGEPOffset is the byte offset of a constant getelementptr.

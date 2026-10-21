@@ -33,6 +33,8 @@ type Options struct {
 	// Init is the model index of the function run before each trial (a Go
 	// package's initialisation), or -1.
 	Init int
+	// Strs are string constants of the program, tried as byte buffers.
+	Strs []string
 }
 
 // searchResult is the JSON line the search driver prints.
@@ -51,7 +53,10 @@ type searchResult struct {
 	Domain      float64               `json:"domain"`
 	Exhausted   bool                  `json:"exhausted"`
 	Assumptions []string              `json:"assumptions"`
-	StuckSites  map[string]int        `json:"stuck_sites"`
+	// HavocDependent: every counterexample found went through havoc or an
+	// assumption; this is the first.
+	HavocDependent bool           `json:"havoc_dependent"`
+	StuckSites     map[string]int `json:"stuck_sites"`
 }
 
 var nonIdent = regexp.MustCompile(`[^A-Za-z0-9_]`)
@@ -150,6 +155,9 @@ func search(leanDir, key string, fn llvmfe.Func, opts Options) (*searchResult, e
 	}
 	if opts.Init >= 0 {
 		spec["init"] = opts.Init
+	}
+	if len(opts.Strs) > 0 {
+		spec["strs"] = opts.Strs
 	}
 	b, err := json.Marshal(spec)
 	if err != nil {

@@ -2,6 +2,8 @@ package llvmhunt
 
 import (
 	"fmt"
+	"go/ast"
+	"go/token"
 	"go/types"
 	"io"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -44,7 +47,7 @@ func RunTinyGo(root string, ws contract.Workspace, moduleDir, pattern string, op
 	if err := ws.Init(); err != nil {
 		return nil, err
 	}
-	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedFiles, Dir: moduleDir}, pattern)
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedFiles | packages.NeedSyntax, Dir: moduleDir}, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +108,7 @@ func RunTinyGo(root string, ws contract.Workspace, moduleDir, pattern string, op
 	if f, ok := byName[pkg.PkgPath+".init"]; ok {
 		opts.Init = f.Index
 	}
+	opts.Strs = stringConsts(pkg)
 	var results []FuncResult
 	for _, name := range funcs {
 		fn, ok := byName[pkg.PkgPath+"."+name]
@@ -121,6 +125,9 @@ func RunTinyGo(root string, ws contract.Workspace, moduleDir, pattern string, op
 		switch {
 		case res.Found:
 			r.Status, r.Panic, r.Inputs, r.Memory = "panic", res.ModelOutput.Panic, res.Inputs, res.Memory
+			if res.HavocDependent {
+				r.Issues = append(r.Issues, "counterexample through havoc or an assumption: "+strings.Join(res.Assumptions, "; "))
+			}
 			r.Verdict = replayGo(moduleDir, pkg, name, sigs[name], r)
 		case res.Exhausted && len(res.Assumptions) > 0:
 			r.Status = "exhausted_assuming"
@@ -134,6 +141,9 @@ func RunTinyGo(root string, ws contract.Workspace, moduleDir, pattern string, op
 			r.Status = "holds"
 		}
 		fmt.Fprintf(log, "  %-24s %s %s %v %v %s\n", name, r.Status, r.Panic, r.Inputs, r.Memory, r.Verdict)
+		if res.HavocDependent {
+			fmt.Fprintf(log, "      through havoc or an assumption: %s\n", strings.Join(res.Assumptions, "; "))
+		}
 		for site, n := range r.StuckSites {
 			fmt.Fprintf(log, "      stuck %d× at %s\n", n, site)
 		}
@@ -307,6 +317,28 @@ func TestGo2LeanTinyGoReplay(t *testing.T) {
 		return "spurious"
 	}
 	return "not replayed (" + firstLine(text) + ")"
+}
+
+// stringConsts are the package's string literals (up to 32, at most 64
+// bytes each), as the Go line mines them: inputs equal to a constant the
+// code compares against are otherwise out of a random search's reach.
+func stringConsts(pkg *packages.Package) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range pkg.Syntax {
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING || len(out) >= 32 {
+				return true
+			}
+			if s, err := strconv.Unquote(lit.Value); err == nil && len(s) <= 64 && !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+			return true
+		})
+	}
+	return out
 }
 
 // panicKindOf classifies a Go runtime panic message.

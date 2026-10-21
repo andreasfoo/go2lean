@@ -46,6 +46,8 @@ func cmdTinyGo(args []string) error {
 		return nil
 	}
 	fmt.Println("== go/ssa line")
+	// Model dependency packages too, as TinyGo compiles the whole program.
+	env.Deps = true
 	results, err := pipeline.RunAll(w, env, o, os.Stdout, fs.Arg(0))
 	if err != nil {
 		return err
