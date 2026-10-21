@@ -10,10 +10,12 @@
 package llvm
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"tinygo.org/x/go-llvm"
@@ -31,6 +33,10 @@ type Gen struct {
 	EB     int    `json:"eb,omitempty"`
 	MaxLen int    `json:"maxLen,omitempty"`
 	Of     int    `json:"of"`
+	// Random: an object's bytes are random (it holds no pointers).
+	Random bool `json:"random,omitempty"`
+	// Ty is the type of an aggregate passed by value (k "agg").
+	Ty any `json:"ty,omitempty"`
 }
 
 // Func is one lowered function: its index in the model, how its
@@ -40,6 +46,9 @@ type Func struct {
 	Index  int
 	Gens   []Gen
 	Issues []string
+	// Consts are the integer constants of the function, which the search
+	// tries as values (a magic number guarding a branch).
+	Consts []int64
 }
 
 // Model is a lowered module: its functions and the Lean definitions.
@@ -52,6 +61,39 @@ type Model struct {
 
 // maxBuf bounds the elements of a generated buffer.
 const maxBuf = 8
+
+// Options say what to lower and how parameters are passed.
+type Options struct {
+	// Keep selects the functions to model (all defined functions when nil);
+	// a call to any other function is havoc.
+	Keep func(name string) bool
+	// GoABI reads parameters as TinyGo passes Go values: `x.data`, `x.len`,
+	// `x.cap` are a slice (a string has no cap), and the trailing `context`
+	// pointer is nil for a plain function.
+	GoABI bool
+	// Callees also lowers the functions the kept ones call or take the
+	// address of, transitively (up to maxCallees), so a call into the
+	// standard library or TinyGo's runtime runs its code instead of being
+	// havoc.
+	Callees bool
+}
+
+// maxCallees bounds the functions Options.Callees adds.
+const maxCallees = 400
+
+// panics are TinyGo's runtime panic helpers, by the core panic they raise.
+var panics = map[string]string{
+	"runtime.lookupPanic":              "indexOutOfRange",
+	"runtime.slicePanic":               "sliceBounds",
+	"runtime.sliceToArrayPointerPanic": "sliceBounds",
+	"runtime.unsafeSlicePanic":         "sliceBounds",
+	"runtime.nilPanic":                 "nilDereference",
+	"runtime.nilMapPanic":              "nilMapWrite",
+	"runtime.divideByZeroPanic":        "divideByZero",
+	"runtime.negativeShiftPanic":       "negativeShift",
+	"runtime._panic":                   "explicit",
+	"runtime.runtimePanic":             "explicit",
+}
 
 // Compile turns a C file into the bitcode the frontend reads: clang at -O0
 // without optnone, then mem2reg, so values are SSA registers and memory is
@@ -81,8 +123,8 @@ func Compile(src, dir string) (string, error) {
 	return base + ".bc", nil
 }
 
-// Load reads bitcode or IR text and lowers every defined function.
-func Load(path string) (*Model, error) {
+// Load reads bitcode or IR text and lowers the defined functions opts keeps.
+func Load(path string, opts Options) (*Model, error) {
 	ctx := llvm.NewContext()
 	buf, err := llvm.NewMemoryBufferFromFile(path)
 	if err != nil {
@@ -92,12 +134,30 @@ func Load(path string) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &lowerer{td: llvm.NewTargetData(m.DataLayout()), fids: map[string]int{}}
+	l := &lowerer{td: llvm.NewTargetData(m.DataLayout()), fids: map[string]int{}, opts: opts, globalIdx: map[string]int{}}
 	var defs []llvm.Value
 	for f := m.FirstFunction(); !f.IsNil(); f = llvm.NextFunction(f) {
-		if !f.IsDeclaration() {
+		if !f.IsDeclaration() && (opts.Keep == nil || opts.Keep(f.Name())) {
 			l.fids[f.Name()] = len(defs)
 			defs = append(defs, f)
+		}
+	}
+	if opts.Callees {
+		// Breadth first, so the functions closest to the kept ones come
+		// first when the bound cuts.
+		roots := len(defs)
+		for i := 0; i < len(defs) && len(defs)-roots < maxCallees; i++ {
+			for _, g := range referenced(defs[i]) {
+				name := g.Name()
+				if _, ok := l.fids[name]; ok || g.IsDeclaration() || len(defs)-roots >= maxCallees {
+					continue
+				}
+				if _, ok := panics[name]; ok || name == "runtime.alloc" || strings.HasPrefix(name, "llvm.") {
+					continue
+				}
+				l.fids[name] = len(defs)
+				defs = append(defs, g)
+			}
 		}
 	}
 	model := &Model{}
@@ -109,13 +169,36 @@ func Load(path string) (*Model, error) {
 		b.WriteString(text)
 		names = append(names, fmt.Sprintf("f%d", i))
 	}
+	tbl := make([]string, len(l.fnTable))
+	for i, e := range l.fnTable {
+		tbl[i] = fmt.Sprintf("(%d, %d)", e[0], e[1])
+	}
+	model.Lean = fmt.Sprintf("def fnTable : List (Nat × Nat) := [%s]\n\n", strings.Join(tbl, ", ")) + b.String()
+	b.Reset()
 	widths := make([]string, len(l.havoc))
 	for i, w := range l.havoc {
 		widths[i] = fmt.Sprint(w)
 	}
-	fmt.Fprintf(&b, "def prog : Go2Lean.LLVM.Prog := { funcs := #[%s], havocWidths := #[%s] }\n",
+	fmt.Fprintf(&b, "def prog : Go2Lean.LLVM.Prog := { funcs := #[%s], havocWidths := #[%s] }\n\n",
 		strings.Join(names, ", "), strings.Join(widths, ", "))
-	model.Lean = b.String()
+	// One definition per global, its bytes as hex: the module of a
+	// package that pulls in the standard library has hundreds.
+	var gs []string
+	for i, g := range l.globals {
+		end := len(g.bytes)
+		for end > 0 && g.bytes[end-1] == 0 {
+			end-- // trailing zeros are implied by the size
+		}
+		rs := make([]string, len(g.relocs))
+		for k, r := range g.relocs {
+			rs[k] = fmt.Sprintf("(%d, %d, %s)", r[0], r[1], lint(r[2]))
+		}
+		fmt.Fprintf(&b, "def g%d : Go2Lean.LLVM.GlobalInit := { size := %d, bytes := Go2Lean.LLVM.hexBytes %q, relocs := [%s] }\n",
+			i, g.size, hex.EncodeToString(g.bytes[:end]), strings.Join(rs, ", "))
+		gs = append(gs, fmt.Sprintf("g%d", i))
+	}
+	fmt.Fprintf(&b, "\ndef globals : List Go2Lean.LLVM.GlobalInit := #[%s].toList\n", strings.Join(gs, ", "))
+	model.Lean += b.String()
 	return model, nil
 }
 
@@ -126,14 +209,35 @@ func WriteModule(model *Model, leanDir, key string) error {
 		return err
 	}
 	mod := "Go2Lean.Generated.llvm." + key
-	src := fmt.Sprintf("import Go2LeanLLVM.Dialect\n\nnamespace %s\n\nopen Go2Lean.SSA Go2Lean.LLVM\n\n%s\nend %s\n", mod, model.Lean, mod)
+	// Functions of the standard library and the runtime are long array
+	// literals: raise the elaborator's depth and step limits for them.
+	src := fmt.Sprintf("import Go2LeanLLVM.Dialect\n\nnamespace %s\n\nopen Go2Lean.SSA Go2Lean.LLVM\n\nset_option maxRecDepth 100000\nset_option maxHeartbeats 2000000\n\n%s\nend %s\n", mod, model.Lean, mod)
 	return os.WriteFile(filepath.Join(dir, key+".lean"), []byte(src), 0o644)
 }
 
 type lowerer struct {
 	td    llvm.TargetData
 	fids  map[string]int
+	opts  Options
 	havoc []int // width of each havoc site
+	// globals are the module's global variables the lowered code uses, in
+	// the order of their indices; globalIdx maps a name to its index, or
+	// -1 when its initializer is not modelled.
+	globals   []*globalInit
+	globalIdx map[string]int
+	// partial are the globals whose initial value is modelled only in part.
+	partial []string
+	// fnTable pairs the heap slot of each modelled function's object with
+	// the function.
+	fnTable [][2]int
+}
+
+// globalInit is a global variable's initial memory: its bytes and the
+// pointers among them (offset, target global, addend).
+type globalInit struct {
+	size   int
+	bytes  []byte
+	relocs [][3]int64
 }
 
 type block struct {
@@ -151,6 +255,10 @@ type fnState struct {
 	cur     *block
 	curBB   llvm.BasicBlock
 	issues  []string
+	consts  []int64
+	// dead: the rest of the LLVM block follows a call that never returns
+	// (a runtime panic).
+	dead bool
 }
 
 func (t *fnState) fresh() int { t.next++; return t.next - 1 }
@@ -192,11 +300,43 @@ func (t *fnState) val(v llvm.Value) int {
 	ty := v.Type()
 	switch {
 	case !v.IsAConstantInt().IsNil() && ty.IntTypeWidth() <= 64:
-		t.emit(d, fmt.Sprintf("(.const %d %s)", ty.IntTypeWidth(), lint(v.SExtValue())))
-	case ty.TypeKind() == llvm.PointerTypeKind && v.IsNull():
+		c := v.SExtValue()
+		t.emit(d, fmt.Sprintf("(.const %d %s)", ty.IntTypeWidth(), lint(c)))
+		if (c < -2 || c > 2) && len(t.consts) < 32 && !slices.Contains(t.consts, c) {
+			t.consts = append(t.consts, c, c-1, c+1)
+		}
+	case ty.TypeKind() == llvm.PointerTypeKind && (v.IsNull() || !v.IsAUndefValue().IsNil()):
+		// undef may be any pointer; null is one of its values.
 		t.emit(d, ".null")
 	case !v.IsAUndefValue().IsNil() && ty.TypeKind() == llvm.IntegerTypeKind:
 		t.emit(d, fmt.Sprintf("(.poison %d)", ty.IntTypeWidth()))
+	case !v.IsAFunction().IsNil():
+		// A function pointer points to the function's object.
+		t.emit(d, fmt.Sprintf("(.global %d)", t.l.global(v)))
+	case !v.IsAGlobalVariable().IsNil():
+		if i := t.l.global(v); i >= 0 {
+			if slices.Contains(t.l.partial, v.Name()) {
+				t.issue("global %s: initial value modelled in part (the rest is zero)", v.Name())
+			}
+			t.emit(d, fmt.Sprintf("(.global %d)", i))
+		} else {
+			t.issue("global %s: initializer not modelled", v.Name())
+			t.emit(d, fmt.Sprintf("(.unsupported %q)", "global "+v.Name()))
+		}
+	case !v.IsAConstantExpr().IsNil() && v.Opcode() == llvm.GetElementPtr && !v.Operand(0).IsAGlobalVariable().IsNil():
+		off, ok := t.l.constGEPOffset(v)
+		i := t.l.global(v.Operand(0))
+		if !ok || i < 0 {
+			t.issue("constant %s not modelled", strings.TrimSpace(v.String()))
+			t.emit(d, `(.unsupported "constant getelementptr")`)
+			break
+		}
+		g := t.fresh()
+		t.emit(g, fmt.Sprintf("(.global %d)", i))
+		t.emit(d, fmt.Sprintf("(.gep %s [])", lint(off)), g)
+	case isAgg(ty) && (v.IsNull() || !v.IsAUndefValue().IsNil()):
+		// zeroinitializer; undef is the base of insertvalue chains.
+		t.emit(d, fmt.Sprintf("(.zero %s)", tyLean(ty)))
 	default:
 		what := strings.TrimSpace(v.String())
 		t.issue("operand %s not modelled", what)
@@ -230,6 +370,223 @@ func flags(in llvm.Value) (nsw, nuw, exact bool) {
 
 func bool2(b bool) string { return fmt.Sprint(b) }
 
+// referenced are the functions f calls directly or takes the address of.
+func referenced(f llvm.Value) []llvm.Value {
+	var out []llvm.Value
+	for b := f.FirstBasicBlock(); !b.IsNil(); b = llvm.NextBasicBlock(b) {
+		for in := b.FirstInstruction(); !in.IsNil(); in = llvm.NextInstruction(in) {
+			for i := 0; i < in.OperandsCount(); i++ {
+				if op := in.Operand(i); !op.IsAFunction().IsNil() {
+					out = append(out, op)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// tyJSON is the dialect's Ty of a register type, as the search decodes it.
+func tyJSON(t llvm.Type) any {
+	switch t.TypeKind() {
+	case llvm.IntegerTypeKind:
+		return map[string]any{"k": "int", "w": t.IntTypeWidth()}
+	case llvm.StructTypeKind:
+		var fs []any
+		for _, f := range t.StructElementTypes() {
+			fs = append(fs, tyJSON(f))
+		}
+		return map[string]any{"k": "agg", "fields": fs}
+	case llvm.ArrayTypeKind:
+		fs := make([]any, t.ArrayLength())
+		for i := range fs {
+			fs[i] = tyJSON(t.ElementType())
+		}
+		return map[string]any{"k": "agg", "fields": fs}
+	}
+	return map[string]any{"k": "ptr"}
+}
+
+// typeName names a type for messages (go-llvm's Type.String recurses
+// without end on some of TinyGo's struct types).
+func typeName(t llvm.Type) string {
+	switch t.TypeKind() {
+	case llvm.IntegerTypeKind:
+		return fmt.Sprintf("i%d", t.IntTypeWidth())
+	case llvm.PointerTypeKind:
+		return "ptr"
+	case llvm.StructTypeKind:
+		if n := t.StructName(); n != "" {
+			return "%" + n
+		}
+		return "struct"
+	case llvm.ArrayTypeKind:
+		return fmt.Sprintf("[%d x %s]", t.ArrayLength(), typeName(t.ElementType()))
+	case llvm.VoidTypeKind:
+		return "void"
+	}
+	return fmt.Sprintf("type kind %d", t.TypeKind())
+}
+
+// global is the index of global variable v, adding it (and the globals its
+// initializer points to); -1 when its initializer is not modelled.
+func (l *lowerer) global(v llvm.Value) int {
+	if i, ok := l.globalIdx[v.Name()]; ok {
+		return i
+	}
+	if !v.IsAFunction().IsNil() {
+		// A function's object: one byte, and an entry of the table that
+		// resolves pointers to it (a function not modelled resolves to
+		// nothing: calls through it take their fallback).
+		i := len(l.globals)
+		l.globalIdx[v.Name()] = i
+		l.globals = append(l.globals, &globalInit{size: 1, bytes: []byte{0}})
+		if fid, ok := l.fids[v.Name()]; ok {
+			l.fnTable = append(l.fnTable, [2]int{2 + i, fid})
+		}
+		return i
+	}
+	init := v.Initializer()
+	if init.IsNil() {
+		l.globalIdx[v.Name()] = -1
+		return -1
+	}
+	ty := v.GlobalValueType()
+	g := &globalInit{size: int(l.td.TypeAllocSize(ty))}
+	g.bytes = make([]byte, g.size)
+	i := len(l.globals)
+	l.globalIdx[v.Name()] = i
+	l.globals = append(l.globals, g)
+	if !l.constBytes(init, ty, g, 0) {
+		// Its identity is what matters most often (a type descriptor);
+		// what could not be written stays zero.
+		l.partial = append(l.partial, v.Name())
+	}
+	return i
+}
+
+// constBytes writes constant c of type ty at offset off of g; false when
+// some of it could not be written (it stays zero).
+func (l *lowerer) constBytes(c llvm.Value, ty llvm.Type, g *globalInit, off int64) bool {
+	switch {
+	case c.IsNull() || !c.IsAUndefValue().IsNil():
+		return true // zero
+	case !c.IsAConstantInt().IsNil():
+		n := int(l.td.TypeAllocSize(ty))
+		x := c.ZExtValue()
+		for k := 0; k < n && k < 8; k++ {
+			g.bytes[off+int64(k)] = byte(x >> (8 * k))
+		}
+		return true
+	case !c.IsAGlobalVariable().IsNil():
+		j := l.global(c)
+		if j < 0 {
+			return false
+		}
+		g.relocs = append(g.relocs, [3]int64{off, int64(j), 0})
+		return true
+	case !c.IsAFunction().IsNil():
+		g.relocs = append(g.relocs, [3]int64{off, int64(l.global(c)), 0})
+		return true
+	}
+	switch ty.TypeKind() {
+	case llvm.StructTypeKind:
+		ok := true
+		for k, f := range ty.StructElementTypes() {
+			ok = l.constBytes(aggElem(c, k), f, g, off+int64(l.td.ElementOffset(ty, k))) && ok
+		}
+		return ok
+	case llvm.ArrayTypeKind:
+		ok := true
+		stride := int64(l.td.TypeAllocSize(ty.ElementType()))
+		for k := 0; k < ty.ArrayLength(); k++ {
+			ok = l.constBytes(aggElem(c, k), ty.ElementType(), g, off+int64(k)*stride) && ok
+		}
+		return ok
+	}
+	if !c.IsAConstantExpr().IsNil() && c.Opcode() == llvm.GetElementPtr {
+		// A pointer into a global: base global plus constant offset.
+		base := c.Operand(0)
+		if base.IsAGlobalVariable().IsNil() {
+			return false
+		}
+		j := l.global(base)
+		if j < 0 {
+			return false
+		}
+		addend, ok := l.constGEPOffset(c)
+		if !ok {
+			return false
+		}
+		g.relocs = append(g.relocs, [3]int64{off, int64(j), addend})
+		return true
+	}
+	return false
+}
+
+// constGEPOffset is the byte offset of a constant getelementptr.
+func (l *lowerer) constGEPOffset(c llvm.Value) (int64, bool) {
+	cur := c.GEPSourceElementType()
+	var offset int64
+	for i := 1; i < c.OperandsCount(); i++ {
+		idx := c.Operand(i)
+		if idx.IsAConstantInt().IsNil() {
+			return 0, false
+		}
+		if i == 1 {
+			offset += idx.SExtValue() * int64(l.td.TypeAllocSize(cur))
+			continue
+		}
+		switch cur.TypeKind() {
+		case llvm.StructTypeKind:
+			k := int(idx.ZExtValue())
+			offset += int64(l.td.ElementOffset(cur, k))
+			cur = cur.StructElementTypes()[k]
+		case llvm.ArrayTypeKind:
+			cur = cur.ElementType()
+			offset += idx.SExtValue() * int64(l.td.TypeAllocSize(cur))
+		default:
+			return 0, false
+		}
+	}
+	return offset, true
+}
+
+func isAgg(t llvm.Type) bool {
+	k := t.TypeKind()
+	return k == llvm.StructTypeKind || k == llvm.ArrayTypeKind
+}
+
+// tyLean is the dialect's Ty of a register type.
+func tyLean(t llvm.Type) string {
+	switch t.TypeKind() {
+	case llvm.IntegerTypeKind:
+		return fmt.Sprintf("(.int %d)", t.IntTypeWidth())
+	case llvm.PointerTypeKind:
+		return ".ptr"
+	case llvm.StructTypeKind:
+		var fs []string
+		for _, f := range t.StructElementTypes() {
+			fs = append(fs, tyLean(f))
+		}
+		return "(.agg [" + strings.Join(fs, ", ") + "])"
+	case llvm.ArrayTypeKind:
+		fs := make([]string, t.ArrayLength())
+		for i := range fs {
+			fs[i] = tyLean(t.ElementType())
+		}
+		return "(.agg [" + strings.Join(fs, ", ") + "])"
+	}
+	return "(.agg [])"
+}
+
+func path(idx []uint32) string {
+	s := make([]string, len(idx))
+	for i, v := range idx {
+		s[i] = fmt.Sprint(v)
+	}
+	return "[" + strings.Join(s, ", ") + "]"
+}
+
 var preds = map[llvm.IntPredicate]string{
 	llvm.IntEQ: "eq", llvm.IntNE: "ne", llvm.IntUGT: "ugt", llvm.IntUGE: "uge", llvm.IntULT: "ult",
 	llvm.IntULE: "ule", llvm.IntSGT: "sgt", llvm.IntSGE: "sge", llvm.IntSLT: "slt", llvm.IntSLE: "sle",
@@ -251,6 +608,25 @@ func (t *fnState) edgeArgs(pred, succ llvm.BasicBlock) []int {
 
 func (t *fnState) jumpTo(succ llvm.BasicBlock) string {
 	return fmt.Sprintf(".jump %d %s", t.bbIndex[succ], list(t.edgeArgs(t.curBB, succ)))
+}
+
+// goParam reads parameter i as TinyGo passes Go values: `x.data` is a
+// buffer whose `x.len` (and a slice's `x.cap`) follow it, and the trailing
+// `context` pointer is nil.
+func goParam(ps []llvm.Value, i int, gens []Gen) (Gen, bool) {
+	name := ps[i].Name()
+	switch {
+	case name == "context" && i == len(ps)-1 && ps[i].Type().TypeKind() == llvm.PointerTypeKind:
+		return Gen{K: "null", Name: name}, true
+	case strings.HasSuffix(name, ".len") || strings.HasSuffix(name, ".cap"):
+		base := strings.TrimSuffix(strings.TrimSuffix(name, ".len"), ".cap")
+		for j := i - 1; j >= 0 && j >= i-2; j-- {
+			if gens[j].K == "buf" && gens[j].Name == base {
+				return Gen{K: "len", Name: name, W: ps[i].Type().IntTypeWidth(), Of: j}, true
+			}
+		}
+	}
+	return Gen{}, false
 }
 
 // elemBytes guesses the element size of what pointer parameter p points
@@ -282,12 +658,19 @@ func (l *lowerer) function(f llvm.Value, index int) (string, Func) {
 	t := &fnState{l: l, vars: map[llvm.Value]int{}, bbIndex: map[llvm.BasicBlock]int{}}
 	fn := Func{Name: f.Name(), Index: index}
 	var params []int
-	for i, p := range f.Params() {
+	ps := f.Params()
+	for i, p := range ps {
 		t.vars[p] = t.fresh()
 		params = append(params, t.vars[p])
 		name := p.Name()
 		if name == "" {
 			name = fmt.Sprintf("arg%d", i)
+		}
+		if l.opts.GoABI {
+			if g, ok := goParam(ps, i, fn.Gens); ok {
+				fn.Gens = append(fn.Gens, g)
+				continue
+			}
 		}
 		switch ty := p.Type(); ty.TypeKind() {
 		case llvm.IntegerTypeKind:
@@ -298,9 +681,18 @@ func (l *lowerer) function(f llvm.Value, index int) (string, Func) {
 			}
 			fn.Gens = append(fn.Gens, g)
 		case llvm.PointerTypeKind:
-			fn.Gens = append(fn.Gens, Gen{K: "buf", Name: name, EB: l.elemBytes(f, p), MaxLen: maxBuf})
+			if l.opts.GoABI {
+				name = strings.TrimSuffix(name, ".data")
+			}
+			g := Gen{K: "buf", Name: name, EB: l.elemBytes(f, p), MaxLen: maxBuf}
+			if g.EB != 1 && g.EB != 2 && g.EB != 4 && g.EB != 8 {
+				g.K = "zbuf"
+			}
+			fn.Gens = append(fn.Gens, g)
+		case llvm.StructTypeKind, llvm.ArrayTypeKind:
+			fn.Gens = append(fn.Gens, Gen{K: "agg", Name: name, Ty: tyJSON(ty)})
 		default:
-			t.issue("parameter %d of type %s not modelled", i, ty.String())
+			t.issue("parameter %d of type %s not modelled", i, typeName(ty))
 		}
 	}
 	// Every LLVM block gets its block now, so branches can name it; calls
@@ -315,11 +707,13 @@ func (l *lowerer) function(f llvm.Value, index int) (string, Func) {
 	for b := f.FirstBasicBlock(); !b.IsNil(); b = llvm.NextBasicBlock(b) {
 		t.curBB = b
 		t.cur = t.blocks[t.bbIndex[b]]
-		for in := b.FirstInstruction(); !in.IsNil(); in = llvm.NextInstruction(in) {
+		t.dead = false
+		for in := b.FirstInstruction(); !in.IsNil() && !t.dead; in = llvm.NextInstruction(in) {
 			t.instr(in)
 		}
 	}
 	fn.Issues = t.issues
+	fn.Consts = t.consts
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "def f%d : Go2Lean.LLVM.Func := {\n  name := %q, params := %s, nvals := %d, entry := 0,\n  blocks := #[\n", index, f.Name(), list(params), t.next)
 	for i, blk := range t.blocks {
@@ -335,6 +729,62 @@ func (l *lowerer) function(f llvm.Value, index int) (string, Func) {
 	}
 	sb.WriteString("  ] }\n\n")
 	return sb.String(), fn
+}
+
+// fields are the scalar fields of an aggregate type: their path and
+// byte offset.
+func (t *fnState) fields(ty llvm.Type, base int64, pre []uint32, out *[]aggField) {
+	switch ty.TypeKind() {
+	case llvm.StructTypeKind:
+		for i, f := range ty.StructElementTypes() {
+			t.fields(f, base+int64(t.l.td.ElementOffset(ty, i)), append(append([]uint32{}, pre...), uint32(i)), out)
+		}
+	case llvm.ArrayTypeKind:
+		stride := int64(t.l.td.TypeAllocSize(ty.ElementType()))
+		for i := 0; i < ty.ArrayLength(); i++ {
+			t.fields(ty.ElementType(), base+int64(i)*stride, append(append([]uint32{}, pre...), uint32(i)), out)
+		}
+	default:
+		*out = append(*out, aggField{path: pre, offset: base, ty: ty})
+	}
+}
+
+type aggField struct {
+	path   []uint32
+	offset int64
+	ty     llvm.Type
+}
+
+// loadAgg loads an aggregate field by field.
+func (t *fnState) loadAgg(p int, ty llvm.Type) int {
+	var fs []aggField
+	t.fields(ty, 0, nil, &fs)
+	acc := t.fresh()
+	t.emit(acc, fmt.Sprintf("(.zero %s)", tyLean(ty)))
+	for _, f := range fs {
+		a, v, next := t.fresh(), t.fresh(), t.fresh()
+		t.emit(a, fmt.Sprintf("(.gep %s [])", lint(f.offset)), p)
+		if f.ty.TypeKind() == llvm.PointerTypeKind {
+			t.emit(v, ".loadPtr", a)
+		} else {
+			t.emit(v, fmt.Sprintf("(.load %d)", f.ty.IntTypeWidth()), a)
+		}
+		t.emit(next, fmt.Sprintf("(.insert %s)", path(f.path)), acc, v)
+		acc = next
+	}
+	return acc
+}
+
+// storeAgg stores an aggregate field by field.
+func (t *fnState) storeAgg(v, p int, ty llvm.Type) {
+	var fs []aggField
+	t.fields(ty, 0, nil, &fs)
+	for _, f := range fs {
+		a, x := t.fresh(), t.fresh()
+		t.emit(x, fmt.Sprintf("(.extract %s)", path(f.path)), v)
+		t.emit(a, fmt.Sprintf("(.gep %s [])", lint(f.offset)), p)
+		t.emit(t.fresh(), ".store", x, a)
+	}
 }
 
 func (t *fnState) instr(in llvm.Value) {
@@ -396,8 +846,20 @@ func (t *fnState) instr(in llvm.Value) {
 		}
 		t.vars[in] = t.fresh()
 		t.emit(t.vars[in], fmt.Sprintf("(.alloca %d)", n))
+	case llvm.ExtractValue:
+		a := t.val(in.Operand(0))
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], fmt.Sprintf("(.extract %s)", path(in.Indices())), a)
+	case llvm.InsertValue:
+		a, v := t.val(in.Operand(0)), t.val(in.Operand(1))
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], fmt.Sprintf("(.insert %s)", path(in.Indices())), a, v)
 	case llvm.Load:
 		p := t.val(in.Operand(0))
+		if isAgg(ty) {
+			t.vars[in] = t.loadAgg(p, ty)
+			return
+		}
 		t.vars[in] = t.fresh()
 		switch ty.TypeKind() {
 		case llvm.IntegerTypeKind:
@@ -405,11 +867,15 @@ func (t *fnState) instr(in llvm.Value) {
 		case llvm.PointerTypeKind:
 			t.emit(t.vars[in], ".loadPtr", p)
 		default:
-			t.issue("load of %s not modelled", ty.String())
-			t.emit(t.vars[in], fmt.Sprintf("(.unsupported %q)", "load "+ty.String()), p)
+			t.issue("load of %s not modelled", typeName(ty))
+			t.emit(t.vars[in], fmt.Sprintf("(.unsupported %q)", "load "+typeName(ty)), p)
 		}
 	case llvm.Store:
 		v, p := t.val(in.Operand(0)), t.val(in.Operand(1))
+		if ty := in.Operand(0).Type(); isAgg(ty) {
+			t.storeAgg(v, p, ty)
+			return
+		}
 		t.emit(t.fresh(), ".store", v, p)
 	case llvm.GetElementPtr:
 		t.gep(in)
@@ -471,7 +937,7 @@ func (t *fnState) gep(in llvm.Value) {
 				cur = cur.ElementType()
 				stride = int64(t.l.td.TypeAllocSize(cur))
 			default:
-				t.issue("getelementptr into %s not modelled", cur.String())
+				t.issue("getelementptr into %s not modelled", typeName(cur))
 				t.vars[in] = t.fresh()
 				t.emit(t.vars[in], `(.unsupported "getelementptr")`)
 				return
@@ -494,20 +960,60 @@ func (t *fnState) gep(in llvm.Value) {
 // debug and lifetime intrinsics are dropped.
 func (t *fnState) call(in llvm.Value) {
 	callee := in.CalledValue()
+	if callee.IsAFunction().IsNil() {
+		t.indirectCall(in, callee)
+		return
+	}
 	name := callee.Name()
 	if strings.HasPrefix(name, "llvm.dbg.") || strings.HasPrefix(name, "llvm.lifetime.") {
 		return
 	}
+	switch {
+	case strings.HasPrefix(name, "llvm.memcpy.") || strings.HasPrefix(name, "llvm.memmove."):
+		dst, src, n := t.val(in.Operand(0)), t.val(in.Operand(1)), t.val(in.Operand(2))
+		t.emit(t.fresh(), fmt.Sprintf("(.memcpy %v)", strings.HasPrefix(name, "llvm.memmove.")), dst, src, n)
+		return
+	case strings.HasPrefix(name, "llvm.smin.") || strings.HasPrefix(name, "llvm.smax.") ||
+		strings.HasPrefix(name, "llvm.umin.") || strings.HasPrefix(name, "llvm.umax."):
+		which := map[string]int{"smin": 0, "smax": 1, "umin": 2, "umax": 3}[strings.Split(name, ".")[1]]
+		a, b := t.val(in.Operand(0)), t.val(in.Operand(1))
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], fmt.Sprintf("(.minmax %d)", which), a, b)
+		return
+	case strings.HasPrefix(name, "llvm.abs."):
+		a, p := t.val(in.Operand(0)), t.val(in.Operand(1))
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], ".abs", a, p)
+		return
+	case strings.HasPrefix(name, "llvm.memset."):
+		dst, b, n := t.val(in.Operand(0)), t.val(in.Operand(1)), t.val(in.Operand(2))
+		t.emit(t.fresh(), ".memset", dst, b, n)
+		return
+	}
+	if k, ok := panics[name]; ok {
+		// The call never returns: the block ends in the panic.
+		t.cur.term = ".panic ." + k
+		t.dead = true
+		return
+	}
 	ty := in.Type()
-	var args []int
-	for i := 0; i < in.OperandsCount()-1; i++ {
-		args = append(args, t.val(in.Operand(i)))
+	if name == "runtime.alloc" {
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], ".goAlloc", t.val(in.Operand(0)))
+		return
 	}
 	d := t.fresh()
 	if ty.TypeKind() != llvm.VoidTypeKind {
 		t.vars[in] = d
 	}
 	fid, known := t.l.fids[name]
+	if !known && llvm.NextInstruction(in).InstructionOpcode() == llvm.Unreachable {
+		// A call that does not return (an unmodelled panic or exit).
+		t.issue("call %s does not return: taken as a panic", name)
+		t.cur.term = ".panic .explicit"
+		t.dead = true
+		return
+	}
 	if !known {
 		if ty.TypeKind() == llvm.IntegerTypeKind {
 			t.issue("call %s: result is havoc, effects not modelled", name)
@@ -516,10 +1022,14 @@ func (t *fnState) call(in llvm.Value) {
 		} else if ty.TypeKind() == llvm.VoidTypeKind {
 			t.issue("call %s: effects not modelled", name)
 		} else {
-			t.issue("call %s returning %s not modelled", name, ty.String())
+			t.issue("call %s returning %s not modelled", name, typeName(ty))
 			t.emit(d, fmt.Sprintf("(.unsupported %q)", "call "+name))
 		}
 		return
+	}
+	var args []int
+	for i := 0; i < in.OperandsCount()-1; i++ {
+		args = append(args, t.val(in.Operand(i)))
 	}
 	next, fb := t.newBlock(), t.newBlock()
 	w := 64
@@ -530,6 +1040,32 @@ func (t *fnState) call(in llvm.Value) {
 	t.blocks[fb].instrs = []string{fmt.Sprintf(".havoc %d %d", d, len(t.l.havoc)-1)}
 	t.blocks[fb].term = fmt.Sprintf(".jump %d []", next)
 	t.cur.term = fmt.Sprintf(".call %d %s %d %d [] %d", fid, list(args), d, next, fb)
+	t.cur = t.blocks[next]
+}
+
+// indirectCall calls through a function value: the core's callv, whose
+// fallback havocs the result when the value is not a modelled function.
+func (t *fnState) indirectCall(in, callee llvm.Value) {
+	fv := t.fresh()
+	t.emit(fv, "(.resolveFn fnTable)", t.val(callee))
+	var args []int
+	for i := 0; i < in.OperandsCount()-1; i++ {
+		args = append(args, t.val(in.Operand(i)))
+	}
+	d := t.fresh()
+	ty := in.Type()
+	if ty.TypeKind() != llvm.VoidTypeKind {
+		t.vars[in] = d
+	}
+	next, fb := t.newBlock(), t.newBlock()
+	w := 64
+	if ty.TypeKind() == llvm.IntegerTypeKind {
+		w = ty.IntTypeWidth()
+	}
+	t.l.havoc = append(t.l.havoc, w)
+	t.blocks[fb].instrs = []string{fmt.Sprintf(".havoc %d %d", d, len(t.l.havoc)-1)}
+	t.blocks[fb].term = fmt.Sprintf(".jump %d []", next)
+	t.cur.term = fmt.Sprintf(".callv %d %s %d %d [] %d", fv, list(args), d, next, fb)
 	t.cur = t.blocks[next]
 }
 

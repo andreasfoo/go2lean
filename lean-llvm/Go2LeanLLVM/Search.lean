@@ -25,15 +25,31 @@ inductive Gen where
   /-- The element count of buffer parameter `of` (an index into the
   generators), as a `w`-bit integer. -/
   | len (name : String) (w : Nat) (of : Nat)
+  /-- A null pointer (TinyGo's closure context of a plain function). -/
+  | null (name : String)
+  /-- A pointer to one fresh object of `size` bytes: random bytes when
+  `random`, else zero (an object holding pointers). -/
+  | obj (name : String) (size : Nat) (random : Bool)
+  /-- An aggregate passed by value (a Go array or struct): random
+  integers, null pointers. -/
+  | agg (name : String) (t : Ty)
+  /-- A buffer whose elements are zero (they hold pointers, or have a size
+  that is not an integer width). -/
+  | zbuf (name : String) (elemBytes : Nat) (maxLen : Nat)
   deriving Repr, Inhabited
 
 def Gen.name : Gen → String
-  | .int n _ | .buf n _ _ | .len n _ _ => n
+  | .int n _ | .buf n _ _ | .len n _ _ | .null n | .obj n _ _ | .agg n _ | .zbuf n _ _ => n
 
 /-- A generated argument before it is placed in memory. -/
 inductive Arg where
   | int (w : Nat) (v : Int)
   | buf (elemBytes : Nat) (elems : List Int)
+  | null
+  | obj (bytes : List Nat)
+  | val (v : Val)
+  /-- `n` zero elements of `elemBytes` bytes. -/
+  | zbuf (elemBytes n : Nat)
   deriving Repr, Inhabited
 
 /-- Interesting values of a `w`-bit integer. -/
@@ -41,9 +57,12 @@ def specials (w : Nat) : List Int :=
   let lim := (2 : Int) ^ (w - 1)
   [0, 1, -1, 2, lim - 1, -lim, lim / 2, 7, 255, 256, 65535, 1024]
 
-def randInt (g : StdGen) (w : Nat) : Int × StdGen :=
+def randInt (g : StdGen) (w : Nat) (extra : List Int := []) : Int × StdGen :=
   let (k, g) := randNat g 0 9
-  if k < 4 then
+  if k < 2 && !extra.isEmpty then
+    let (i, g) := randNat g 0 (extra.length - 1)
+    ((BitVec.ofInt w extra[i]!).toInt, g)
+  else if k < 4 then
     let sp := specials w
     let (i, g) := randNat g 0 (sp.length - 1)
     (sp[i]!, g)
@@ -56,35 +75,79 @@ def randInt (g : StdGen) (w : Nat) : Int × StdGen :=
     ((BitVec.ofNat w v).toInt, g)
 
 /-- Random arguments: buffers first (their lengths feed `len`). -/
-def genArgs (gens : List Gen) (g : StdGen) : List Arg × StdGen := Id.run do
+def genArgs (gens : List Gen) (g : StdGen) (extra : List Int := []) : List Arg × StdGen := Id.run do
   let mut g := g
   let mut out : Array Arg := #[]
   for gen in gens do
     match gen with
     | .int _ w =>
-      let (v, g') := randInt g w
+      let (v, g') := randInt g w extra
       g := g'; out := out.push (.int w v)
     | .buf _ eb maxLen =>
       let (n, g') := randNat g 0 maxLen
       g := g'
       let mut es : Array Int := #[]
       for _ in [0:n] do
-        let (v, g') := randInt g (eb * 8)
+        let (v, g') := randInt g (eb * 8) extra
         g := g'; es := es.push v
       out := out.push (.buf eb es.toList)
     | .len _ w _ => out := out.push (.int w 0)
+    | .null _ => out := out.push .null
+    | .agg _ t =>
+      let rec genTy (g : StdGen) : Ty → Val × StdGen
+        | .int w =>
+          let (v, g) := randInt g w extra
+          (.int w (.val (BitVec.ofInt w v)), g)
+        | .ptr => (.ptr Veir.Data.LLVM.Ptr.null, g)
+        | .agg fs =>
+          let (vs, g) := fs.foldl (fun (acc, g) f => let (v, g) := genTy g f; (acc ++ [v], g)) ([], g)
+          (.agg vs, g)
+      let (v, g') := genTy g t
+      g := g'; out := out.push (.val v)
+    | .zbuf _ eb maxLen =>
+      let (n, g') := randNat g 0 maxLen
+      g := g'; out := out.push (.zbuf eb n)
+    | .obj _ size random =>
+      let mut bs : Array Nat := #[]
+      for _ in [0:size] do
+        if random then
+          let (b, g') := randNat g 0 255
+          g := g'; bs := bs.push b
+        else bs := bs.push 0
+      out := out.push (.obj bs.toList)
   -- Each length is its buffer's element count.
   let fixed := (gens.zip out.toList).map fun (gen, a) =>
     match gen with
     | .len _ w of => match out[of]? with
       | some (.buf _ es) => Arg.int w es.length
+      | some (.zbuf _ n) => Arg.int w n
       | _ => a
     | _ => a
   return (fixed, g)
 
-/-- Place the arguments: buffers become fresh objects in memory. -/
-def materialise (args : List Arg) : Option (List Val × Heap Val) := do
+/-- Allocate the globals and write their initial bytes and pointers. -/
+def initGlobals (globals : List GlobalInit) : Option (Veir.MemoryState × Array Val) := do
   let mut m := Veir.MemoryState.empty
+  let mut ptrs : Array Veir.Data.Pointer := #[]
+  for g in globals do
+    let (m', p) ← (match m.alloc g.size.toUInt64 with | .ok r => some r | _ => none)
+    m := m'
+    let bs := g.bytes ++ List.replicate (g.size - g.bytes.length) 0
+    if g.size > 0 then
+      m ← (match m.store p (ByteArray.mk (bs.map (·.toUInt8)).toArray) with | .ok m => some m | _ => none)
+    ptrs := ptrs.push p
+  for (g, p) in globals.zip ptrs.toList do
+    for (off, j, addend) in g.relocs do
+      let t ← ptrs[j]?
+      let q : Veir.Data.LLVM.Ptr := .val ⟨t.object, UInt64.ofInt (t.address.toNat + addend)⟩
+      m ← (match m.storeByte64 ⟨p.object, p.address + off.toUInt64⟩ q.toByte with | .ok m => some m | _ => none)
+  return (m, ptrs.map fun p => .ptr (.val p))
+
+/-- Place the arguments: buffers become fresh objects in memory, after the
+globals. -/
+def materialise (args : List Arg) (globals : List GlobalInit := []) : Option (List Val × Heap Val) := do
+  let (m0, gptrs) ← initGlobals globals
+  let mut m := m0
   let mut vals : Array Val := #[]
   for a in args do
     match a with
@@ -99,7 +162,21 @@ def materialise (args : List Arg) : Option (List Val × Heap Val) := do
           | .ok m => some m | _ => none)
         i := i + 1
       vals := vals.push (.ptr (.val p))
-  return (vals.toList, #[.unit, .mem m])
+    | .null => vals := vals.push (.ptr Veir.Data.LLVM.Ptr.null)
+    | .val v => vals := vals.push v
+    | .zbuf eb n =>
+      let (m', p) ← (match m.alloc (eb * n).toUInt64 with | .ok r => some r | _ => none)
+      m := m'
+      if eb * n > 0 then
+        m ← (match m.store p (ByteArray.mk (Array.replicate (eb * n) 0)) with | .ok m => some m | _ => none)
+      vals := vals.push (.ptr (.val p))
+    | .obj bs =>
+      let (m', p) ← (match m.alloc bs.length.toUInt64 with | .ok r => some r | _ => none)
+      m := m'
+      if !bs.isEmpty then
+        m ← (match m.store p (ByteArray.mk (bs.map (·.toUInt8)).toArray) with | .ok m => some m | _ => none)
+      vals := vals.push (.ptr (.val p))
+  return (vals.toList, #[.unit, .mem m] ++ gptrs)
 
 /-- Havoc values for unmodelled calls: `w`-bit integers from the seed. -/
 def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
@@ -113,12 +190,24 @@ inductive Outcome where
   | stuck
   | outOfFuel
 
-def runOnce (p : Prog) (fid : FuncId) (args : List Arg) (seed fuel : Nat) : Outcome × HState Val :=
-  match materialise args with
+def runOnce (p : Prog) (globals : List GlobalInit) (fid : FuncId) (args : List Arg) (seed fuel : Nat)
+    (init : Option FuncId := none) : Outcome × HState Val :=
+  match materialise args globals with
   | none => (.stuck, {})
   | some (vals, heap) =>
+    let h := havocOf seed p.havocWidths
     let s : HState Val := { heap := heap }
-    match runFunc p () (havocOf seed p.havocWidths) fid vals s fuel with
+    -- The package's initialisation first (TinyGo's `pkg.init(context)`):
+    -- package variables set at run time hold their values.
+    let s := match init with
+      | some i => match runFunc p () h i [.ptr Veir.Data.LLVM.Ptr.null] s fuel with
+        | (.ok _, s') => some s'
+        | _ => none
+      | none => some s
+    match s with
+    | none => (.stuck, {})
+    | some s =>
+    match runFunc p () h fid vals s fuel with
     | (.ok _, s) => (.holds, s)
     | (.panic k, s) => (if k.isStuck then .stuck else .ub k, s)
     | (.outOfFuel, s) => (.outOfFuel, s)
@@ -127,6 +216,10 @@ def argJson (gen : Gen) (a : Arg) : List (String × Json) × List (String × Jso
   match gen, a with
   | _, .int _ v => ([(gen.name, Json.str (toString v))], [])
   | _, .buf _ es => ([], [(gen.name, Json.arr (es.map (Json.str ∘ toString)).toArray)])
+  | _, .null => ([], [])
+  | _, .obj bs => ([], [(gen.name, Json.arr (bs.map (Json.str ∘ toString)).toArray)])
+  | _, .val v => ([(gen.name, Json.str v.str)], [])
+  | _, .zbuf _ n => ([], [(gen.name, Json.arr (List.replicate n (Json.str "0")).toArray)])
 
 def report (gens : List Gen) (args : List Arg) (k : PanicKind) (s : HState Val)
     (trial seed : Nat) (engine : String) : Json :=
@@ -139,31 +232,38 @@ def report (gens : List Gen) (args : List Arg) (k : PanicKind) (s : HState Val)
       Json.mkObj [("idx", site), ("iter", iter), ("value", (repr v).pretty)]))]
 
 /-- Small values for exhaustive enumeration. -/
-def smallInts (w : Nat) : List Int :=
+def smallInts (w : Nat) (extra : List Int := []) : List Int :=
   let lim := (2 : Int) ^ (w - 1)
   if w ≤ 2 then (List.range (2 ^ w)).map (fun n => (BitVec.ofNat w n).toInt)
-  else [0, 1, -1, 2, lim - 1, -lim]
+  else
+    let base := [0, 1, -1, 2, lim - 1, -lim]
+    base ++ ((extra.map fun e => (BitVec.ofInt w e).toInt).filter (!base.contains ·)).eraseDups
 
 def tuples (xs : List α) : Nat → List (List α)
   | 0 => [[]]
   | n + 1 => xs.flatMap fun x => (tuples xs n).map (x :: ·)
 
-def genChoices (exLen : Nat) : Gen → List Arg
-  | .int _ w => (smallInts w).map (.int w)
+def genChoices (exLen : Nat) (extra : List Int := []) : Gen → List Arg
+  | .int _ w => (smallInts w extra).map (.int w)
   | .buf _ eb maxLen =>
     (List.range (min exLen maxLen + 1)).flatMap fun n =>
       (tuples [0, 1, -1] n).map (.buf eb)
   | .len _ w _ => [.int w 0]
+  | .null _ => [.null]
+  | .obj _ size _ => [.obj (List.replicate size 0)]
+  | .agg _ t => [.val t.zero]
+  | .zbuf _ eb maxLen => (List.range (min exLen maxLen + 1)).map (.zbuf eb)
 
-def domainSize (exLen : Nat) (gens : List Gen) : Nat :=
-  gens.foldl (fun acc g => acc * (genChoices exLen g).length) 1
+def domainSize (exLen : Nat) (gens : List Gen) (extra : List Int := []) : Nat :=
+  gens.foldl (fun acc g => acc * (genChoices exLen extra g).length) 1
 
-def enumArgs (exLen : Nat) (gens : List Gen) : List (List Arg) :=
-  let raw := gens.foldr (fun g acc => (genChoices exLen g).flatMap fun a => acc.map (a :: ·)) [[]]
+def enumArgs (exLen : Nat) (gens : List Gen) (extra : List Int := []) : List (List Arg) :=
+  let raw := gens.foldr (fun g acc => (genChoices exLen extra g).flatMap fun a => acc.map (a :: ·)) [[]]
   raw.map fun args => (gens.zip args).map fun (gen, a) =>
     match gen with
     | .len _ w of => match args[of]? with
       | some (.buf _ es) => Arg.int w es.length
+      | some (.zbuf _ n) => Arg.int w n
       | _ => a
     | _ => a
 
@@ -176,34 +276,53 @@ structure Spec where
   engine : String := "all"
   exhaustLen : Nat := 3
   exhaustLimit : Nat := 300000
+  /-- Constants of the program, tried as integer values. -/
+  extra : List Int := []
+  /-- The package's initialisation function, run before each trial. -/
+  init : Option FuncId := none
 
-def search (p : Prog) (sp : Spec) : Json := Id.run do
+def search (p : Prog) (globals : List GlobalInit) (sp : Spec) : Json := Id.run do
   let mut stuck := 0
   let mut fuelOut := 0
+  let mut sites : List (String × Nat) := []
   if sp.engine != "exhaustive" then
     let mut g := mkStdGen sp.seed
     for t in [0:sp.trials] do
-      let (args, g') := genArgs sp.gens g
+      let (args, g') := genArgs sp.gens g sp.extra
       g := g'
-      match runOnce p sp.func args (sp.seed + t) sp.fuel with
+      match runOnce p globals sp.func args (sp.seed + t) sp.fuel sp.init with
       | (.ub k, s) => return report sp.gens args k s t sp.seed "random"
-      | (.stuck, _) => stuck := stuck + 1
+      | (.stuck, s) =>
+        stuck := stuck + 1
+        let site := (s.stuck.getD "argument setup").take 120 |>.toString
+        sites := match sites.lookup site with
+          | some n => sites.map fun (k, c) => if k == site then (k, n + 1) else (k, c)
+          | none => if sites.length < 20 then (site, 1) :: sites else sites
       | (.outOfFuel, _) => fuelOut := fuelOut + 1
       | _ => pure ()
-  let dom := domainSize sp.exhaustLen sp.gens
+  let dom := domainSize sp.exhaustLen sp.gens sp.extra
   let mut exhausted := false
   if sp.engine != "random" && dom ≤ sp.exhaustLimit then
     let mut i := 0
     let mut clean := true
-    for args in enumArgs sp.exhaustLen sp.gens do
-      match runOnce p sp.func args 0 sp.fuel with
+    for args in enumArgs sp.exhaustLen sp.gens sp.extra do
+      match runOnce p globals sp.func args 0 sp.fuel sp.init with
       | (.ub k, s) => return report sp.gens args k s i 0 "exhaustive"
       | (.holds, _) => pure ()
       | _ => clean := false
       i := i + 1
     exhausted := clean
+  let top := (sites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 3
   return Json.mkObj [("found", false), ("trials", sp.trials), ("stuck", stuck),
-    ("out_of_fuel", fuelOut), ("domain", dom), ("exhausted", exhausted)]
+    ("out_of_fuel", fuelOut), ("domain", dom), ("exhausted", exhausted),
+    ("stuck_sites", Json.mkObj (top.map fun (k, n) => (k, Json.num n)))]
+
+partial def tyOfJson (j : Json) : Except String Ty := do
+  match ← j.getObjValAs? String "k" with
+  | "int" => return .int (← j.getObjValAs? Nat "w")
+  | "ptr" => return .ptr
+  | "agg" => return .agg (← (← j.getObjValAs? (Array Json) "fields").toList.mapM tyOfJson)
+  | k => throw s!"unknown type {k}"
 
 /-- Decode a generator; the shape mirrors the frontend's ABI. -/
 def genOfJson (j : Json) : Except String Gen := do
@@ -212,6 +331,10 @@ def genOfJson (j : Json) : Except String Gen := do
   | "int" => return .int name (← j.getObjValAs? Nat "w")
   | "buf" => return .buf name (← j.getObjValAs? Nat "eb") (← j.getObjValAs? Nat "maxLen")
   | "len" => return .len name (← j.getObjValAs? Nat "w") (← j.getObjValAs? Nat "of")
+  | "null" => return .null name
+  | "obj" => return .obj name (← j.getObjValAs? Nat "eb") ((j.getObjValAs? Bool "random").toOption.getD false)
+  | "zbuf" => return .zbuf name (← j.getObjValAs? Nat "eb") (← j.getObjValAs? Nat "maxLen")
+  | "agg" => return .agg name (← tyOfJson (← j.getObjVal? "ty"))
   | k => throw s!"unknown generator {k}"
 
 def specOfJson (j : Json) : Except String Spec := do
@@ -220,17 +343,19 @@ def specOfJson (j : Json) : Except String Spec := do
   return { func := ← j.getObjValAs? Nat "func", gens,
            trials := opt "trials" 2000, seed := opt "seed" 42, fuel := opt "fuel" 5000,
            engine := (j.getObjValAs? String "engine").toOption.getD "all",
-           exhaustLen := opt "exhaustLen" 3, exhaustLimit := opt "exhaustLimit" 300000 }
+           exhaustLen := opt "exhaustLen" 3, exhaustLimit := opt "exhaustLimit" 300000,
+           extra := ((j.getObjValAs? (Array Int) "extra").toOption.getD #[]).toList,
+           init := (j.getObjValAs? Nat "init").toOption }
 
 /-- The driver: `go2lean-llvm-search <spec.json>` with the spec naming a
 model of the registry. -/
-def driverMain (registry : List (String × Prog)) (args : List String) : IO UInt32 := do
+def driverMain (registry : List (String × Prog × List GlobalInit)) (args : List String) : IO UInt32 := do
   let [path] := args | IO.eprintln "usage: go2lean-llvm-search <spec.json>"; return 2
   let j ← IO.ofExcept (Json.parse (← IO.FS.readFile path))
   let model ← IO.ofExcept (j.getObjValAs? String "model")
-  let some p := registry.lookup model | IO.eprintln s!"no model {model}"; return 2
+  let some (p, globals) := registry.lookup model | IO.eprintln s!"no model {model}"; return 2
   let sp ← IO.ofExcept (specOfJson j)
-  IO.println (search p sp).compress
+  IO.println (search p globals sp).compress
   return 0
 
 end Go2Lean.LLVM.Search

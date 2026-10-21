@@ -32,7 +32,7 @@ func cmdLLVM(args []string) error {
 		return err
 	}
 	ws := contract.Workspace{Root: *workspace}
-	opts := llvmhunt.Options{Trials: *trials, Seed: *seed, Fuel: *fuel, Engine: *engine, ExhaustLen: *exhaustLen}
+	opts := llvmhunt.Options{Trials: *trials, Seed: *seed, Fuel: *fuel, Engine: *engine, ExhaustLen: *exhaustLen, Init: -1}
 	for _, src := range fs.Args() {
 		if err := llvmhunt.Run(root, ws, src, opts, os.Stdout); err != nil {
 			return err

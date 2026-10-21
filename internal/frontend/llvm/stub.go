@@ -17,6 +17,10 @@ type Gen struct {
 	EB     int    `json:"eb,omitempty"`
 	MaxLen int    `json:"maxLen,omitempty"`
 	Of     int    `json:"of"`
+	// Random: an object's bytes are random (it holds no pointers).
+	Random bool `json:"random,omitempty"`
+	// Ty is the type of an aggregate passed by value (k "agg").
+	Ty any `json:"ty,omitempty"`
 }
 
 // Func is one lowered function.
@@ -25,6 +29,9 @@ type Func struct {
 	Index  int
 	Gens   []Gen
 	Issues []string
+	// Consts are the integer constants of the function, which the search
+	// tries as values (a magic number guarding a branch).
+	Consts []int64
 }
 
 // Model is a lowered module.
@@ -33,6 +40,14 @@ type Model struct {
 	Lean  string
 }
 
-func Compile(src, dir string) (string, error)             { return "", errNoLLVM }
-func Load(path string) (*Model, error)                    { return nil, errNoLLVM }
+func Compile(src, dir string) (string, error) { return "", errNoLLVM }
+
+// Options say what to lower and how parameters are passed.
+type Options struct {
+	Keep    func(name string) bool
+	GoABI   bool
+	Callees bool
+}
+
+func Load(path string, opts Options) (*Model, error)      { return nil, errNoLLVM }
 func WriteModule(model *Model, leanDir, key string) error { return errNoLLVM }

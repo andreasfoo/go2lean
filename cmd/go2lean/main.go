@@ -37,6 +37,8 @@ func main() {
 		err = cmdSummary(os.Args[2:])
 	case "llvm":
 		err = cmdLLVM(os.Args[2:])
+	case "tinygo":
+		err = cmdTinyGo(os.Args[2:])
 	default:
 		usage()
 	}
@@ -58,7 +60,9 @@ func usage() {
   go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>
                                                   M2 agent: propose spec-in-Go properties, run, report
   go2lean llvm    [-workspace out] <file.c|.ll|.bc> C / LLVM IR: model every function, search for UB,
-                                                  replay counterexamples under ASan/UBSan (build with -tags llvm18)`)
+                                                  replay counterexamples under ASan/UBSan (build with -tags llvm18)
+  go2lean tinygo  [-workspace out] [-compare] <package>  Go through TinyGo's LLVM IR (-tags llvm22);
+                                                  -compare: also the go/ssa line, side by side`)
 	os.Exit(2)
 }
 

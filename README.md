@@ -188,28 +188,41 @@ issue #1924).
 
 ## Supported Go subset
 
-Integers of every width, bools, `error` values (nil-ness; `errors.New`
-and `fmt.Errorf` are never nil), strings (with the common `strings.*`
-functions, `strings.Builder`, `strconv.Atoi/Itoa`, `[]rune` and `[]byte`
-conversions and `range` over a string modelled rune by rune),
-structs, pointers, recursive types, arrays, slices with reads and writes,
-`make`, `new`, 3-index slices, multiple results,
-methods, `len`/`cap`, reslicing, `append` and `copy` (including
-`append([]byte, string...)`), loops and branches, calls between functions
-in the same package. Slice elements can be any modelled type: structs,
-strings, pointers, nested slices. Division by zero, out-of-range indexing,
-negative shift counts and nil dereferences panic as in Go; `MinInt / -1`
-wraps. Unmodelled calls become havoc values (or a recorded zero/opaque
-assumption for types the model cannot draw). Interfaces, maps, funcs,
-channels, floats and `unsafe.Pointer` are *opaque* values: they can appear
-anywhere (parameters, struct fields, results), the model never looks
-inside them, map lookups, type assertions, interface comparisons and
-float arithmetic are havoc, map updates are ignored, `range` over a map
-runs zero times, and M3 passes their zero value (`context.Background()`
-for a context). A deferred call the model does not look into (a mutex
-unlock, a close) is ignored; a closure is an opaque func value. Goroutines,
-`select` and `defer` of a modelled function still reject the function,
-with the reason in the model report.
+Legend: ✅ exact (counterexamples and certificates are sound) · 🟡 havoc or
+assumption (may give spurious counterexamples, which `go test` rejects, or
+miss behaviours) · ❌ the function is rejected and listed in the model report.
+Construct-by-construct detail: [docs/semantics.md](docs/semantics.md).
+
+**Values**
+- ✅ Integers of every width (wrapping arithmetic, shifts, conversions, `min`/`max`), `bool`
+- ✅ Strings: indexing, slicing, concatenation, `==`, `range` rune by rune, `[]byte` / `[]rune` conversions
+- ✅ Structs, pointers, recursive types, arrays, slices (`make`, `new`, `append`, `copy`, 3-index slicing)
+- ✅ Maps the program builds (insertion order for `range`: 🟡)
+- ✅ Interfaces holding values the program boxed: type assertions, type switches, method calls
+- ✅ Closures, function values, method values; methods; multiple results
+- ✅ `error` nil-ness; sentinel errors (`errors.New` / `fmt.Errorf` of a constant, `var errX = &T{...}`) with `==`, `errors.Is`, `errors.As`
+- 🟡 Floats and complex numbers (opaque; JSON numbers keep their encoding)
+- 🟡 Interfaces, maps and funcs the model did not build (results of unmodelled calls)
+- ❌ Ordered string comparison (`s < t`)
+
+**Control and effects**
+- ✅ Loops, branches, recursion (fuel-bounded), calls within the package, calls into dependencies (`-deps`)
+- ✅ Panics: index out of range, slice bounds, nil dereference, division by zero, negative shift, `make` length, type assertion, nil map write, `panic(v)`
+- ✅ Package variables with constant initializers, constant lookup tables
+- 🟡 Other package variables (havoc), `init` functions (not run), stores to globals (ignored)
+- 🟡 `defer` of an unmodelled call (ignored); `recover` (havoc)
+- ❌ `defer` of a modelled function, goroutines, `select`, channel operations
+
+**Standard library and SDKs** (✅ unless noted)
+- `strings`: `HasPrefix` `HasSuffix` `Contains` `Index*` `LastIndex*` `Count` `Cut` `Trim*` `ReplaceAll` `Split` `Fields` `Join` `Repeat` `Builder` `Replacer` (literal pairs); `TrimSpace` `ToLower` `ToUpper` `EqualFold` ASCII only 🟡
+- `strconv`: `Atoi` `Itoa` `ParseInt` `ParseUint` `ParseBool` `ParseFloat` (decimal; inf/NaN/hex 🟡) `FormatInt` `FormatUint`
+- `unicode/utf8`, `unicode/utf16`, `net/url`: translated from their Go source
+- `encoding/json`: `Marshal`, `Unmarshal`, `Valid`, `Encoder` to a `strings.Builder`; `encoding/base64` standard encodings; `encoding/hex.EncodeToString`
+- `regexp` with constant patterns; `fmt.Sprintf` with `%s %d %v %t` 🟡 otherwise; `reflect` `ValueOf` `IsZero` `Kind` `IsNil`
+- `sync/atomic` integer types; `sync.Mutex` and friends ignored (single-threaded model)
+- anthropic-sdk-go and openai-go JSON unions, `Message.Accumulate` (under `-deps`)
+- 🟡 `math/rand` (any value in range), clocks, environment, I/O, network (havoc)
+
 On tingly-box (7539 functions and methods, including agent-written specs)
 this models 7112 (2025 completely); most of the 427 rejected are test
 helpers taking `*testing.T`, `select` statements and `defer` of modelled
@@ -266,13 +279,42 @@ docs/semantics.md      the Go semantics modelled, by construct, with status
 
 ## Roadmap
 
-1. GoSSA heap model (stage B): writes through slices, `make`, arrays, structs.
-2. LLVM line beyond M0: globals, intrinsics, library calls, specs in C, and
-   TinyGo's IR as a cross-check of the Go line.
-3. Proof engines for properties the random and exhaustive engines cannot
-   settle: `bv_omega` for linear functions, `bv_decide` conditionally.
-4. Agent: ranking by expected yield, `ModelGap` feedback into the frontend,
-   generalising confirmed bugs across a package.
+Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
+
+**Go line (go/ssa → GoSSA)**: 12 / 15
+- ✅ SSA core with an executable, fuel-bounded semantics; GoSSA dialect
+- ✅ Heap model: pointers, slices, arrays, structs, writes through aliases
+- ✅ Maps, interfaces, closures, function values, methods
+- ✅ Standard library and SDK models (list above); dependencies from source (`-deps`)
+- ✅ Engines: random search, exhaustive bounded certificates
+- ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
+- ✅ Spec-in-Go properties and probes (model value vs real value)
+- ✅ LLM agent: proposes specs, runs them, reports
+- ✅ Regression gate in CI (166 properties); benchmark of hand-found bugs (34/34)
+- ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
+- ✅ Proof prototype: `bv_decide` proves a spec for all 64-bit inputs (`lean/Proofs`)
+- ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))
+- 🚧 Proof engines in the pipeline (`bv_omega` for linear functions, `bv_decide` for loop-free ones)
+- ⬜ Floats; `init` functions and package state
+- ⬜ Goroutines, `select`, channels, `defer` of modelled functions
+
+**LLVM line (C, LLVM IR, TinyGo → VeIR semantics)**: 5 / 10
+- ✅ `lean-llvm/`: LLVM dialect over the same core with [VeIR](https://github.com/opencompl/veir)'s integer and memory semantics
+- ✅ C frontend (clang + mem2reg + go-llvm); random and exhaustive search; replay under ASan/UBSan
+- ✅ TinyGo IR (LLVM 22): Go's ABI, runtime panics, aggregates, function values, globals, callees from the standard library and runtime lowered from their IR
+- ✅ `go2lean tinygo -compare`: the same package through both lines, side by side
+- ✅ Agreement on the example packages where both lines model the code (design doc §4.4)
+- 🚧 Replay of TinyGo-line counterexamples with `go test`
+- 🚧 Package `init` functions, inputs for strings and interfaces in the TinyGo line
+- ⬜ Specs in C; properties beyond "no undefined behaviour"
+- ⬜ Floats, `ptrtoint`/`inttoptr`, more intrinsics, `malloc`/`free`
+- ⬜ CI for the LLVM line (needs LLVM development files)
+
+**Agent and scale**: 2 / 4
+- ✅ Resumable full passes over a module; parallel searches
+- ✅ Specs from an issue tracker's bug classes (tingly-box: 28 confirmed, 11 new bugs)
+- ⬜ Ranking targets by expected yield; `ModelGap` feedback into the frontend
+- ⬜ Generalising a confirmed bug across a package
 
 ## License
 

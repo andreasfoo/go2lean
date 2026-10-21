@@ -18,7 +18,7 @@ func TestLowerOOB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := Load(bc)
+	m, err := Load(bc, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

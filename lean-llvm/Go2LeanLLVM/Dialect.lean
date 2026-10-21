@@ -32,6 +32,12 @@ inductive Val where
   | ptr (p : LPtr)
   /-- The memory state (only ever in heap slot 1). -/
   | mem (m : Veir.MemoryState)
+  /-- A struct or array value in a register (TinyGo passes Go slices,
+  strings and interfaces as such aggregates). -/
+  | agg (fields : List Val)
+  /-- A function of the program (a function pointer the frontend
+  resolved). -/
+  | fn (f : Nat)
   | unit
   deriving Inhabited
 
@@ -39,13 +45,43 @@ def intStr {w : Nat} : LInt w → String
   | .val b => toString b.toInt
   | .poison => "poison"
 
+partial def Val.str : Val → String
+  | .int w x => s!"i{w} {intStr x}"
+  | .ptr (.val p) => s!"ptr {p.object}+{p.address}"
+  | .ptr .poison => "ptr poison"
+  | .mem _ => "<mem>"
+  | .agg fs => "{" ++ ", ".intercalate (fs.map Val.str) ++ "}"
+  | .fn f => s!"func #{f}"
+  | .unit => "()"
+
 instance : Repr Val where
-  reprPrec v _ := match v with
-    | .int w x => s!"i{w} {intStr x}"
-    | .ptr (.val p) => s!"ptr {p.object}+{p.address}"
-    | .ptr .poison => "ptr poison"
-    | .mem _ => "<mem>"
-    | .unit => "()"
+  reprPrec v _ := v.str
+
+/-- The type of a register value, for zero values of aggregates. -/
+inductive Ty where
+  | int (w : Nat)
+  | ptr
+  | agg (fields : List Ty)
+  deriving Repr
+
+partial def Ty.zero : Ty → Val
+  | .int w => .int w (.val 0)
+  | .ptr => .ptr Veir.Data.LLVM.Ptr.null
+  | .agg fs => .agg (fs.map Ty.zero)
+
+/-- Field `path` of an aggregate. -/
+def extractPath : Val → List Nat → Option Val
+  | v, [] => some v
+  | .agg fs, i :: rest => fs[i]? >>= (extractPath · rest)
+  | _, _ => none
+
+/-- The aggregate with field `path` replaced by `x`. -/
+def insertPath : Val → List Nat → Val → Option Val
+  | _, [], x => some x
+  | .agg fs, i :: rest, x => do
+    let f ← fs[i]?
+    return .agg (fs.set i (← insertPath f rest x))
+  | _, _, _ => none
 
 inductive Op where
   | const (w : Nat) (v : Int)
@@ -87,6 +123,30 @@ inductive Op where
   | cond
   /-- `unreachable` reached. -/
   | unreachable
+  /-- The zero value of an aggregate (`zeroinitializer`). -/
+  | zero (t : Ty)
+  /-- `extractvalue agg, path`. -/
+  | extract (path : List Nat)
+  /-- `insertvalue agg, v, path`: args `[agg, v]`. -/
+  | insert (path : List Nat)
+  /-- Go's allocation (TinyGo's `runtime.alloc`): a fresh object of `size`
+  bytes, zeroed. Args `[size]`. -/
+  | goAlloc
+  /-- A pointer to global variable `i` (its object is set up before the
+  run; the pointer is in heap slot `2 + i`). -/
+  | global (i : Nat)
+  /-- The function a function pointer points to: args `[p]`; the table pairs
+  the heap slot of each function's object with the function. A pointer to
+  no function is unknown (the call takes its fallback). -/
+  | resolveFn (table : List (Nat × Nat))
+  /-- `llvm.memcpy` / `llvm.memmove`: args `[dst, src, len]`. -/
+  | memcpy (move : Bool)
+  /-- `llvm.memset`: args `[dst, byte, len]`. -/
+  | memset
+  /-- `llvm.smin` `smax` `umin` `umax` (`which` 0–3). -/
+  | minmax (which : Nat)
+  /-- `llvm.abs`: args `[x, isIntMinPoison]`. -/
+  | abs
   /-- An instruction the frontend does not lower: the model is stuck. -/
   | unsupported (what : String)
   deriving Repr
@@ -140,6 +200,42 @@ def checkAccess (m : Veir.MemoryState) (p : LPtr) (size : Nat) : Res Veir.Data.P
     match m.getObject? p with
     | some obj => if size == 0 || obj.holds p.address size then .ok p else .panic .indexOutOfRange
     | none => .panic .modelStuck
+
+def loadIntAt (heap : Heap Val) (w : Nat) (p : LPtr) : Res (Val × Heap Val) :=
+  match memOf heap with
+  | some m =>
+    if w % 8 != 0 then .panic .modelStuck else
+    match checkAccess m p (w / 8) with
+    | .ok p =>
+      match ofInterp .indexOutOfRange (do
+          let bytes ← m.load p (w / 8).toUInt64
+          let poisoned ← m.hasPoison p (w / 8).toUInt64
+          return (bytes, poisoned)) with
+      | .ok (bytes, poisoned) =>
+        .ok (.int w (if poisoned then .poison else .val (BitVec.ofNat w (leNat bytes))), heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | none => .panic .modelStuck
+
+def storeAt (heap : Heap Val) (v : Val) (p : LPtr) : Res (Val × Heap Val) :=
+  match memOf heap with
+  | some m =>
+    let (rv, size) : Veir.RuntimeValue × Nat := match v with
+      | .int w x => (.int w x, w / 8)
+      | .ptr q => (.addr q, 8)
+      | _ => (.int 0 .poison, 0)
+    if size == 0 then .panic .modelStuck else
+    match checkAccess m p size with
+    | .ok p =>
+      match ofInterp .indexOutOfRange (m.llvmStore p rv) with
+      | .ok m => .ok (.unit, setMem heap m)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | none => .panic .modelStuck
 
 def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .const w v, [] => .ok (.int w (.val (BitVec.ofInt w v)), heap)
@@ -206,23 +302,14 @@ def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap V
       | .panic k => .panic k
       | .outOfFuel => .outOfFuel
     | none => .panic .modelStuck
-  | .load w, [.ptr p] =>
-    match memOf heap with
-    | some m =>
-      if w % 8 != 0 then .panic .modelStuck else
-      match checkAccess m p (w / 8) with
-      | .ok p =>
-        match ofInterp .indexOutOfRange (do
-            let bytes ← m.load p (w / 8).toUInt64
-            let poisoned ← m.hasPoison p (w / 8).toUInt64
-            return (bytes, poisoned)) with
-        | .ok (bytes, poisoned) =>
-          .ok (.int w (if poisoned then .poison else .val (BitVec.ofNat w (leNat bytes))), heap)
-        | .panic k => .panic k
-        | .outOfFuel => .outOfFuel
-      | .panic k => .panic k
-      | .outOfFuel => .outOfFuel
-    | none => .panic .modelStuck
+  | .load 1, [.ptr p] =>
+    -- An i1 in memory is a byte.
+    match loadIntAt heap 8 p with
+    | .ok (.int 8 b, heap) => .ok (.int 1 (match b with
+        | .poison => .poison
+        | .val x => .val (if x == 0 then 0#1 else 1#1)), heap)
+    | r => r
+  | .load w, [.ptr p] => loadIntAt heap w p
   | .loadPtr, [.ptr p] =>
     match memOf heap with
     | some m =>
@@ -235,23 +322,11 @@ def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap V
       | .panic k => .panic k
       | .outOfFuel => .outOfFuel
     | none => .panic .modelStuck
-  | .store, [v, .ptr p] =>
-    match memOf heap with
-    | some m =>
-      let (rv, size) : Veir.RuntimeValue × Nat := match v with
-        | .int w x => (.int w x, w / 8)
-        | .ptr q => (.addr q, 8)
-        | _ => (.int 0 .poison, 0)
-      if size == 0 then .panic .modelStuck else
-      match checkAccess m p size with
-      | .ok p =>
-        match ofInterp .indexOutOfRange (m.llvmStore p rv) with
-        | .ok m => .ok (.unit, setMem heap m)
-        | .panic k => .panic k
-        | .outOfFuel => .outOfFuel
-      | .panic k => .panic k
-      | .outOfFuel => .outOfFuel
-    | none => .panic .modelStuck
+  | .store, [.int 1 b, .ptr p] =>
+    storeAt heap (.int 8 (match b with
+      | .poison => .poison
+      | .val x => .val (if x == 1#1 then 1#8 else 0#8))) p
+  | .store, [v, .ptr p] => storeAt heap v p
   | .gep offset strides, .ptr p :: idxs =>
     match p with
     | .poison => .ok (.ptr .poison, heap)
@@ -268,13 +343,104 @@ def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap V
     | .poison => .panic .undefinedBehavior
     | c => .ok (.int 1 c, heap)
   | .unreachable, [] => .panic .undefinedBehavior
+  | .zero t, [] => .ok (t.zero, heap)
+  | .extract path, [a] =>
+    match extractPath a path with
+    | some v => .ok (v, heap)
+    | none => .panic .modelStuck
+  | .insert path, [a, x] =>
+    match insertPath a path x with
+    | some v => .ok (v, heap)
+    | none => .panic .modelStuck
+  | .goAlloc, [.int _ (.val size)] =>
+    match memOf heap with
+    | some m =>
+      match ofInterp .undefinedBehavior (do
+          let (m, p) ← m.alloc size.toNat.toUInt64
+          let m ← if size.toNat == 0 then pure m else m.store p (ByteArray.mk (Array.replicate size.toNat 0))
+          return (m, p)) with
+      | .ok (m, p) => .ok (.ptr (.val p), setMem heap m)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | none => .panic .modelStuck
+  | .resolveFn table, [.ptr p] =>
+    match p with
+    | .val q =>
+      if q.object == 0 then .ok (.ptr p, heap) else
+      match table.find? (fun (slot, _) => match (heap[slot]? : Option Val) with
+          | some (.ptr (.val r)) => r == q
+          | _ => false) with
+      | some (_, f) => .ok (.fn f, heap)
+      | none => .ok (.unit, heap)
+    | .poison => .panic .undefinedBehavior
+  | .memcpy move, [.ptr d, .ptr s, .int _ (.val n)] =>
+    if n == 0 then .ok (.unit, heap) else
+    match memOf heap with
+    | some m =>
+      match checkAccess m d n.toNat, checkAccess m s n.toNat with
+      | .ok d, .ok s =>
+        match ofInterp .indexOutOfRange (if move then m.memmove d s n.toNat else m.memcpy d s n.toNat) with
+        | .ok m => .ok (.unit, setMem heap m)
+        | .panic k => .panic k
+        | .outOfFuel => .outOfFuel
+      | .panic k, _ | _, .panic k => .panic k
+      | _, _ => .outOfFuel
+    | none => .panic .modelStuck
+  | .memset, [.ptr d, .int 8 b, .int _ (.val n)] =>
+    if n == 0 then .ok (.unit, heap) else
+    match memOf heap with
+    | some m =>
+      match checkAccess m d n.toNat with
+      | .ok d =>
+        match ofInterp .indexOutOfRange (m.memset d (.int 8 b) n.toNat) with
+        | .ok m => .ok (.unit, setMem heap m)
+        | .panic k => .panic k
+        | .outOfFuel => .outOfFuel
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | none => .panic .modelStuck
+  | .minmax which, args =>
+    bin (fun a b => match which with
+      | 0 => Veir.Data.LLVM.Int.smin a b
+      | 1 => Veir.Data.LLVM.Int.smax a b
+      | 2 => Veir.Data.LLVM.Int.umin a b
+      | _ => Veir.Data.LLVM.Int.umax a b) heap args
+  | .abs, [.int w a, .int 1 p] =>
+    .ok (.int w (Veir.Data.LLVM.Int.abs a (p == .val 1#1)), heap)
+  | .global i, [] =>
+    match (heap[2 + i]? : Option Val) with
+    | some v@(.ptr _) => .ok (v, heap)
+    | _ => .panic .modelStuck
   | _, _ => .panic .modelStuck
+
+/-- The bytes a string of hex digits spells (how the frontend writes the
+initial bytes of globals: long list literals exhaust the elaborator). -/
+def hexBytes (s : String) : List Nat :=
+  let digit (c : Char) : Nat :=
+    if c.isDigit then c.toNat - '0'.toNat else c.toNat - 'a'.toNat + 10
+  let rec go : List Char → List Nat
+    | a :: b :: rest => (digit a * 16 + digit b) :: go rest
+    | _ => []
+  go s.toList
+
+/-- A global variable's initial memory: `size` bytes, of which `bytes` are
+the start, and pointers `(offset, global, addend)` into other globals.
+A function's object (what a pointer to it points to) is a global of one
+byte. -/
+structure GlobalInit where
+  size : Nat
+  bytes : List Nat
+  relocs : List (Nat × Nat × Int)
 
 instance : Dialect Op Val Unit where
   denote := denote
   toBool
     | .int 1 (.val b) => some (b == 1#1)
     | _ => none
+  callee
+    | .fn f => .known f []
+    | .ptr (.val p) => if p.object == 0 then .nil else .unknown
+    | _ => .unknown
 
 abbrev Prog := Go2Lean.SSA.Prog Op
 abbrev Func := Go2Lean.SSA.Func Op

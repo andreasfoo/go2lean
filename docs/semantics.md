@@ -204,6 +204,11 @@ Calls not listed here are unmodelled (§4.6).
 | `(reflect.Value).Kind`, `IsNil` | exact for the types modelled code boxes and the ones the search and the JSON model put in an `any` (the frontend lists each tag's kind); `IsNil` panics for kinds that cannot be nil, as Go does; any other type: stuck. Checked by `PKG=testdata/miscdiff` |
 | `unicode/utf16.Encode` | exact (surrogate pairs; invalid runes and surrogates become U+FFFD); checked by `PKG=testdata/miscdiff` |
 | `strings.Cut`, `strings.LastIndexByte` | exact |
+| `strings.NewReplacer` with literal pairs, `Replace` | exact (first matching old string, left to right) |
+| `strconv.ParseFloat(s, 64)` | exact for decimal syntax away from the float64 limit (value as JSON encodes it, syntax and range errors); infinities, NaN and hex floats havoc; checked by `scripts/json-diff.sh` |
+| `json.NewEncoder(&b)` on a `strings.Builder`, `SetEscapeHTML` with a constant before every `Encode`, `Encode` | exact (`Marshal`, without HTML escaping when the encoder says so, and a newline); checked by `scripts/json-diff.sh` |
+| `unicode/utf8`, `unicode/utf16` | translated from their Go source under `-deps` (as `net/url`) |
+| pointer sentinels: a package variable its initializer sets to `&T{...}` of constants (sjson's `errNoChange`) | boxed as an error it compares by identity like `errors.New` sentinels; its fields read as the constants |
 | `net/url` | translated from its Go source under `-deps` (the standard-library packages listed in `modelledStdlib`), like a dependency: `url.Parse`, `Hostname`, `Port`, `Query` and the rest are the library's own code. Not modelled inside it: IPv6 literals (`netip.ParseAddr`) and the `urlstrictcolons` GODEBUG setting (a host with two colons), both havoc. Checked by `DEPS=1 PKG=testdata/urldiff` (90 same, 0 different) |
 | `github.com/google/uuid.New` | a fresh value distinct from every other in the run (real UUIDs collide with negligible probability) |
 | `time.Now` and other clocks, `os.Getenv`, I/O, network | havoc |
