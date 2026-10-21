@@ -8,8 +8,6 @@
 package llvmhunt
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +20,7 @@ import (
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	llvmfe "github.com/andreasfoo/go2lean/internal/frontend/llvm"
+	"github.com/andreasfoo/go2lean/internal/sandbox"
 )
 
 // Options configure the search.
@@ -306,21 +305,14 @@ func replay(ws contract.Workspace, src string, fn llvmfe.Func, cx *contract.Coun
 		v.Diagnosis = &contract.Diagnosis{Reason: "poc_build_failed"}
 		return v, ws.WriteVerdict(v)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
-	cmd.Env = append(os.Environ(), "ASAN_OPTIONS=detect_leaks=0", "UBSAN_OPTIONS=print_stacktrace=1")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	exit := 0
-	if ee, ok := err.(*exec.ExitError); ok {
-		exit = ee.ExitCode()
-	} else if err != nil {
-		exit = -1
+	lim := sandbox.Default
+	lim.MemBytes, lim.Wall = 0, 20*time.Second
+	stdout, stderr, exit, err := sandbox.Run(bin, "", nil, []string{"ASAN_OPTIONS=detect_leaks=0", "UBSAN_OPTIONS=print_stacktrace=1"}, lim)
+	if err != nil {
+		return nil, err
 	}
-	v.Evidence = contract.Evidence{Cmd: bin, Exit: exit, StdoutTail: tail(stdout.String()), StderrTail: tail(stderr.String())}
-	report := sanitizerReport(stderr.String())
+	v.Evidence = contract.Evidence{Cmd: bin, Exit: exit, StdoutTail: tail(stdout), StderrTail: tail(stderr)}
+	report := sanitizerReport(stderr)
 	switch {
 	case report != "":
 		v.Status = contract.VerdictConfirmed

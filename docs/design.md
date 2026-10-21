@@ -563,11 +563,15 @@ is violated".
 
 ### 6.2 Running and judging
 
-All counterexamples of a package go into one test file and one
-`go test -count=1 -v -run '^TestGo2LeanPoC_' <pkg>` run (the package's
-tests compile once); results are mapped back by test name, and a batch
-that does not compile falls back to one run per test. Each PoC directory
-still holds a standalone file. (`tinygo test` for `crosscheck` properties,
+All counterexamples of a package go into one test file, added to the
+package through `go test -c -overlay` (nothing is written into the
+package; the package's tests compile once), and the test binary runs in
+the sandbox (`internal/sandbox`: a copy of the package directory,
+resource limits, and where user namespaces exist no network and a
+read-only file system; see docs/limitations.md §6). Results are mapped
+back by test name, and a batch that does not compile falls back to one
+run per test. Each PoC directory still holds a standalone file, run with
+plain `go test`. (`tinygo test` for `crosscheck` properties,
 later.)
 
 | status | condition |
@@ -579,7 +583,8 @@ later.)
 `spurious` carries a diagnosis (model output vs real output, havoc sites used,
 whether the property was `custom`); this is the only feedback channel into M1/M2.
 `confirmed` produces `<workspace>/poc/<id>/` with the test file, a README with
-the reproduction command, and the verdict.
+the reproduction command, and the verdict, and carries a `rank` (tier 1 to 4)
+by how plausible its input is for real callers (docs/limitations.md §3).
 
 ## 7. Shared contract
 

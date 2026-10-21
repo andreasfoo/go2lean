@@ -15,6 +15,7 @@ import (
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	llvmfe "github.com/andreasfoo/go2lean/internal/frontend/llvm"
+	"github.com/andreasfoo/go2lean/internal/sandbox"
 )
 
 // FuncResult is what the search found for one function.
@@ -142,7 +143,8 @@ var sizes = types.SizesFor("gc", "amd64")
 
 // goGens sets what the LLVM parameters point to from the Go signature: a
 // slice's or string's element size, and a pointer is one object of its
-// pointee's size (random bytes unless it holds pointers).
+// pointee's size (random bytes unless it holds pointers). Maps, channels,
+// functions and interfaces are nil.
 func goGens(gens []llvmfe.Gen, sig *types.Signature) {
 	params := map[string]types.Type{}
 	for i := 0; i < sig.Params().Len(); i++ {
@@ -172,6 +174,10 @@ func goGens(gens []llvmfe.Gen, sig *types.Signature) {
 			}
 		case *types.Basic:
 			g.EB = 1
+		case *types.Map, *types.Chan, *types.Signature:
+			// A pointer to a runtime structure: nil (a valid Go value; random
+			// bytes would break the runtime's own invariants).
+			g.K = "null"
 		case *types.Pointer:
 			g.K, g.EB, g.MaxLen, g.Random = "obj", int(sizes.Sizeof(t.Elem())), 0, !hasPointers(t.Elem())
 		}
@@ -273,15 +279,22 @@ func TestGo2LeanTinyGoReplay(t *testing.T) {
 	fmt.Println("GO2LEAN_OK")
 }
 `, pkg.Name, strings.Join(imps, "\n"), strings.Join(decls, "\n"), name, strings.Join(args, ", "))
-	file := filepath.Join(filepath.Dir(pkg.GoFiles[0]), "zz_go2lean_tinygo_replay_test.go")
-	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
+	pkgDir := filepath.Dir(pkg.GoFiles[0])
+	tmp, err := os.MkdirTemp("", "go2lean-replay-")
+	if err != nil {
 		return "not replayed (" + err.Error() + ")"
 	}
-	defer os.Remove(file)
-	cmd := exec.Command("go", "test", "-count=1", "-v", "-run", "^TestGo2LeanTinyGoReplay$", pkg.PkgPath)
-	cmd.Dir = moduleDir
-	out, _ := cmd.CombinedOutput()
-	text := string(out)
+	defer os.RemoveAll(tmp)
+	bin := filepath.Join(tmp, "replay.test")
+	buildOut, exit, err := sandbox.BuildTest(moduleDir, pkg.PkgPath, pkgDir, map[string][]byte{"zz_go2lean_tinygo_replay_test.go": []byte(src)}, bin)
+	if err != nil || exit != 0 {
+		return "not replayed (" + firstLine(buildOut) + ")"
+	}
+	stdout, stderr, _, err := sandbox.Run(bin, pkgDir, []string{"-test.count=1", "-test.v", "-test.run", "^TestGo2LeanTinyGoReplay$"}, nil, sandbox.Default)
+	if err != nil {
+		return "not replayed (" + err.Error() + ")"
+	}
+	text := stdout + stderr
 	switch {
 	case strings.Contains(text, "GO2LEAN_PANIC"):
 		_, msg, _ := strings.Cut(text, "GO2LEAN_PANIC ")

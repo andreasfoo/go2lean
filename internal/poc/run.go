@@ -1,7 +1,6 @@
 package poc
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
+	"github.com/andreasfoo/go2lean/internal/sandbox"
 )
 
 // result is what the harness prints.
@@ -102,10 +102,14 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.
 		}
 	}
 	var vs []*contract.Verdict
+	callers := newCallerIndex(root)
 	for _, id := range cxIDs {
 		p := all[id]
 		if p.v == nil {
 			return nil, fmt.Errorf("%s: no verdict produced", id)
+		}
+		if p.v.Status == contract.VerdictConfirmed {
+			p.v.Rank = rankOf(p, callers)
 		}
 		if err := deliver(ws, root, p); err != nil {
 			return nil, err
@@ -141,8 +145,8 @@ func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 	return p, nil
 }
 
-// runBatch writes one test file holding every test of the batch into the
-// package, runs it, and returns the parsed results keyed by counterexample
+// runBatch builds one test file holding every test of the batch into the
+// package's test binary, runs it in the sandbox, and returns the parsed results keyed by counterexample
 // id (nil when the file did not compile).
 func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]result, string, int, string, string, error) {
 	imports := map[string]bool{}
@@ -166,33 +170,39 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]
 			os.Remove(f)
 		}
 	}
-	testPath := filepath.Join(pkgDir, fmt.Sprintf("zz_go2lean_poc_%d_test.go", os.Getpid()))
-	if err := os.WriteFile(testPath, []byte(src), 0o644); err != nil {
-		return nil, "", 0, "", "", err
-	}
-	defer os.Remove(testPath)
+	// The harness joins the package through an overlay and runs in the
+	// sandbox: nothing is written to the package, and a target that writes
+	// files, dials out or eats memory meets the sandbox's limits.
 	run := "^TestGo2LeanPoC_"
 	if len(batch) == 1 {
 		run += batch[0].cx.ID + "$"
 	}
-	cmd := exec.Command("go", "test", "-count=1", "-v", "-run", run, pkg)
-	cmd.Dir = root
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-	exit := 0
-	if ee, ok := runErr.(*exec.ExitError); ok {
-		exit = ee.ExitCode()
-	} else if runErr != nil {
-		return nil, "", 0, "", "", runErr
+	tmp, err := os.MkdirTemp("", "go2lean-poc-")
+	if err != nil {
+		return nil, "", 0, "", "", err
+	}
+	defer os.RemoveAll(tmp)
+	bin := filepath.Join(tmp, "poc.test")
+	name := fmt.Sprintf("zz_go2lean_poc_%d_test.go", os.Getpid())
+	buildOut, exit, err := sandbox.BuildTest(root, pkg, pkgDir, map[string][]byte{name: []byte(src)}, bin)
+	if err != nil {
+		return nil, "", 0, "", "", err
+	}
+	var stdout, stderr string
+	if exit != 0 {
+		stderr = buildOut
+	} else {
+		stdout, stderr, exit, err = sandbox.Run(bin, pkgDir, []string{"-test.count=1", "-test.v", "-test.run", run}, nil, sandbox.Default)
+		if err != nil {
+			return nil, "", 0, "", "", err
+		}
 	}
 	cmdLine := "go test -count=1 -v -run '" + run + "' " + pkg
-	results := parseResults(stdout.String())
+	results := parseResults(stdout)
 	if len(results) == 0 {
-		return nil, cmdLine, exit, stdout.String(), stderr.String(), nil
+		return nil, cmdLine, exit, stdout, stderr, nil
 	}
-	return results, cmdLine, exit, stdout.String(), stderr.String(), nil
+	return results, cmdLine, exit, stdout, stderr, nil
 }
 
 func verdictOf(p *prepared, results map[string]result, cmd string, exit int, stdout, stderr string) *contract.Verdict {
