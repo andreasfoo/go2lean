@@ -107,6 +107,7 @@ type searchResult struct {
 	ModelOutput *contract.ModelOutput      `json:"model_output"`
 	Probes      []contract.Probe           `json:"probes"`
 	PanicAt     string                     `json:"panic_at"`
+	Assumptions []string                   `json:"assumptions"`
 }
 
 // gens renders the Search.Gen list for a function's parameters.
@@ -486,7 +487,8 @@ func keyMaps(node any, keys []string) {
 // counterexample it wrote to the workspace (nil when none was found) and a
 // one-line summary. When the exhaustive engine covers its whole domain
 // without a counterexample, a ProofResult with status "exhausted" is written
-// ("exhausted_havoc" when some inputs read havoc values).
+// ("exhausted_havoc" when some inputs read havoc values, "exhausted_assuming"
+// when some runs took an under-approximation).
 func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts SearchOptions) (*contract.Counterexample, string, error) {
 	if prop.MaxLen > 0 {
 		opts.MaxLen = prop.MaxLen
@@ -634,7 +636,12 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 				status = contract.ProofExhaustedHavoc
 				domain += fmt.Sprintf("; %d of them read havoc values (%d sites), three values tried each", res.HavocRead, res.HavocSites)
 			}
-			pr := &contract.ProofResult{Property: prop.ID, Status: status, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain}
+			if len(res.Assumptions) > 0 {
+				// The model left out behaviours Go has on these paths.
+				status = contract.ProofExhaustedAssuming
+				domain += fmt.Sprintf("; runs took %d under-approximations (see assumptions)", len(res.Assumptions))
+			}
+			pr := &contract.ProofResult{Property: prop.ID, Status: status, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain, Assumptions: res.Assumptions}
 			if err := ws.WriteProofResult(pr); err != nil {
 				return nil, "", err
 			}
@@ -797,6 +804,7 @@ func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, 
 		RevalidatedInLean: true,
 		Probes:            res.Probes,
 		PanicAt:           res.PanicAt,
+		Assumptions:       res.Assumptions,
 	}
 	return cx, ws.WriteCounterexample(cx)
 }

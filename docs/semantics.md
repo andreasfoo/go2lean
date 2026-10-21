@@ -15,7 +15,7 @@ gives the design, §9b–9c the history of each change.
 |---|---|---|
 | **exact** | the model computes what Go computes | counterexamples and certificates are sound for it |
 | **havoc** | the result is an unconstrained value of the right type, drawn by the engines (over-approximation) | can produce counterexamples Go does not have; M3 (`go test`) rejects them as spurious |
-| **assumption** | the model fixes one behaviour among Go's possible ones and logs that it did (under-approximation) | can hide a bug; a spec verdict that read an assumed value is not counted as decided |
+| **assumption** | the model fixes one behaviour among Go's possible ones and records it in the run (`assume`; under-approximation) | can hide a bug; a spec verdict that read an assumed value is not counted as decided, and an exhaustive pass through one is `exhausted_assuming` with the list |
 | **stuck** | the model has no value to give (`modelStuck`); the trial is moot | lowers coverage, never produces a wrong verdict |
 | **rejected** | the function is not modelled (listed in the model report with the reason) | no properties for it; callers see an unmodelled call (havoc) |
 

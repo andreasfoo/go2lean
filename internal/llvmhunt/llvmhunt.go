@@ -50,6 +50,7 @@ type searchResult struct {
 	OutOfFuel   int                   `json:"out_of_fuel"`
 	Domain      float64               `json:"domain"`
 	Exhausted   bool                  `json:"exhausted"`
+	Assumptions []string              `json:"assumptions"`
 	StuckSites  map[string]int        `json:"stuck_sites"`
 }
 

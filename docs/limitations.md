@@ -47,10 +47,23 @@ havoc sites not enumerated, and the run may have taken an
 under-approximating branch. Which assumptions invalidate a given certificate
 is not recorded.
 
-Planned: every under-approximation site carries a named assumption tag; a run
-records the tags it hit; a certificate that hit any is downgraded to
-"bounded, assuming X". A future theorem states those assumptions as
-hypotheses.
+Since 2026-10-21 under-approximations are recorded as the run takes them.
+The frontend marks each site it lowers to one (a dropped store to a
+global or into a handle, an ignored call or `defer`, a map update on an
+unknown map, an assumed pointer, slice or zero value for an unmodelled
+result, a length kept below 16) with an `assume` instruction; the core
+records a callee the model got stuck in (its effects dropped) and calls
+through unknown function values or into packages not linked; the GoSSA
+dialect records the run-time ones (a `range` over an unknown map that ran
+zero times, two unknown non-nil errors compared equal). An exhaustive pass
+whose runs took any of them is recorded as `exhausted_assuming`, with the
+list, instead of `exhausted`; counterexamples carry the list too. On the
+example packages 4 of 101 certificates changed (a store to a global
+dropped, a callee the model got stuck in, an assumed `errors.As` target).
+
+Still open: `sync` calls are dropped without a note (no concurrency is
+modelled at all, see §7); havoc sites are still sampled, not enumerated
+(`exhausted_havoc`); and the list is not yet a hypothesis of any theorem.
 
 ## 3. Confirmed is not the same as actionable
 

@@ -163,6 +163,8 @@ type Counterexample struct {
 	// PanicAt names the function, block and op where the model run
 	// panicked, when it did.
 	PanicAt string `json:"panic_at,omitempty"`
+	// Assumptions are the under-approximations the model run took.
+	Assumptions []string `json:"assumptions,omitempty"`
 }
 
 // Probe is one go2leanProbe value: its label and the value (JSON as the
@@ -240,6 +242,10 @@ const (
 	// the model does not know (havoc), of which only a few were tried: the
 	// property holds for those, not for every value they stand for.
 	ProofExhaustedHavoc ProofStatus = "exhausted_havoc"
+	// ProofExhaustedAssuming: as exhausted, but some inputs ran through an
+	// under-approximation (Assumptions): the property holds for the model,
+	// which leaves out behaviours Go has there.
+	ProofExhaustedAssuming ProofStatus = "exhausted_assuming"
 )
 
 // ProofResult records a proof attempt on a Property.
@@ -249,9 +255,11 @@ type ProofResult struct {
 	Fuel     int         `json:"fuel,omitempty"`
 	Tactic   string      `json:"tactic,omitempty"`
 	Domain   string      `json:"domain,omitempty"`
-	LeanFile string      `json:"lean_file,omitempty"`
-	TimeMs   int64       `json:"time_ms,omitempty"`
-	Error    string      `json:"error,omitempty"`
+	// Assumptions are the under-approximations the runs took.
+	Assumptions []string `json:"assumptions,omitempty"`
+	LeanFile    string   `json:"lean_file,omitempty"`
+	TimeMs      int64    `json:"time_ms,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
 // ModelGap is feedback from M3/M2 to M1: a place where the model's

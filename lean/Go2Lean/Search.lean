@@ -703,6 +703,7 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
   Json.mkObj [("found", true), ("trial", trial), ("seed", seed),
     ("inputs", Json.mkObj inputs), ("memory", Json.mkObj memory), ("objects", Json.mkObj objects),
     ("havoc", Json.arr havoc.toArray), ("probes", Json.arr probes.toArray),
+    ("assumptions", Json.arr (s.assumed.map Json.str)),
     ("model_output", modelOutput o ret), ("panic_at", (s.panicAt.map Json.str).getD Json.null)]
 
 /-- The block a postcondition's spec returned from, when the spec ran to
@@ -999,7 +1000,8 @@ def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : 
 `{"found": false, "exhaustive": true, ...}` when the whole domain holds, or
 `"exhaustive": false` when the domain exceeds `limit`. Havoc sites (if any)
 are not enumerated; they take seed-derived values (three per input), and
-`havoc_read` counts the inputs whose run read one. -/
+`havoc_read` counts the inputs whose run read one; `assumptions` lists the
+under-approximations the runs took. -/
 def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (maxLen limit fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
     (allowNil : Bool := true) (budgetMs : Nat := 0) : IO Unit := do
@@ -1019,6 +1021,9 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut fuelOuts := 0
   let mut moots := 0
   let mut havocRuns := 0
+  -- The under-approximations any input's run took: a domain that held
+  -- through one of them is no certificate for what it left out.
+  let mut assumed : Array String := #[]
   let mut i : Nat := 0
   let mut fallback : Option Json := none
   let mut exits : List (String × Nat) := []
@@ -1042,6 +1047,8 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
     if s.log.size > 0 then havocRuns := havocRuns + 1
+    for a in s.assumed do
+      if !assumed.contains a && assumed.size < 32 then assumed := assumed.push a
     i := i + 1
   if let some j := fallback then
     IO.println (j.setObjVal! "havoc_dependent" true).compress
@@ -1049,6 +1056,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
     ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
     ("havoc_sites", p.havocWidths.size), ("havoc_read", havocRuns),
+    ("assumptions", Json.arr (assumed.map Json.str)),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 
 end Go2Lean.Search

@@ -219,6 +219,8 @@ func Print(p *ir.Prog, module string) string {
 				}
 				if in.Probe != "" {
 					fmt.Fprintf(&b, ".probe %q %d", in.Probe, in.Args[0])
+				} else if in.Assume != "" {
+					fmt.Fprintf(&b, ".assume %q", in.Assume)
 				} else if in.Op == nil {
 					fmt.Fprintf(&b, ".havoc %d %d", in.Dst, in.HavocSite)
 				} else {

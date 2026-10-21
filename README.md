@@ -76,7 +76,8 @@ own integer literals so magic-constant branches are reachable), then
 exhaustive enumeration of a small domain (narrow signatures only), which
 records an `exhausted` certificate when it passes (`exhausted_havoc` when
 some inputs ran through values the model does not know, of which it tried
-only a few). A spec whose verdict
+only a few; `exhausted_assuming`, with the list, when some runs took an
+under-approximation such as a dropped store to a global). A spec whose verdict
 depended on a havoc value (it looked inside an opaque value, or called
 something unmodelled) is reported as unknown, never as a counterexample
 or a certificate. Both run in `go2lean-search`, a native

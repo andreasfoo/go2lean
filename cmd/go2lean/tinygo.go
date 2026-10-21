@@ -106,7 +106,7 @@ func judged(s string) string {
 	return "?"
 }
 
-func isClean(s string) bool { return s == "holds" || s == "exhausted" }
+func isClean(s string) bool { return s == "holds" || strings.HasPrefix(s, "exhausted") }
 
 // goLineStatus summarises the go/ssa line's result on a no_panic property.
 func goLineStatus(w contract.Workspace, p *contract.Property) string {
@@ -115,6 +115,9 @@ func goLineStatus(w contract.Workspace, p *contract.Property) string {
 		return "not searched"
 	}
 	if h.Counterexample == "" {
+		if strings.Contains(h.Summary, "recorded as exhausted_assuming") {
+			return "exhausted_assuming"
+		}
 		if strings.Contains(h.Summary, "exhausted") || strings.Contains(h.Summary, "holds on") {
 			return "exhausted"
 		}
