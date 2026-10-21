@@ -31,6 +31,8 @@ func main() {
 		err = cmdPoc(os.Args[2:])
 	case "run":
 		err = cmdRun(os.Args[2:])
+	case "rank":
+		err = cmdRank(os.Args[2:])
 	case "agent":
 		err = cmdAgent(os.Args[2:])
 	case "summary":
@@ -56,6 +58,7 @@ func usage() {
   go2lean hunt    [-workspace out] [-property id] M2: search for counterexamples
   go2lean poc     [-workspace out] -counterexample id   M3: realise and verify
   go2lean run     [-workspace out] <package>      all of the above
+  go2lean rank    [-workspace out]                 order confirmed verdicts by how plausible their input is (tiers 1-4)
   go2lean summary [-workspace out]                 all verdicts and proofs of a workspace as Markdown
   go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>
                                                   M2 agent: propose spec-in-Go properties, run, report

@@ -209,6 +209,19 @@ type Verdict struct {
 	PocDir         string            `json:"poc_dir,omitempty"`
 	// Probes are the go2leanProbe values the real run printed.
 	Probes []Probe `json:"probes,omitempty"`
+	// Rank orders a confirmed verdict by how plausible its input is for the
+	// code's real callers.
+	Rank *Rank `json:"rank,omitempty"`
+}
+
+// Rank of a confirmed finding: tier 1 (any caller of the API can pass the
+// input, or a call site passes the same nil) to 4 (an input the test
+// forged). See internal/poc/rank.go.
+type Rank struct {
+	Tier   int    `json:"tier"`
+	Reason string `json:"reason"`
+	// Sites are call sites that pass the same nil (file:line).
+	Sites []string `json:"sites,omitempty"`
 }
 
 // ProofStatus is the outcome of a proof attempt.

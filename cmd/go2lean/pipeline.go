@@ -8,6 +8,7 @@ import (
 	"github.com/andreasfoo/go2lean/internal/constraint"
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/pipeline"
+	"github.com/andreasfoo/go2lean/internal/poc"
 )
 
 // engineOptions defers reading the -engine flag until after Parse.
@@ -107,6 +108,34 @@ func cmdPoc(args []string) error {
 	}
 	_, err = pipeline.VerifyAll(w, env, ids, os.Stdout)
 	return err
+}
+
+func cmdRank(args []string) error {
+	fs := flag.NewFlagSet("rank", flag.ExitOnError)
+	ws := workspaceFlag(fs)
+	fs.Parse(args)
+	w, env, err := openWorkspace(ws)
+	if err != nil {
+		return err
+	}
+	root := env.Module
+	if root == "" {
+		root = env.Root
+	}
+	vs, err := poc.RankAll(w, root)
+	if err != nil {
+		return err
+	}
+	count := map[int]int{}
+	for _, v := range vs {
+		count[v.Rank.Tier]++
+		fmt.Printf("%d  %s\n   %s\n", v.Rank.Tier, v.Counterexample, v.Rank.Reason)
+		for _, s := range v.Rank.Sites {
+			fmt.Printf("     %s\n", s)
+		}
+	}
+	fmt.Printf("\n%d confirmed: tier 1 %d, tier 2 %d, tier 3 %d, tier 4 %d\n", len(vs), count[1], count[2], count[3], count[4])
+	return nil
 }
 
 func cmdRun(args []string) error {
