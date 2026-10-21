@@ -2841,9 +2841,25 @@ def stuckSite (heap : Heap Val) : Op → List Val → Option String
     (strBytes heap (.str ref off len)).map fun bs => s!"jsonDecode into entry {root}: {utf8Lossy (bs.take 240)}"
   | _, _ => none
 
+/-- The under-approximations an op takes on these operands (recorded by
+the core; see `Dialect.assumption` and docs/semantics.md). -/
+def assumption (heap : Heap Val) : Op → List Val → Option String
+  | .eq, [.err true, .err true] | .ne, [.err true, .err true] =>
+    some "two non-nil errors the model does not tell apart compared equal"
+  | .mapNext .., [it] =>
+    match heapLoad heap it with
+    | .ok (.tuple [.opaqueNil, _]) => none
+    | .ok (.tuple [m, _]) =>
+      match mapEntries heap m with
+      | some _ => none
+      | none => some "a range over a map the model knows nothing about ran zero times"
+    | _ => none
+  | _, _ => none
+
 instance : Dialect Op Val Oracle where
   denote := denote
   stuckSite := stuckSite
+  assumption := assumption
   toBool
     | .bool b => some b
     | _ => none

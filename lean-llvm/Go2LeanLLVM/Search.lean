@@ -302,19 +302,25 @@ def search (p : Prog) (globals : List GlobalInit) (sp : Spec) : Json := Id.run d
       | _ => pure ()
   let dom := domainSize sp.exhaustLen sp.gens sp.extra
   let mut exhausted := false
+  -- Under-approximations the exhaustive runs took (a callee the model got
+  -- stuck in, whose effects are dropped).
+  let mut assumed : Array String := #[]
   if sp.engine != "random" && dom ≤ sp.exhaustLimit then
     let mut i := 0
     let mut clean := true
     for args in enumArgs sp.exhaustLen sp.gens sp.extra do
       match runOnce p globals sp.func args 0 sp.fuel sp.init with
       | (.ub k, s) => return report sp.gens args k s i 0 "exhaustive"
-      | (.holds, _) => pure ()
+      | (.holds, s) =>
+        for a in s.assumed do
+          if !assumed.contains a && assumed.size < 32 then assumed := assumed.push a
       | _ => clean := false
       i := i + 1
     exhausted := clean
   let top := (sites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 3
   return Json.mkObj [("found", false), ("trials", sp.trials), ("stuck", stuck),
     ("out_of_fuel", fuelOut), ("domain", dom), ("exhausted", exhausted),
+    ("assumptions", Json.arr (assumed.map Json.str)),
     ("stuck_sites", Json.mkObj (top.map fun (k, n) => (k, Json.num n)))]
 
 partial def tyOfJson (j : Json) : Except String Ty := do

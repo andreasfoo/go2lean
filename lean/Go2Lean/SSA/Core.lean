@@ -98,6 +98,10 @@ class Dialect (Op : Type) (Val Oracle : outParam Type) where
   /-- Where an op got stuck, said better than its `repr` (which a large
   operand, such as a JSON table, fills before the cut). -/
   stuckSite : Heap Val → Op → List Val → Option String := fun _ _ _ => none
+  /-- The under-approximation an op takes on these operands, if any (a
+  `range` over a map the model knows nothing about runs zero times): the
+  run records it, so a result that went through it is not a certificate. -/
+  assumption : Heap Val → Op → List Val → Option String := fun _ _ _ => none
 
 inductive Instr (Op : Type) where
   /-- `dst := op args` -/
@@ -108,6 +112,10 @@ inductive Instr (Op : Type) where
   /-- Record `v` under `label` in the run state (a spec's `go2leanProbe`),
   so a counterexample reports the values the model computed. -/
   | probe (label : String) (v : Var)
+  /-- The run takes an under-approximation the frontend marked here (a
+  store to a global dropped, a call without result ignored): recorded in
+  the run state. -/
+  | assume (note : String)
   deriving Repr
 
 inductive Term where
@@ -175,6 +183,8 @@ structure HState (Val : Type) where
   exit : Option (String × Nat) := none
   /-- Values recorded by probes, in the order they ran. -/
   probes : Array (String × Val) := #[]
+  /-- The under-approximations the run took (distinct notes, in order). -/
+  assumed : Array String := #[]
   /-- Where the run panicked: the function, block and op (or terminator),
   set by the first panic, for diagnosing a counterexample. -/
   panicAt : Option String := none
@@ -188,6 +198,11 @@ def take (h : Havoc Val) (s : HState Val) (site : Nat) : Val × HState Val :=
   let iter := counts[site]!
   let v := h site iter
   (v, { s with counts := counts.set! site (iter + 1), log := s.log.push (site, iter, v) })
+
+/-- Record an under-approximation (at most 32 distinct notes). -/
+def assume (s : HState Val) (note : String) : HState Val :=
+  if s.assumed.contains note || s.assumed.size ≥ 32 then s
+  else { s with assumed := s.assumed.push note }
 
 end HState
 
@@ -206,6 +221,9 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
   | [], env, s => (.ok env, s)
   | .op dst o args :: rest, env, s =>
     let vals := args.map (env[·]!)
+    let s := match Dialect.assumption s.heap o vals with
+      | some note => s.assume note
+      | none => s
     match Dialect.denote or s.heap o vals with
     | .ok (v, heap) => execInstrs or h rest (env.set! dst v) { s with heap := heap }
     | .panic .modelStuck =>
@@ -221,12 +239,17 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
   | .havoc dst site :: rest, env, s =>
     let (v, s) := s.take h site
     execInstrs or h rest (env.set! dst v) s
+  | .assume note :: rest, env, s => execInstrs or h rest env (s.assume note)
 
 /-- Bind the parameters of block `b` to the values of `args` in `env`. -/
 def enter (fn : Func Op) (b : BlockId) (env : Env Val) (args : List Var) : Env Val :=
   match fn.blocks[b]? with
   | some blk => bindParams env blk.params (args.map (env[·]!))
   | none => env
+
+/-- The note for a callee the model got stuck in: its effects are dropped. -/
+def stuckCallNote (p : Prog Op) (f : FuncId) : String :=
+  s!"the model got stuck in {(p.funcs[f]?.map (·.name)).getD "a callee"}: its result is havoc, its effects are dropped"
 
 mutual
 
@@ -268,13 +291,14 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
             if k.isStuck then
               -- The callee could not be followed: forget what it did to the
               -- heap and take the fallback, which havocs the result.
-              runBlock p or h fn fb (enter fn fb env []) { s' with heap := s.heap, stuck := s.stuck } fuel
+              let s'' := { s' with heap := s.heap, stuck := s.stuck }
+              runBlock p or h fn fb (enter fn fb env []) (s''.assume (stuckCallNote p f)) fuel
             else (.panic k, s')
           | (.outOfFuel, s') => (.outOfFuel, s')
         | .callv fv args dst next nargs fb =>
           match Dialect.callee (Op := Op) env[fv]! with
           | .nil => (.panic .nilDereference, s)
-          | .unknown => runBlock p or h fn fb (enter fn fb env []) s fuel
+          | .unknown => runBlock p or h fn fb (enter fn fb env []) (s.assume "a call through a function value the model does not know: its effects are not modelled") fuel
           | .known f bound =>
             match runFunc p or h f (bound ++ args.map (env[·]!)) s fuel with
             | (.ok v, s') =>
@@ -282,12 +306,13 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
               runBlock p or h fn next (enter fn next env nargs) s' fuel
             | (.panic k, s') =>
               if k.isStuck then
-                runBlock p or h fn fb (enter fn fb env []) { s' with heap := s.heap, stuck := s.stuck } fuel
+                let s'' := { s' with heap := s.heap, stuck := s.stuck }
+                runBlock p or h fn fb (enter fn fb env []) (s''.assume (stuckCallNote p f)) fuel
               else (.panic k, s')
             | (.outOfFuel, s') => (.outOfFuel, s')
         | .xcall _ _ _ _ _ _ fb =>
           -- Not linked (the package was not compiled alongside): unmodelled.
-          runBlock p or h fn fb (enter fn fb env []) s fuel
+          runBlock p or h fn fb (enter fn fb env []) (s.assume "a call into a package not linked into the model: its effects are not modelled") fuel
 
 /-- Run function `fid` on `args`. -/
 def runFunc (p : Prog Op) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val)

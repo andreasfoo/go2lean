@@ -122,6 +122,9 @@ func RunTinyGo(root string, ws contract.Workspace, moduleDir, pattern string, op
 		case res.Found:
 			r.Status, r.Panic, r.Inputs, r.Memory = "panic", res.ModelOutput.Panic, res.Inputs, res.Memory
 			r.Verdict = replayGo(moduleDir, pkg, name, sigs[name], r)
+		case res.Exhausted && len(res.Assumptions) > 0:
+			r.Status = "exhausted_assuming"
+			r.Issues = append(r.Issues, res.Assumptions...)
 		case res.Exhausted:
 			r.Status = "exhausted"
 		case res.Stuck > 0:

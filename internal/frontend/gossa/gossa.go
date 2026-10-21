@@ -1266,6 +1266,17 @@ func (t *fnState) fresh() ir.Var {
 	return v
 }
 
+// assume notes an under-approximation like issue, and marks the point in
+// the model so that a run through it records it (docs/limitations.md §2).
+func (t *fnState) assume(format string, args ...any) {
+	t.issue(format, args...)
+	note := fmt.Sprintf(format, args...)
+	if !strings.HasPrefix(note, t.f.Name()+": ") {
+		note = t.f.Name() + ": " + note
+	}
+	t.emit(ir.Instr{Assume: note})
+}
+
 func (t *fnState) issue(format string, args ...any) {
 	if t.quiet {
 		return
@@ -1721,7 +1732,7 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 			if zero, ok := zeroVal(pt.Elem()); ok {
 				val := t.fresh()
 				if t.structHavoc(val, st, site, reason, goHint, 3) {
-					t.issue("%s: assumed a pointer to a fresh %s with havoc fields (not modelled)", site, pt.Elem())
+					t.assume("%s: assumed a pointer to a fresh %s with havoc fields (not modelled)", site, pt.Elem())
 					t.emit(ir.Instr{Dst: dst, Op: ir.Alloc{Zero: zero}})
 					t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{dst, val}})
 					return nil
@@ -1738,7 +1749,7 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 	case *types.Pointer:
 		if zero, ok := zeroVal(u.Elem()); ok {
 			marker()
-			t.issue("%s: assumed a pointer to a fresh zero %s (not modelled)", site, u.Elem())
+			t.assume("%s: assumed a pointer to a fresh zero %s (not modelled)", site, u.Elem())
 			t.emit(ir.Instr{Dst: dst, Op: ir.Alloc{Zero: zero}})
 			return nil
 		}
@@ -1751,7 +1762,7 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 			if w, _, isInt := intWidth(u.Elem()); !isInt || w != 8 {
 				marker()
 			}
-			t.issue("%s: assumed a slice of 0..3 zero values of %s (not modelled)", site, u.Elem())
+			t.assume("%s: assumed a slice of 0..3 zero values of %s (not modelled)", site, u.Elem())
 			raw := t.fresh()
 			t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, site+" (length)", reason, goHint)})
 			four := t.fresh()
@@ -1767,7 +1778,7 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 		return fmt.Errorf("cannot havoc a value of type %s", ty)
 	}
 	marker()
-	t.issue("%s: assumed the zero value of %s (not modelled)", site, ty)
+	t.assume("%s: assumed the zero value of %s (not modelled)", site, ty)
 	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: v}})
 	return nil
 }
@@ -1900,7 +1911,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapUpdate"), Args: []ir.Var{m, k, v}})
 			return nil
 		}, func() error {
-			t.issue("map update %s[%s] on a map the model knows nothing about ignored", x.Map.Name(), x.Key.Name())
+			t.assume("map update %s[%s] on a map the model knows nothing about ignored", x.Map.Name(), x.Key.Name())
 			return nil
 		})
 	case *ssa.Defer:
@@ -1912,7 +1923,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 				return fmt.Errorf("deferred call to %s (defer of a modelled function)", callee.Name())
 			}
 		}
-		t.issue("deferred call %s ignored (effects not modelled)", x.Call.String())
+		t.assume("deferred call %s ignored (effects not modelled)", x.Call.String())
 		return nil
 	case *ssa.RunDefers:
 		return nil
@@ -2096,11 +2107,11 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		return nil
 	case *ssa.Store:
 		if _, isGlobal := x.Addr.(*ssa.Global); isGlobal {
-			t.issue("store to global %s ignored", x.Addr.Name())
+			t.assume("store to global %s ignored", x.Addr.Name())
 			return nil
 		}
 		if t.intoHandle(x.Addr) {
-			t.issue("store into handle %s ignored", x.Addr.Name())
+			t.assume("store into handle %s ignored", x.Addr.Name())
 			return nil
 		}
 		p, err := t.val(x.Addr)
@@ -2547,7 +2558,7 @@ func (t *fnState) call(x *ssa.Call) error {
 			}
 			return t.havoc(x, "builtin "+bi.Name(), "unmodeled-call", "")
 		}
-		t.issue("call to builtin %s ignored", bi.Name())
+		t.assume("call to builtin %s ignored", bi.Name())
 		return nil
 	}
 	callee := x.Call.StaticCallee()
@@ -2727,7 +2738,13 @@ func (t *fnState) call(x *ssa.Call) error {
 	if hasResult {
 		return t.havoc(x, "call "+name, "unmodeled-call", "")
 	}
-	t.issue("call to %s ignored (no result, effects not modelled)", name)
+	if callee != nil && callee.Pkg != nil && callee.Pkg.Pkg.Path() == "sync" {
+		// Lock, Unlock, Wait: no concurrency is modelled, so a
+		// single-goroutine run loses nothing.
+		t.issue("call to %s ignored (single goroutine)", name)
+		return nil
+	}
+	t.assume("call to %s ignored (no result, effects not modelled)", name)
 	return nil
 }
 
@@ -4005,7 +4022,7 @@ func (t *fnState) randBounded(x *ssa.Call, callee *ssa.Function) (bool, error) {
 // not look into: havoc, but kept below 16 so that `make([]T, 0, len(m))`
 // stays something the model materialises. Recorded as an assumption.
 func (t *fnState) opaqueLen(dst ir.Var, name string, ty types.Type) {
-	t.issue("%s of %s assumed below 16 (not modelled)", name, ty)
+	t.assume("%s of %s assumed below 16 (not modelled)", name, ty)
 	raw := t.fresh()
 	t.emit(ir.Instr{Dst: raw, HavocSite: t.prog.newHavoc(64, fmt.Sprintf("%s: %s", t.f.Name(), name), "unmodeled-call", "")})
 	sixteen := t.fresh()

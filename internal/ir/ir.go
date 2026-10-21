@@ -472,6 +472,9 @@ type Instr struct {
 	// Probe, when set, makes this a probe: record Args[0] under this label
 	// (Op is nil and Dst unused).
 	Probe string
+	// Assume, when set, records that a run reaching this point takes the
+	// under-approximation it describes (Op is nil and Dst unused).
+	Assume string
 }
 
 type TermKind int
