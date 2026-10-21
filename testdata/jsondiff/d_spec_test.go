@@ -61,3 +61,9 @@ func SpecEncodeStreamDiff(s string, d Doc, ret string) bool {
 	go2leanProbe("enc", ret)
 	return false
 }
+
+// go2lean:spec ParseFloat
+func SpecParseFloatDiff(a int16, b uint16, k uint8, ret string) bool {
+	go2leanProbe("f", ret)
+	return false
+}

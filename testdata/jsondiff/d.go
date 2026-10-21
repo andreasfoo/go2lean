@@ -7,6 +7,7 @@ package jsondiff
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -163,4 +164,16 @@ func EncodeStream(s string, d Doc) string {
 	var c strings.Builder
 	json.NewEncoder(&c).Encode("<x>&" + s)
 	return b.String() + c.String()
+}
+
+// ParseFloat parses a decimal built from a and b with one of a few
+// suffixes (exponents, overflow, syntax errors) and encodes the value.
+func ParseFloat(a int16, b uint16, k uint8) string {
+	sfx := []string{"", "e3", "E-2", "e+400", "x", "e", "0000000000000000000001", "e-330"}[k%8]
+	f, err := strconv.ParseFloat(strconv.Itoa(int(a))+"."+strconv.Itoa(int(b))+sfx, 64)
+	if err != nil {
+		return "err"
+	}
+	out, _ := json.Marshal(f)
+	return string(out)
 }

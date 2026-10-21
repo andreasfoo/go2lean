@@ -1850,6 +1850,10 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Alloc{Zero: zero}})
 		return nil
 	case *ssa.MakeInterface:
+		if s, ok := sentinelErr(x); ok {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
+			return nil
+		}
 		// The value is boxed with a tag for its dynamic type, so a type
 		// assertion back to that type gets it out again.
 		if v, err := t.val(x.X); err == nil {
@@ -2191,6 +2195,25 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 		}
 		if s, ok := sentinelErr(x); ok {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
+			return nil
+		}
+		if zero, fields, ok := sentinelObject(x); ok {
+			// The pointer itself, where it is not boxed as the error: a
+			// fresh object holding the initializer's constants.
+			p := t.def(x)
+			t.emit(ir.Instr{Dst: p, Op: ir.Alloc{Zero: zero}})
+			for i, c := range fields {
+				if c == nil {
+					continue
+				}
+				cv, err := t.val(c)
+				if err != nil {
+					return err
+				}
+				fa := t.fresh()
+				t.emit(ir.Instr{Dst: fa, Op: ir.FieldAddr{I: i}, Args: []ir.Var{p}})
+				t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{fa, cv}})
+			}
 			return nil
 		}
 		if _, ok := replacerPairs(x); ok {
@@ -2626,6 +2649,11 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil {
 		if done, err := t.jsonEncoder(x, callee); done || err != nil {
 			return err
+		}
+	}
+	if callee != nil && callee.String() == "strconv.ParseFloat" && len(x.Call.Args) == 2 {
+		if k, ok := x.Call.Args[1].(*ssa.Const); ok && k.Value != nil && k.Int64() == 64 {
+			return t.parseFloat(x)
 		}
 	}
 	if callee != nil && len(x.Call.Args) == 2 {
@@ -3109,6 +3137,36 @@ func (t *fnState) jsonDecode(x *ssa.Call) (bool, error) {
 	}
 	t.out.MapKeys = keys
 	return true, nil
+}
+
+// parseFloat lowers strconv.ParseFloat(s, 64): decided by the model for
+// decimal syntax away from the float64 limit, havoc otherwise.
+func (t *fnState) parseFloat(x *ssa.Call) error {
+	s, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return err
+	}
+	dst := t.def(x)
+	known := t.fresh()
+	t.emit(ir.Instr{Dst: known, Op: ir.Simple("strParseFloatKnown"), Args: []ir.Var{s}})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: known, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".parsefloat"},
+		ir.Block{Name: name + ".parsefloat-unknown"},
+		ir.Block{Name: name + ".parsefloat-join"})
+	t.cur = &t.out.Blocks[yes]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("strParseFloat"), Args: []ir.Var{s}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	if err := t.havocResult(dst, x, t.f.Name()+": call strconv.ParseFloat", "unmodeled-call"); err != nil {
+		return err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
 }
 
 func (t *fnState) sprintf(x *ssa.Call) error {
@@ -3665,6 +3723,16 @@ func loadedInit(v ssa.Value) (ssa.Value, bool) {
 // (io.EOF, context.Canceled, ErrNotFound), assumed not to be reassigned.
 // Its model is a boxed *errors.errorString whose payload is the identity.
 func sentinelErr(v ssa.Value) (ir.Val, bool) {
+	if mi, ok := v.(*ssa.MakeInterface); ok {
+		// var errX = &T{"..."} boxed as an error: tagged with *T, its
+		// payload the identity.
+		if _, _, ok := sentinelObject(mi.X); !ok || !isError(mi.Type()) {
+			return nil, false
+		}
+		h := fnv.New32a()
+		h.Write([]byte(mi.X.(*ssa.UnOp).X.(*ssa.Global).String()))
+		return ir.Boxed{Tag: typeTag(mi.X.Type()), V: ir.IntVal{Width: 64, Bits: fmt.Sprint(h.Sum32())}}, true
+	}
 	init, ok := loadedInit(v)
 	if !ok {
 		return nil, false
@@ -3682,6 +3750,58 @@ func sentinelErr(v ssa.Value) (ir.Val, bool) {
 	h := fnv.New32a()
 	h.Write([]byte(v.(*ssa.UnOp).X.(*ssa.Global).String()))
 	return ir.Boxed{Tag: sentinelTag, V: ir.IntVal{Width: 64, Bits: fmt.Sprint(h.Sum32())}}, true
+}
+
+// sentinelObject is the object a pointer sentinel points to: v loads a
+// package variable its initializer sets to &T{...} of a struct whose
+// fields the initializer only sets to constants (sjson's errNoChange),
+// assumed not to be reassigned: the struct's zero value and the constant
+// of each field set (nil for the others).
+func sentinelObject(v ssa.Value) (ir.Val, []*ssa.Const, bool) {
+	init, ok := loadedInit(v)
+	if !ok {
+		return nil, nil, false
+	}
+	a, ok := init.(*ssa.Alloc)
+	if !ok || !a.Heap {
+		return nil, nil, false
+	}
+	elem := a.Type().(*types.Pointer).Elem()
+	st, ok := elem.Underlying().(*types.Struct)
+	if !ok {
+		return nil, nil, false
+	}
+	zero, ok := zeroVal(elem)
+	if !ok {
+		return nil, nil, false
+	}
+	fields := make([]*ssa.Const, st.NumFields())
+	for _, r := range *a.Referrers() {
+		switch r := r.(type) {
+		case *ssa.Store:
+			if r.Val != a {
+				return nil, nil, false
+			}
+		case *ssa.FieldAddr:
+			for _, fr := range *r.Referrers() {
+				w, ok := fr.(*ssa.Store)
+				if !ok || w.Addr != r {
+					return nil, nil, false
+				}
+				k, ok := w.Val.(*ssa.Const)
+				if !ok {
+					return nil, nil, false
+				}
+				if _, err := constVal(k); err != nil {
+					return nil, nil, false
+				}
+				fields[r.Field] = k
+			}
+		default:
+			return nil, nil, false
+		}
+	}
+	return zero, fields, true
 }
 
 // sentinelTag tags sentinel errors: errors.New returns an *errors.errorString.

@@ -326,6 +326,10 @@ inductive Op where
   | strParseUint
   /-- strconv.ParseBool -/
   | strParseBool
+  /-- strconv.ParseFloat(s, 64) where `parseFloatGo` decides it:
+  `(value, err)`; `strParseFloatKnown` says whether it does. -/
+  | strParseFloat
+  | strParseFloatKnown
   /-- strconv.FormatInt(i, base) and FormatUint -/
   | strFormatInt
   | strFormatUint
@@ -1430,6 +1434,65 @@ def jsonUnmarshalOp (heap : Heap Val) (kind : Nat) (tags : List Nat) (bytes : Li
 -- encoding/json over the type descriptions -------------------------------
 
 def asciiBytes (s : String) : List Nat := s.toUTF8.toList.map (·.toNat)
+
+/-- The value of a list of decimal digits. -/
+def digitsVal (ds : List Nat) : Int := ds.foldl (fun a d => a * 10 + (d - 48 : Nat)) 0
+
+/-- `strconv.ParseFloat(s, 64)` on what the model decides: `some (value,
+err)` with the value as `knownFloat` gives it; `none` for infinities, NaN,
+hex floats and magnitudes near the float64 limit (left to havoc). Decimal
+syntax: a sign, digits with an optional point (at least one digit), an
+optional exponent; anything else is a syntax error (zero, err). Values
+from 1e309 up overflow (±Inf, err); smaller ones underflow without error. -/
+def parseFloatGo (s : List Nat) : Option (Val × Bool) :=
+  let isDigit (b : Nat) := 48 ≤ b && b ≤ 57
+  let lower (b : Nat) := if 65 ≤ b && b ≤ 90 then b + 32 else b
+  let (neg, rest) := match s with
+    | 45 :: r => (true, r)
+    | 43 :: r => (false, r)
+    | r => (false, r)
+  let low := rest.map lower
+  if low == asciiBytes "inf" || low == asciiBytes "infinity" || low == asciiBytes "nan" then none
+  else if low.take 2 == asciiBytes "0x" then none
+  else
+    let ip := rest.takeWhile isDigit
+    let r1 := rest.drop ip.length
+    let (fp, r2) := match r1 with
+      | 46 :: r => (r.takeWhile isDigit, r.drop (r.takeWhile isDigit).length)
+      | r => ([], r)
+    let (ex, r3, ok) := match r2 with
+      | e :: r =>
+        if e == 101 || e == 69 then
+          let (es, r') := match r with
+            | 45 :: r' => ([45], r')
+            | 43 :: r' => ([43], r')
+            | r' => ([], r')
+          let ds := r'.takeWhile isDigit
+          (es ++ ds, r'.drop ds.length, !ds.isEmpty)
+        else ([], r2, true)
+      | [] => ([], [], true)
+    let zero : Val := .tuple [.arr [.int 8 48#8]]
+    if ip.isEmpty && fp.isEmpty || !r3.isEmpty || !ok then some (zero, true)
+    else
+      let digits := ip ++ fp
+      match digits.findIdx? (· != 48) with
+      | none => some (if neg then .unit else zero, false)
+      | some first =>
+        let expVal : Int := match ex with
+          | 45 :: ds => -(digitsVal ds)
+          | 43 :: ds => digitsVal ds
+          | ds => digitsVal ds
+        let p := expVal + ip.length - first
+        if p > 309 then some (.unit, true)
+        else if p ≥ 308 then none
+        else
+          let ipS := match ip.dropWhile (· == 48) with | [] => [48] | x => x
+          let norm := (if neg then [45] else []) ++ ipS ++ (if fp.isEmpty then [] else 46 :: fp) ++
+            (if ex.isEmpty then [] else 101 :: ex)
+          match Lean.Json.parse (utf8Lossy norm) with
+          | .ok (.num n) => some (knownFloat n false, false)
+          | _ => some (.unit, false)
+
 
 /-- Go's string encoding: quotes, backslash and control characters
 escaped, `<`, `>`, `&`, U+2028 and U+2029 as `\u` escapes (HTML-safe, the
@@ -2579,6 +2642,17 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | some x =>
       let (v, e) := parseUintGo x base.toInt bits.toInt
       .ok (.tuple [.int 64 (BitVec.ofNat 64 v), .err (e != 0)], heap)
+    | none => .panic .modelStuck
+  | .strParseFloat, [s] =>
+    match strBytes heap s with
+    | some x =>
+      match parseFloatGo x with
+      | some (v, e) => .ok (.tuple [v, .err e], heap)
+      | none => .panic .modelStuck
+    | none => .panic .modelStuck
+  | .strParseFloatKnown, [s] =>
+    match strBytes heap s with
+    | some x => .ok (.bool (parseFloatGo x).isSome, heap)
     | none => .panic .modelStuck
   | .strParseBool, [s] =>
     match strBytes heap s with
