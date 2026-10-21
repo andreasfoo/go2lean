@@ -703,7 +703,7 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
   Json.mkObj [("found", true), ("trial", trial), ("seed", seed),
     ("inputs", Json.mkObj inputs), ("memory", Json.mkObj memory), ("objects", Json.mkObj objects),
     ("havoc", Json.arr havoc.toArray), ("probes", Json.arr probes.toArray),
-    ("model_output", modelOutput o ret)]
+    ("model_output", modelOutput o ret), ("panic_at", (s.panicAt.map Json.str).getD Json.null)]
 
 /-- The block a postcondition's spec returned from, when the spec ran to
 its end (the trial reached the oracle and the oracle finished). -/

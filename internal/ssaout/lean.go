@@ -134,6 +134,14 @@ def main (args : List String) : IO UInt32 :=
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return err
 		}
+		if name == "lakefile.toml" {
+			// lake keeps resolving a path dependency from its manifest, so a
+			// lakefile pointing at a new core snapshot would still build
+			// against the old one: drop the manifest and let lake rewrite it.
+			if err := os.Remove(filepath.Join(leanDir, "lake-manifest.json")); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 	}
 	return WriteRegistry(leanDir)
 }

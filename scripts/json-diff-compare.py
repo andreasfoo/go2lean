@@ -11,7 +11,9 @@ for f in sorted(glob.glob(f"{ws}/verdicts/*.json")):
     v = json.load(open(f))
     cx = json.load(open(f"{ws}/counterexamples/{os.path.basename(f)}"))
     model = [p["value"] for p in cx.get("probes") or []]
-    real = (v.get("observed") or {}).get("ret")
+    observed = v.get("observed") or {}
+    # An empty return value is not recorded: no "ret" without a panic is "".
+    real = observed.get("ret", None if "panic" in observed else "")
     inp = json.dumps(cx.get("objects") or cx.get("inputs"))[:300]
     if v["status"] != "confirmed" or not model:
         other += 1

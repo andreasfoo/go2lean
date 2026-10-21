@@ -302,6 +302,9 @@ inductive Op where
   | utf16Encode
   /-- strings.Cut: `(before, after, found)` -/
   | strCut
+  /-- `(*strings.Replacer).Replace` for a Replacer made from constant
+  (old, new) pairs, none of them with an empty old string. -/
+  | strReplacer (pairs : List (List Nat × List Nat))
   /-- strings.LastIndexByte -/
   | strLastIndexByte
   /-- `string(r)` for one rune. -/
@@ -606,6 +609,20 @@ def atoiClamped (bs : List Nat) : Option Int :=
     | rest => (false, rest)
   if digits.isEmpty || !digits.all (fun d => 48 ≤ d && d ≤ 57) then none
   else some (if neg then -(2 ^ 63) else 2 ^ 63 - 1)
+
+/-- strings.Replacer's replacement: left to right, at each position the
+first pair (in argument order) whose old string starts there, without
+overlapping matches. Pairs with an empty old string are not taken (the
+frontend does not use this for them). -/
+def replacePairs (pairs : List (List Nat × List Nat)) (s : List Nat) : List Nat :=
+  let rec go : Nat → List Nat → List Nat
+    | 0, s => s
+    | _, [] => []
+    | fuel + 1, s@(c :: rest) =>
+      match pairs.find? (fun (old, _) => !old.isEmpty && s.take old.length == old) with
+      | some (old, new) => new ++ go fuel (s.drop old.length)
+      | none => c :: go fuel rest
+  go (s.length + 1) s
 
 /-- strconv's `lower` on a byte: `c | 0x20`. -/
 def strconvLower (c : Nat) : Nat := c ||| 0x20
@@ -2556,6 +2573,12 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
   | .strToUpper, [s] =>
     match strBytes heap s with
     | some x => .ok (strAlloc heap (x.map upperByte))
+    | none => .panic .modelStuck
+  | .strReplacer pairs, [_, s] =>
+    match strBytes heap s with
+    | some x =>
+      let r := replacePairs pairs x
+      if r.length > strLimit then .panic .modelStuck else .ok (strAlloc heap r)
     | none => .panic .modelStuck
   | .strReplaceAll, [s, o, n] =>
     match strBytes heap s, strBytes heap o, strBytes heap n with

@@ -209,16 +209,18 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 // static calls it follows functions used as values, the function a
 // package-level variable holds from its initializer (zeros), and the bodies
 // of closures (added to their package by withAnon). Generic functions and
-// wrappers are left out (they stay unmodelled).
+// wrappers are left out (they stay unmodelled). The walk is breadth-first,
+// so a function's depth is that of its shortest call path from a root
+// and does not depend on which root reached it first.
 func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa.Global]ssa.Value, invoked map[string]bool) map[string][]*ssa.Function {
 	out := map[string][]*ssa.Function{}
 	seen := map[*ssa.Function]bool{}
 	count := 0
-	var visit func(f *ssa.Function, depth int)
-	visit = func(f *ssa.Function, depth int) {
-		if depth > depDepth {
-			return
-		}
+	// next holds the functions to walk one call deeper than the current
+	// level; a modelled standard-library helper stays on the current one.
+	var next []*ssa.Function
+	var visit func(f *ssa.Function)
+	visit = func(f *ssa.Function) {
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
 				var refs []*ssa.Function
@@ -249,7 +251,7 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 						// A closure: walk its body as part of its parent's.
 						if !seen[callee] {
 							seen[callee] = true
-							visit(callee, depth)
+							visit(callee)
 						}
 						continue
 					}
@@ -289,16 +291,21 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 					if modelledStdlib[path] {
 						// Within a modelled standard-library package, every
 						// helper is needed (unescape calls ishex calls ...).
-						visit(callee, depth)
+						visit(callee)
 					} else {
-						visit(callee, depth+1)
+						next = append(next, callee)
 					}
 				}
 			}
 		}
 	}
-	for _, f := range roots {
-		visit(f, 1)
+	level := roots
+	for depth := 1; depth <= depDepth && len(level) > 0; depth++ {
+		next = nil
+		for _, f := range level {
+			visit(f)
+		}
+		level = next
 	}
 	return out
 }
@@ -819,7 +826,9 @@ func invokedNames(sprog *ssa.Program) map[string]bool {
 // modelled from their Go source under -deps, like any dependency, instead
 // of being unmodelled calls: their code only uses what the model covers.
 var modelledStdlib = map[string]bool{
-	"net/url": true,
+	"net/url":       true,
+	"unicode/utf8":  true,
+	"unicode/utf16": true,
 }
 
 func isStdlib(path string) bool {
@@ -2184,6 +2193,15 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: s}})
 			return nil
 		}
+		if _, ok := replacerPairs(x); ok {
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			return nil
+		}
+		if _, ok := replacerFunc(x); ok {
+			// A Replace function value: its calls are lowered in place.
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+			return nil
+		}
 		if re, ok := compiledPattern(x); ok {
 			// A compiled constant regexp: only its modelled methods look
 			// into it (regexpCall).
@@ -2519,6 +2537,21 @@ func (t *fnState) call(x *ssa.Call) error {
 			return nil
 		}
 		if !hasResult {
+			return nil
+		}
+	}
+	if pairs, ok := replacerFunc(x.Call.Value); ok && len(x.Call.Args) == 1 {
+		return t.replace(t.def(x), pairs, x.Call.Args[0])
+	}
+	if callee != nil && callee.String() == "(*strings.Replacer).Replace" && len(x.Call.Args) == 2 {
+		if pairs, ok := replacerPairs(x.Call.Args[0]); ok {
+			return t.replace(t.def(x), pairs, x.Call.Args[1])
+		}
+	}
+	if callee != nil && callee.String() == "strings.NewReplacer" {
+		if _, ok := replacerPairs(x); ok {
+			// Only Replace looks into it (above).
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
 			return nil
 		}
 	}
@@ -3193,6 +3226,101 @@ func regexpSamples(pat string) []string {
 		}
 	}
 	return out
+}
+
+// replacerPairs is the (old, new) pairs of a strings.Replacer made by
+// strings.NewReplacer with constant arguments: v is that call, or a load of
+// a package variable its initializer sets to it. A pair with an empty old
+// string (Go's special case) is not taken.
+func replacerPairs(v ssa.Value) ([][2]string, bool) {
+	if init, ok := loadedInit(v); ok {
+		v = init
+	}
+	c, ok := v.(*ssa.Call)
+	if !ok || len(c.Call.Args) != 1 {
+		return nil, false
+	}
+	if f := c.Call.StaticCallee(); f == nil || f.String() != "strings.NewReplacer" {
+		return nil, false
+	}
+	sl, ok := c.Call.Args[0].(*ssa.Slice)
+	if !ok {
+		return nil, false
+	}
+	a, ok := sl.X.(*ssa.Alloc)
+	if !ok {
+		return nil, false
+	}
+	args := map[int64]string{}
+	for _, r := range *a.Referrers() {
+		if r == sl {
+			continue
+		}
+		ia, ok := r.(*ssa.IndexAddr)
+		if !ok {
+			return nil, false
+		}
+		k, ok := ia.Index.(*ssa.Const)
+		if !ok || k.Value == nil {
+			return nil, false
+		}
+		i, _ := constant.Int64Val(k.Value)
+		for _, rr := range *ia.Referrers() {
+			st, ok := rr.(*ssa.Store)
+			if !ok {
+				return nil, false
+			}
+			sc, ok := st.Val.(*ssa.Const)
+			if !ok || sc.Value == nil || sc.Value.Kind() != constant.String {
+				return nil, false
+			}
+			args[i] = constant.StringVal(sc.Value)
+		}
+	}
+	n := len(args)
+	if n == 0 || n%2 != 0 {
+		return nil, false
+	}
+	var pairs [][2]string
+	for i := 0; i < n; i += 2 {
+		o, ok1 := args[int64(i)]
+		nw, ok2 := args[int64(i+1)]
+		if !ok1 || !ok2 || o == "" {
+			return nil, false
+		}
+		pairs = append(pairs, [2]string{o, nw})
+	}
+	return pairs, true
+}
+
+// replacerFunc is the pairs of a function value bound to a constant
+// Replacer's Replace (var Escape = strings.NewReplacer(...).Replace),
+// loaded from a package variable or made in place.
+func replacerFunc(v ssa.Value) ([][2]string, bool) {
+	if init, ok := loadedInit(v); ok {
+		v = init
+	}
+	mc, ok := v.(*ssa.MakeClosure)
+	if !ok || len(mc.Bindings) != 1 {
+		return nil, false
+	}
+	f, ok := mc.Fn.(*ssa.Function)
+	if !ok || f.Name() != "Replace$bound" || !strings.Contains(f.String(), "strings.Replacer") {
+		return nil, false
+	}
+	return replacerPairs(mc.Bindings[0])
+}
+
+// replace emits the strReplacer op for s.
+func (t *fnState) replace(dst ir.Var, pairs [][2]string, s ssa.Value) error {
+	sv, err := t.val(s)
+	if err != nil {
+		return err
+	}
+	u := t.fresh()
+	t.emit(ir.Instr{Dst: u, Op: ir.Const{V: ir.UnitVal{}}})
+	t.emit(ir.Instr{Dst: dst, Op: ir.StrReplacer{Pairs: pairs}, Args: []ir.Var{u, sv}})
+	return nil
 }
 
 // regexpTag tags the model of a *regexp.Regexp.

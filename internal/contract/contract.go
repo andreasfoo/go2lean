@@ -157,6 +157,9 @@ type Counterexample struct {
 	// Probes are the values the spec's go2leanProbe calls recorded in the
 	// model run, in order; M3 records the real run's in Verdict.Probes.
 	Probes []Probe `json:"probes,omitempty"`
+	// PanicAt names the function, block and op where the model run
+	// panicked, when it did.
+	PanicAt string `json:"panic_at,omitempty"`
 }
 
 // Probe is one go2leanProbe value: its label and the value (JSON as the

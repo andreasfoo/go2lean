@@ -115,6 +115,25 @@ func (o ReFind) Lean() string {
 	return fmt.Sprintf("(.reFind [%s] %d %d %d)", strings.Join(o.Insts, ", "), o.Start, o.NCap, o.Kind)
 }
 
+// StrReplacer is strReplacer: a constant strings.Replacer's Replace.
+type StrReplacer struct{ Pairs [][2]string }
+
+func (o StrReplacer) Lean() string {
+	parts := make([]string, len(o.Pairs))
+	for i, p := range o.Pairs {
+		parts[i] = "(" + byteList(p[0]) + ", " + byteList(p[1]) + ")"
+	}
+	return "(.strReplacer [" + strings.Join(parts, ", ") + "])"
+}
+
+func byteList(s string) string {
+	parts := make([]string, len(s))
+	for i := 0; i < len(s); i++ {
+		parts[i] = fmt.Sprint(int(s[i]))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 // ReProg is a compiled regexp with the identity of its pattern.
 type ReProg struct {
 	ID   uint32

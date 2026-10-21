@@ -171,6 +171,9 @@ structure HState (Val : Type) where
   exit : Option (String × Nat) := none
   /-- Values recorded by probes, in the order they ran. -/
   probes : Array (String × Val) := #[]
+  /-- Where the run panicked: the function, block and op (or terminator),
+  set by the first panic, for diagnosing a counterexample. -/
+  panicAt : Option String := none
 
 namespace HState
 
@@ -207,7 +210,7 @@ def execInstrs (or : Oracle) (h : Havoc Val) :
         | some d => (d.take 300).toString
         | none => (s!"{repr o} {repr vals}".take 160).toString
       (.panic .modelStuck, { s with stuck := s.stuck <|> some site })
-    | .panic k => (.panic k, s)
+    | .panic k => (.panic k, { s with panicAt := s.panicAt <|> some (s!"{repr o}".take 160).toString })
     | .outOfFuel => (.outOfFuel, s)
   | .probe label v :: rest, env, s =>
     execInstrs or h rest env { s with probes := s.probes.push (label, env[v]!) }
@@ -233,12 +236,18 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
     | none => (.panic .modelStuck, s)
     | some blk =>
       match execInstrs or h blk.instrs.toList env s with
-      | (.panic k, s) => (.panic k, s)
+      | (.panic k, s) =>
+        -- Name the function and block of the op the instructions recorded
+        -- (once: callers see the innermost site).
+        let s := match s.panicAt with
+          | some site => if site.startsWith "@" then s else { s with panicAt := some s!"@{fn.name}#{bid}: {site}" }
+          | none => { s with panicAt := some s!"@{fn.name}#{bid}" }
+        (.panic k, s)
       | (.outOfFuel, s) => (.outOfFuel, s)
       | (.ok env, s) =>
         match blk.term with
         | .ret v => (.ok env[v]!, { s with exit := some (fn.name, bid) })
-        | .panic k => (.panic k, s)
+        | .panic k => (.panic k, { s with panicAt := s.panicAt <|> some s!"@{fn.name}#{bid}: panic" })
         | .jump b args =>
           runBlock p or h fn b (enter fn b env args) s fuel
         | .br c t targs f fargs =>
