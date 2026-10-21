@@ -87,6 +87,9 @@ inductive Op where
   | const (w : Nat) (v : Int)
   | poison (w : Nat)
   | null
+  /-- A pointer made from an integer constant (TinyGo's GC layout tags).
+  Its value has no object: an access through it is stuck, never UB. -/
+  | opaque
   /-- Arithmetic. `cUB`: overflow the flags make poison is C's undefined
   behaviour. -/
   | add (nsw nuw cUB : Bool)
@@ -147,6 +150,11 @@ inductive Op where
   | minmax (which : Nat)
   /-- `llvm.abs`: args `[x, isIntMinPoison]`. -/
   | abs
+  /-- `llvm.ctlz` (0), `llvm.cttz` (1), `llvm.ctpop` (2); ctlz and cttz
+  take `[x, isZeroPoison]`. -/
+  | bitCount (which : Nat)
+  /-- `llvm.fshl`: args `[a, b, c]`, the high half of `a:b << c % w`. -/
+  | fshl
   /-- An instruction the frontend does not lower: the model is stuck. -/
   | unsupported (what : String)
   deriving Repr
@@ -165,6 +173,29 @@ def ofInterp (k : PanicKind) : Veir.Interp α → Res α
   | .ok a => .ok a
   | .ub _ => .panic k
   | .fail _ => .panic .modelStuck
+
+/-- The largest `runtime.alloc` the model performs (bytes). -/
+def maxAlloc : Nat := 1 <<< 20
+
+/-- Leading zeros (0), trailing zeros (1) or set bits (2) of `x`. -/
+def bitCount (which : Nat) {w : Nat} (x : LInt w) (zeroPoison : Bool) : LInt w :=
+  match x with
+  | .poison => .poison
+  | .val b =>
+    let n := b.toNat
+    if zeroPoison && n == 0 && which < 2 then .poison else
+    let bits := List.range w
+    let r := match which with
+      | 0 => if n == 0 then w else w - (Nat.log2 n + 1)
+      | 1 => (bits.find? (fun i => n.testBit i)).getD w
+      | _ => bits.countP (fun i => n.testBit i)
+    .val (BitVec.ofNat w r)
+
+def fshl {w : Nat} : LInt w → LInt w → LInt w → LInt w
+  | .val a, .val b, .val c =>
+    let k := c.toNat % w
+    .val (if k == 0 then a else (a <<< k) ||| (b >>> (w - k)))
+  | _, _, _ => .poison
 
 /-- Binary integer ops of equal widths. -/
 def bin (f : {w : Nat} → LInt w → LInt w → LInt w) (heap : Heap Val) : List Val → Res (Val × Heap Val)
@@ -241,6 +272,7 @@ def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap V
   | .const w v, [] => .ok (.int w (.val (BitVec.ofInt w v)), heap)
   | .poison w, [] => .ok (.int w .poison, heap)
   | .null, [] => .ok (.ptr Veir.Data.LLVM.Ptr.null, heap)
+  | .opaque, [] => .ok (.unit, heap)
   | .add nsw nuw cUB, args => flagged (fun a b => Veir.Data.LLVM.Int.add a b nsw nuw) cUB heap args
   | .sub nsw nuw cUB, args => flagged (fun a b => Veir.Data.LLVM.Int.sub a b nsw nuw) cUB heap args
   | .mul nsw nuw cUB, args => flagged (fun a b => Veir.Data.LLVM.Int.mul a b nsw nuw) cUB heap args
@@ -353,6 +385,8 @@ def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap V
     | some v => .ok (v, heap)
     | none => .panic .modelStuck
   | .goAlloc, [.int _ (.val size)] =>
+    -- A huge allocation is beyond what the model runs (Go may not panic).
+    if size.toNat > maxAlloc then .panic .modelStuck else
     match memOf heap with
     | some m =>
       match ofInterp .undefinedBehavior (do
@@ -407,6 +441,10 @@ def denote (_ : Unit) (heap : Heap Val) : Op → List Val → Res (Val × Heap V
       | _ => Veir.Data.LLVM.Int.umax a b) heap args
   | .abs, [.int w a, .int 1 p] =>
     .ok (.int w (Veir.Data.LLVM.Int.abs a (p == .val 1#1)), heap)
+  | .bitCount which, [.int w a, .int 1 p] => .ok (.int w (bitCount which a (p == .val 1#1)), heap)
+  | .fshl, [.int w a, .int w₁ b, .int w₂ c] =>
+    if h : w₁ = w ∧ w₂ = w then .ok (.int w (fshl a (b.cast h.1) (c.cast h.2)), heap) else .panic .modelStuck
+  | .bitCount which, [.int w a] => .ok (.int w (bitCount which a false), heap)
   | .global i, [] =>
     match (heap[2 + i]? : Option Val) with
     | some v@(.ptr _) => .ok (v, heap)

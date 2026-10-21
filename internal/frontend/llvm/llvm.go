@@ -308,6 +308,10 @@ func (t *fnState) val(v llvm.Value) int {
 	case ty.TypeKind() == llvm.PointerTypeKind && (v.IsNull() || !v.IsAUndefValue().IsNil()):
 		// undef may be any pointer; null is one of its values.
 		t.emit(d, ".null")
+	case !v.IsAConstantExpr().IsNil() && v.Opcode() == llvm.IntToPtr:
+		// TinyGo passes GC layout tags as inttoptr constants; nothing the
+		// model runs dereferences them.
+		t.emit(d, ".opaque")
 	case !v.IsAUndefValue().IsNil() && ty.TypeKind() == llvm.IntegerTypeKind:
 		t.emit(d, fmt.Sprintf("(.poison %d)", ty.IntTypeWidth()))
 	case !v.IsAFunction().IsNil():
@@ -337,12 +341,38 @@ func (t *fnState) val(v llvm.Value) int {
 	case isAgg(ty) && (v.IsNull() || !v.IsAUndefValue().IsNil()):
 		// zeroinitializer; undef is the base of insertvalue chains.
 		t.emit(d, fmt.Sprintf("(.zero %s)", tyLean(ty)))
+	case isAgg(ty) && v.IsConstant() && aggLen(ty) <= 64:
+		// A constant struct or array (TinyGo's interface constants: a
+		// typecode and a pointer): zero, then each element inserted.
+		acc := t.fresh()
+		t.emit(acc, fmt.Sprintf("(.zero %s)", tyLean(ty)))
+		n := aggLen(ty)
+		for i := 0; i < n; i++ {
+			e := t.val(aggElem(v, i))
+			next := d
+			if i < n-1 {
+				next = t.fresh()
+			}
+			t.emit(next, fmt.Sprintf("(.insert %s)", path([]uint32{uint32(i)})), acc, e)
+			acc = next
+		}
+		if n == 0 {
+			t.emit(d, fmt.Sprintf("(.zero %s)", tyLean(ty)))
+		}
 	default:
 		what := strings.TrimSpace(v.String())
 		t.issue("operand %s not modelled", what)
 		t.emit(d, fmt.Sprintf("(.unsupported %q)", "operand "+what))
 	}
 	return d
+}
+
+// aggLen is the number of elements of a struct or array type.
+func aggLen(ty llvm.Type) int {
+	if ty.TypeKind() == llvm.StructTypeKind {
+		return ty.StructElementTypesCount()
+	}
+	return ty.ArrayLength()
 }
 
 // flags reads nsw, nuw and exact from the instruction's text (go-llvm has
@@ -985,6 +1015,20 @@ func (t *fnState) call(in llvm.Value) {
 		t.vars[in] = t.fresh()
 		t.emit(t.vars[in], ".abs", a, p)
 		return
+	case strings.HasPrefix(name, "llvm.ctlz.") || strings.HasPrefix(name, "llvm.cttz.") || strings.HasPrefix(name, "llvm.ctpop."):
+		which := map[string]int{"ctlz": 0, "cttz": 1, "ctpop": 2}[strings.Split(name, ".")[1]]
+		args := []int{t.val(in.Operand(0))}
+		if which < 2 {
+			args = append(args, t.val(in.Operand(1)))
+		}
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], fmt.Sprintf("(.bitCount %d)", which), args...)
+		return
+	case strings.HasPrefix(name, "llvm.fshl."):
+		a, b, c := t.val(in.Operand(0)), t.val(in.Operand(1)), t.val(in.Operand(2))
+		t.vars[in] = t.fresh()
+		t.emit(t.vars[in], ".fshl", a, b, c)
+		return
 	case strings.HasPrefix(name, "llvm.memset."):
 		dst, b, n := t.val(in.Operand(0)), t.val(in.Operand(1)), t.val(in.Operand(2))
 		t.emit(t.fresh(), ".memset", dst, b, n)
@@ -1032,15 +1076,25 @@ func (t *fnState) call(in llvm.Value) {
 		args = append(args, t.val(in.Operand(i)))
 	}
 	next, fb := t.newBlock(), t.newBlock()
-	w := 64
-	if ty.TypeKind() == llvm.IntegerTypeKind {
-		w = ty.IntTypeWidth()
-	}
-	t.l.havoc = append(t.l.havoc, w)
-	t.blocks[fb].instrs = []string{fmt.Sprintf(".havoc %d %d", d, len(t.l.havoc)-1)}
+	t.blocks[fb].instrs = []string{t.fallback(d, ty, name)}
 	t.blocks[fb].term = fmt.Sprintf(".jump %d []", next)
 	t.cur.term = fmt.Sprintf(".call %d %s %d %d [] %d", fid, list(args), d, next, fb)
 	t.cur = t.blocks[next]
+}
+
+// fallback is what a call's result is when the callee gets stuck: havoc for
+// an integer (or no result), stuck for anything else (an aggregate or
+// pointer of havoc would be a value the callee cannot return).
+func (t *fnState) fallback(d int, ty llvm.Type, what string) string {
+	if ty.TypeKind() == llvm.IntegerTypeKind || ty.TypeKind() == llvm.VoidTypeKind {
+		w := 64
+		if ty.TypeKind() == llvm.IntegerTypeKind {
+			w = ty.IntTypeWidth()
+		}
+		t.l.havoc = append(t.l.havoc, w)
+		return fmt.Sprintf(".havoc %d %d", d, len(t.l.havoc)-1)
+	}
+	return fmt.Sprintf(".op %d (.unsupported %q) []", d, "stuck callee "+what)
 }
 
 // indirectCall calls through a function value: the core's callv, whose
@@ -1058,12 +1112,7 @@ func (t *fnState) indirectCall(in, callee llvm.Value) {
 		t.vars[in] = d
 	}
 	next, fb := t.newBlock(), t.newBlock()
-	w := 64
-	if ty.TypeKind() == llvm.IntegerTypeKind {
-		w = ty.IntTypeWidth()
-	}
-	t.l.havoc = append(t.l.havoc, w)
-	t.blocks[fb].instrs = []string{fmt.Sprintf(".havoc %d %d", d, len(t.l.havoc)-1)}
+	t.blocks[fb].instrs = []string{t.fallback(d, ty, "through a function value")}
 	t.blocks[fb].term = fmt.Sprintf(".jump %d []", next)
 	t.cur.term = fmt.Sprintf(".callv %d %s %d %d [] %d", fv, list(args), d, next, fb)
 	t.cur = t.blocks[next]
