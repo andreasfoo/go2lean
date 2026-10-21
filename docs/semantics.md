@@ -6,8 +6,8 @@ the value domain first, then which operations touch state, how failure is
 represented, and the operations by group, each with its status. Section 9
 maps lean-mlir's concepts to go2lean's.
 
-Snapshot of go2lean `7f9e10b` (2026-10-20). `docs/design.md` §4.3–4.3c
-gives the design, §9b–9c the history of each change.
+Snapshot of go2lean `7f9e10b` (2026-10-20). `docs/design.md` §4.3–4.3b
+gives the design, [history.md](history.md) §9b–9c the history of each change.
 
 ## Status legend
 

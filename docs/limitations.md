@@ -71,7 +71,7 @@ M3 shows that the model's counterexample reproduces in Go, not that a real
 caller can build that input. In the sixth full pass, 741 of 912 confirmed
 results involved a nil input; in the seventh, 231 came from constructors
 handed forged third-party structs (a `*gorm.DB` whose internal maps are
-nil), a class "handles" (design §9b) later removed, one heuristic at a
+nil), a class "handles" (docs/history.md §9b) later removed, one heuristic at a
 time. In
 the blind-spec experiment, 5 of 39 confirmed results came from wrong specs:
 confirmed measures a violated oracle, and sometimes the oracle is the bug.
@@ -97,7 +97,7 @@ the position); a nil that flows in from a variable is not traced yet.
 
 ## 4. Evidence comes from one codebase
 
-The heuristics of design §9c (documented enums, Stainless SDK `param.Opt` and
+The heuristics of docs/history.md §9c (documented enums, Stainless SDK `param.Opt` and
 `apijson`, SDK unions, GORM handles, lookup tables, Gin contexts) were
 written for tingly-box, and the benchmarks (17/17, 31/34) are bugs found by
 hand in the same codebase: read, find, write a spec, tune go2lean until it
@@ -158,5 +158,7 @@ generated Lean model.
   repetitions, cost accounting or ablations.
 - Resource limits are ad hoc (64 KB strings, 8 GB cache sweep, 24 leaves
   for exhaustive search, 64 type-switch cases).
-- `docs/design.md` mixes the current design, superseded plans and a
-  development log; it should split into design, history and results.
+- `docs/design.md` mixed the current design, superseded plans and a
+  development log; since 2026-10-21 the log and the old plans are in
+  `docs/history.md`. Some sections (5.3, 5.4) still read as a record of
+  how they were built.
