@@ -81,3 +81,10 @@ func TestEntryPoints(t *testing.T) {
 		t.Errorf("entry points %v, want [Convert conv.Next]", got)
 	}
 }
+
+func TestExtractGoSequenceOnly(t *testing.T) {
+	resp := "```go\npackage p\n\n// go2lean:sequence C.Process\nfunc SeqC(xs []int) bool { return true }\n```\n"
+	if got := extractGo(resp); !strings.Contains(got, "go2lean:sequence") {
+		t.Errorf("a file of sequence specs only is the spec file, got %q", got)
+	}
+}

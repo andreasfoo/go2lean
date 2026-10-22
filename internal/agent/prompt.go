@@ -65,6 +65,39 @@ Rules for a spec function:
   nothing from them. Package-level variables of the target package are not
   modelled; use literals. Plain ASCII in code and comments.
 
+Sequence specs: some properties are about a sequence of calls, not one
+call (a stream converter that must end up emitting the whole message, an
+invariant that must hold after every event, a state machine that must never
+reach a bad state). Write them as a sequence spec:
+- Marker: // go2lean:sequence <Target> in the doc comment, where Target is
+  the function or method the spec drives (for example
+  // go2lean:sequence streamState.processEvent).
+- Signature: free. Take the events as a slice of a small struct or of
+  integers (plus any other input you need), build the state the way the
+  package does, call Target once per event, and return bool.
+- Check an "always" property after every step (return false as soon as it
+  breaks) and an "eventually" property after the last event (for a finite
+  stream: when it ends). Derive each event's shape from its fields (a kind
+  field selecting start, delta or stop; a length field) so that every
+  order and every mix of events is a possible input.
+- The search draws sequences of up to 8 events and enumerates every
+  sequence of up to 3 events over the constants of the code; a false
+  verdict is replayed in Go with the same sequence.
+
+      // go2lean:sequence Converter.Process
+      // SeqComplete: every byte received is in the message when the stream ends.
+      func SeqComplete(events []Event) bool {
+          var c Converter
+          for _, e := range events {
+              c.Process(e)
+          }
+          sum := 0
+          for _, n := range c.Finish() {
+              sum += n
+          }
+          return sum == c.total
+      }
+
 Good properties are ones a real bug could violate: results inside a range,
 sign and overflow behaviour on large inputs, off-by-one at boundaries
 (empty slice, length 1, index == len), relations to other functions of the
@@ -85,7 +118,9 @@ the converter of a whole request, response or stream). Most bugs are in
 how an entry point combines its helpers (a field it never copies, a case
 it never routes, a helper it skips), and a property of a small helper
 alone cannot see them. Write at least one conservation or agreement spec
-for every entry point before writing specs for helpers.
+for every entry point before writing specs for helpers. For a stream
+converter (an entry point fed one event at a time), write at least one
+sequence spec.
 
 How to write a spec that finds bugs rather than one that passes:
 - State the general property; never encode a particular trigger value.
@@ -119,11 +154,11 @@ concise Markdown report for the package's maintainers, grounded in the source
    and which ones are still only "no counterexample found".
 
 Suggested fixes to the package belong in prose or in a Go block that contains
-no "go2lean:spec" comment.
+no "go2lean:spec" or "go2lean:sequence" comment.
 
 If some spec should be restated, you may also output one fenced Go code block
 with a revised go2lean_specs_test.go; the pipeline will run it again. It is
-recognised by its "go2lean:spec" comments. The file must follow the same
+recognised by its "go2lean:spec" and "go2lean:sequence" comments. The file must follow the same
 rules as before: the package clause of the target package (given below),
 imports only for the types in spec signatures, spec functions only, never a
 copy of a package function, plain ASCII, inside the modelled subset. Omit
@@ -137,6 +172,12 @@ var goBlock = regexp.MustCompile("(?ms)^[ \\t]*```go[ \\t]*$\\n(.*?)\\n[ \\t]*``
 // goFence matches the opening fence of a Go block.
 var goFence = regexp.MustCompile("(?m)^[ \\t]*```go[ \\t]*$\\n")
 
+// hasMarker says whether Go text carries a spec marker (go2lean:spec or
+// go2lean:sequence): such a block is the spec file.
+func hasMarker(s string) bool {
+	return strings.Contains(s, "go2lean:spec") || strings.Contains(s, "go2lean:sequence")
+}
+
 // extractGo returns the spec file in a response: the last fenced Go block
 // that carries a go2lean:spec comment, so that fix suggestions in other Go
 // blocks are not mistaken for it. Without such a block it falls back to the
@@ -147,14 +188,14 @@ func extractGo(resp string) string {
 	if fences := goFence.FindAllStringIndex(resp, -1); len(fences) > 0 {
 		// The text after the last opening fence, when no fence closes it.
 		rest := resp[fences[len(fences)-1][1]:]
-		if strings.Contains(rest, "go2lean:spec") && !strings.Contains("\n"+rest, "\n```") {
+		if hasMarker(rest) && !strings.Contains("\n"+rest, "\n```") {
 			if i := strings.LastIndex(rest, "\n}\n"); i >= 0 {
 				blocks = append(blocks, []string{"", rest[:i+2]})
 			}
 		}
 	}
 	for i := len(blocks) - 1; i >= 0; i-- {
-		if strings.Contains(blocks[i][1], "go2lean:spec") {
+		if hasMarker(blocks[i][1]) {
 			return strings.TrimSpace(blocks[i][1]) + "\n"
 		}
 	}
@@ -168,7 +209,7 @@ func extractGo(resp string) string {
 // report round, where a plain fix snippet must not trigger a rerun).
 func hasSpecBlock(resp string) bool {
 	for _, b := range goBlock.FindAllStringSubmatch(resp, -1) {
-		if strings.Contains(b[1], "go2lean:spec") {
+		if hasMarker(b[1]) {
 			return true
 		}
 	}

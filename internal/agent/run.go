@@ -259,11 +259,11 @@ func readProof(ws contract.Workspace, propID string) (*contract.ProofResult, err
 	return &pr, unmarshal(b, &pr)
 }
 
-// stripGo replaces the spec-file block (recognised by its go2lean:spec
-// comments) with a note, leaving fix snippets and other code in the report.
+// stripGo replaces the spec-file block (recognised by its go2lean:spec or
+// go2lean:sequence comments) with a note, leaving fix snippets and other code in the report.
 func stripGo(resp string) string {
 	out := goBlock.ReplaceAllStringFunc(resp, func(block string) string {
-		if strings.Contains(block, "go2lean:spec") {
+		if hasMarker(block) {
 			return "(revised spec file written to go2lean_specs_test.go)"
 		}
 		return block
