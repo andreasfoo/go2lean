@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
@@ -134,7 +137,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 		return err
 	}
 
-	res, err := runRest(ws, env, report, opts.Search, out)
+	res, err := runRest(ws, env, report, spec, opts.Search, out)
 	if err != nil {
 		return err
 	}
@@ -158,18 +161,38 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 		if _, report, err = install(revised); err != nil {
 			return err
 		}
-		if _, err := runRest(ws, env, report, opts.Search, out); err != nil {
+		if _, err := runRest(ws, env, report, revised, opts.Search, out); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func runRest(ws contract.Workspace, env pipeline.Env, report *contract.ModelReport, so constraint.SearchOptions, out io.Writer) (*pipeline.Result, error) {
+func runRest(ws contract.Workspace, env pipeline.Env, report *contract.ModelReport, spec string, so constraint.SearchOptions, out io.Writer) (*pipeline.Result, error) {
 	fmt.Fprintln(out, "== M2 properties")
 	props, err := pipeline.Propose(ws, report, out)
 	if err != nil {
 		return nil, err
+	}
+	// The properties of the specs the agent wrote are the agent's: a
+	// violation may be the spec's fault (internal/poc/rank.go ranks it so).
+	mine := specFuncs(spec)
+	for _, p := range props {
+		fn := ""
+		switch {
+		case p.Spec != nil:
+			fn = p.Spec.GoFunc
+		case p.Kind == contract.KindSequence:
+			if t, err := ws.Target(p.Target); err == nil {
+				fn = t.Func
+			}
+		}
+		if mine[fn] {
+			p.Source = "agent"
+			if err := ws.WriteProperty(p); err != nil {
+				return nil, err
+			}
+		}
 	}
 	fmt.Fprintln(out, "== M2 hunt")
 	res := &pipeline.Result{Report: report, Properties: props}
@@ -283,4 +306,19 @@ func goList(root, pattern string) (dir, name, path string, err error) {
 		return "", "", "", fmt.Errorf("go list %s: unexpected output %q", pattern, b)
 	}
 	return parts[0], parts[1], parts[2], nil
+}
+
+// specFuncs names the functions a spec file declares.
+func specFuncs(spec string) map[string]bool {
+	out := map[string]bool{}
+	f, err := parser.ParseFile(token.NewFileSet(), "specs.go", spec, 0)
+	if err != nil {
+		return out
+	}
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil {
+			out[fd.Name.Name] = true
+		}
+	}
+	return out
 }
