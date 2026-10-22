@@ -135,3 +135,17 @@ func use2(k int) { _ = clip(k); _ = clip(4) }
 		t.Error("clip: one caller passes a variable")
 	}
 }
+
+func TestPanicSite(t *testing.T) {
+	stack := "goroutine 7 [running]:\nruntime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:26 +0x5e\n" +
+		"m.TestGo2LeanPoC_x.func1.1()\n\t/src/m/zz_go2lean_poc_1_test.go:20 +0x3b\n" +
+		"panic({0x1, 0x2})\n\t/usr/local/go/src/runtime/panic.go:787 +0x132\n" +
+		"m.Last(...)\n\t/src/m/oob.go:12\n" +
+		"m.TestGo2LeanPoC_x.func1()\n\t/src/m/zz_go2lean_poc_1_test.go:24 +0x5d\n"
+	if got := panicSite(stack, "/src"); got != "/src/m/oob.go:12" {
+		t.Errorf("panicSite = %q", got)
+	}
+	if got := panicSite(stack, "/elsewhere"); got != "" {
+		t.Errorf("panicSite outside the package = %q", got)
+	}
+}

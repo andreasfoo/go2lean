@@ -235,6 +235,9 @@ func printVerdict(v *contract.Verdict, out io.Writer) {
 	}
 	fmt.Fprintln(out)
 	if v.Status == contract.VerdictConfirmed {
+		if v.Evidence.PanicSite != "" {
+			fmt.Fprintf(out, "      at %s\n", v.Evidence.PanicSite)
+		}
 		if v.Rank != nil {
 			fmt.Fprintf(out, "      rank %d: %s\n", v.Rank.Tier, v.Rank.Reason)
 			for _, s := range v.Rank.Sites {

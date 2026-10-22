@@ -53,6 +53,7 @@ var fileTmpl = template.Must(template.New("file").Parse(`package {{.Package}}
 import (
 	"encoding/json"
 	"fmt"
+	go2leanDebug "runtime/debug"
 	"testing"
 {{- range .Imports}}
 	{{.}}
@@ -76,6 +77,7 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 			if go2leanR := recover(); go2leanR != nil {
 				go2leanRes["panicked"] = true
 				go2leanRes["panic"] = fmt.Sprint(go2leanR)
+				go2leanRes["stack"] = string(go2leanDebug.Stack())
 			}
 		}()
 {{- range .Setup}}

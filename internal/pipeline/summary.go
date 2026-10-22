@@ -147,6 +147,9 @@ func (s *Summary) WriteMarkdown(out io.Writer) {
 				}
 				fmt.Fprintln(out)
 			}
+			if site := f.Verdict.Evidence.PanicSite; site != "" {
+				fmt.Fprintf(out, "- panicked at `%s`\n", site)
+			}
 			fmt.Fprintf(out, "- real: `%v`", f.Verdict.Observed)
 			if d := f.Verdict.Diagnosis; d != nil {
 				fmt.Fprintf(out, " — %s %s", d.Reason, d.ModelVsReal)

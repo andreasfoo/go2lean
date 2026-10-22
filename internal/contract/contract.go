@@ -193,6 +193,9 @@ type Evidence struct {
 	StdoutTail string `json:"stdout_tail,omitempty"`
 	StderrTail string `json:"stderr_tail,omitempty"`
 	PanicMsg   string `json:"panic_msg,omitempty"`
+	// PanicSite is the file:line in the target's package where the real
+	// run panicked (the innermost frame there).
+	PanicSite string `json:"panic_site,omitempty"`
 }
 
 // Diagnosis explains a spurious or inconclusive verdict so M1/M2 can act.

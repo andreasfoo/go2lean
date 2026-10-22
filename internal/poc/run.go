@@ -23,6 +23,8 @@ type result struct {
 	Ret      string `json:"ret"`
 	Pre      *bool  `json:"pre"`
 	Spec     *bool  `json:"spec"`
+	// Stack is the goroutine's stack where the panic was recovered.
+	Stack string `json:"stack"`
 	// probes are the GO2LEAN_PROBE lines the test printed.
 	probes []contract.Probe
 }
@@ -91,14 +93,14 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.
 		// its own, so one target's exit does not hide the others.
 		for _, p := range batch {
 			if _, ok := results[p.cx.ID]; ok || len(batch) == 1 {
-				p.v = verdictOf(p, results, cmd, exit, out, errOut)
+				p.v = verdictOf(p, results, cmd, exit, out, errOut, root)
 				continue
 			}
 			r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{p})
 			if err != nil {
 				return nil, err
 			}
-			p.v = verdictOf(p, r, c, e, o, eo)
+			p.v = verdictOf(p, r, c, e, o, eo, root)
 		}
 	}
 	var vs []*contract.Verdict
@@ -205,7 +207,7 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]
 	return results, cmdLine, exit, stdout, stderr, nil
 }
 
-func verdictOf(p *prepared, results map[string]result, cmd string, exit int, stdout, stderr string) *contract.Verdict {
+func verdictOf(p *prepared, results map[string]result, cmd string, exit int, stdout, stderr, root string) *contract.Verdict {
 	v := &contract.Verdict{
 		Counterexample: p.cx.ID,
 		Evidence:       contract.Evidence{Cmd: cmd, Exit: exit, StdoutTail: tail(stdout), StderrTail: tail(stderr)},
@@ -227,6 +229,9 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 	}
 	judge(v, p.prop, p.cx, res)
 	v.Probes = res.probes
+	if res.Panicked {
+		v.Evidence.PanicSite = panicSite(res.Stack, root)
+	}
 	panicMsg := v.Observed["panic"]
 	nilCaused := strings.Contains(panicMsg, "nil pointer dereference") || (panicMsg != "" && !strings.HasPrefix(panicMsg, "runtime error"))
 	if nils := nilArguments(p.cx); v.Status == contract.VerdictConfirmed && len(nils) > 0 && nilCaused && p.prop.Kind == contract.KindNoPanic {
@@ -529,4 +534,23 @@ func goList(root, pkg string) (dir, name string, err error) {
 		return "", "", fmt.Errorf("go list %s: unexpected output %q", pkg, out)
 	}
 	return parts[0], parts[1], nil
+}
+
+// frameRe matches a stack frame's file:line.
+var frameRe = regexp.MustCompile(`(?m)^\t(\S+\.go):(\d+)`)
+
+// panicSite is the innermost frame of the stack inside the module (under
+// root), outside go2lean's harness: the line of the code that panicked,
+// which may be in another package of the module than the target's, or ""
+// when the stack has none.
+func panicSite(stack, root string) string {
+	if root == "" {
+		return ""
+	}
+	for _, m := range frameRe.FindAllStringSubmatch(stack, -1) {
+		if strings.HasPrefix(m[1], root+string(filepath.Separator)) && !strings.Contains(filepath.Base(m[1]), "zz_go2lean") {
+			return m[1] + ":" + m[2]
+		}
+	}
+	return ""
 }
