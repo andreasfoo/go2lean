@@ -2,16 +2,12 @@ package poc
 
 import (
 	"fmt"
-	"go/ast"
-	"go/token"
 	"go/types"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
-
-	"golang.org/x/tools/go/packages"
-	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 )
@@ -21,12 +17,13 @@ import (
 // reproduces, not that a caller can build it: a nil argument no caller
 // passes, or a value the test forged, is a finding about the test.
 //
-//	1: inputs any caller of the package's API can pass, or a call site in
-//	   the module passes the same nil
-//	2: plain inputs to an unexported function (depends on its callers), or
-//	   a hand-written spec violated
-//	3: a nil argument no call site in the module passes, or an
-//	   agent-written spec violated (check the spec)
+//	1: inputs any caller of the package's API can pass, or a caller in the
+//	   module can pass the same nil (traced through its SSA, nilflow.go)
+//	2: plain inputs to an unexported function (depends on its callers), a
+//	   caller passes a value whose nil-ness is unknown (a field, a
+//	   global), or a hand-written spec violated
+//	3: a nil argument no caller in the module can pass, or an agent-written
+//	   spec violated (check the spec)
 //	4: an input the test forged (an opaque value left nil, package state
 //	   the program may initialise first)
 
@@ -49,20 +46,43 @@ func rankOf(p *prepared, callers *callerIndex) *contract.Rank {
 	fn := baseFunc(p.target.Func)
 	if nils := nilArguments(p.cx); len(nils) > 0 {
 		what := "nil for " + strings.Join(nils, ", ")
-		sites, calls, ok := callers.nilSites(p.target.Package, fn, nils)
+		yes, maybe, calls, ok := callers.nilSites(p.target.Package, fn, nils)
 		switch {
-		case len(sites) > 0:
-			return &contract.Rank{Tier: 1, Reason: "a call site in the module passes " + what, Sites: sites}
+		case len(yes) > 0:
+			return &contract.Rank{Tier: 1, Reason: "a caller in the module can pass " + what, Sites: yes}
+		case len(maybe) > 0:
+			return &contract.Rank{Tier: 2, Reason: what + ": a caller passes a value that may be nil (not traced to a nil)", Sites: maybe}
 		case !ok:
 			return &contract.Rank{Tier: 3, Reason: what + ": the module's call sites could not be loaded"}
 		case calls == 0:
 			return &contract.Rank{Tier: 3, Reason: what + ": no static call site in the module (called through an interface, or from outside)"}
 		default:
-			return &contract.Rank{Tier: 3, Reason: fmt.Sprintf("%s: none of its %d call sites in the module passes nil there", what, calls)}
+			return &contract.Rank{Tier: 3, Reason: fmt.Sprintf("%s: none of its %d call sites in the module can pass nil there", what, calls)}
 		}
 	}
 	if exportedFunc(fn) {
 		return &contract.Rank{Tier: 1, Reason: "plain inputs to the package's API"}
+	}
+	// An unexported function whose callers all pass constants for the
+	// integers the counterexample set: are its values among them?
+	var ints []string
+	for name := range p.cx.Inputs {
+		if !strings.Contains(name, "_") {
+			ints = append(ints, name)
+		}
+	}
+	if values, all, _ := callers.constArgs(p.target.Package, fn, ints); all {
+		hit := true
+		var desc []string
+		for name, vs := range values {
+			hit = hit && slices.Contains(vs, p.cx.Inputs[name])
+			desc = append(desc, name+" in {"+strings.Join(vs, ", ")+"}")
+		}
+		sort.Strings(desc)
+		if hit {
+			return &contract.Rank{Tier: 1, Reason: "every caller passes constants, and these are among them: " + strings.Join(desc, "; ")}
+		}
+		return &contract.Rank{Tier: 3, Reason: "every caller passes constants, not these: " + strings.Join(desc, "; ")}
 	}
 	return &contract.Rank{Tier: 2, Reason: "plain inputs to an unexported function: check its callers"}
 }
@@ -90,74 +110,6 @@ func exportedFunc(f string) bool {
 	return true
 }
 
-// callerIndex holds the module's call sites, loaded on first use.
-type callerIndex struct {
-	root   string
-	loaded bool
-	failed bool
-	// calls maps "pkg.F" or "pkg.T.M" to its call sites.
-	calls map[string][]callSite
-	// params maps the same key to the callee's parameter names.
-	params map[string][]string
-}
-
-type callSite struct {
-	pos token.Position
-	nil []bool // per argument: the literal nil
-}
-
-func newCallerIndex(root string) *callerIndex { return &callerIndex{root: root} }
-
-func (c *callerIndex) load() {
-	if c.loaded {
-		return
-	}
-	c.loaded = true
-	c.calls, c.params = map[string][]callSite{}, map[string][]string{}
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:  c.root,
-	}
-	pkgs, err := packages.Load(cfg, "./...")
-	if err != nil {
-		c.failed = true
-		return
-	}
-	for _, pkg := range pkgs {
-		if pkg.TypesInfo == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				f, ok := typeutil.Callee(pkg.TypesInfo, call).(*types.Func)
-				if !ok || f.Pkg() == nil {
-					return true
-				}
-				key := funcKey(f)
-				site := callSite{pos: pkg.Fset.Position(call.Pos())}
-				for _, a := range call.Args {
-					tv := pkg.TypesInfo.Types[a]
-					site.nil = append(site.nil, tv.IsNil())
-				}
-				c.calls[key] = append(c.calls[key], site)
-				if _, ok := c.params[key]; !ok {
-					sig := f.Type().(*types.Signature)
-					var names []string
-					for i := 0; i < sig.Params().Len(); i++ {
-						names = append(names, sig.Params().At(i).Name())
-					}
-					c.params[key] = names
-				}
-				return true
-			})
-		}
-	}
-}
-
 // funcKey is "pkg.F" or "pkg.T.M" (pointer receivers as T).
 func funcKey(f *types.Func) string {
 	f = f.Origin()
@@ -172,28 +124,6 @@ func funcKey(f *types.Func) string {
 		}
 	}
 	return f.Pkg().Path() + "." + f.Name()
-}
-
-// nilSites lists the call sites of pkg.fn that pass the literal nil for
-// one of the named parameters, and counts its call sites; ok is false when
-// the module's code could not be loaded.
-func (c *callerIndex) nilSites(pkg, fn string, names []string) (sites []string, calls int, ok bool) {
-	c.load()
-	if c.failed {
-		return nil, 0, false
-	}
-	key := pkg + "." + fn
-	params := c.params[key]
-	for _, s := range c.calls[key] {
-		for i, isNil := range s.nil {
-			if isNil && i < len(params) && containsName(names, params[i]) {
-				sites = append(sites, fmt.Sprintf("%s:%d", s.pos.Filename, s.pos.Line))
-				break
-			}
-		}
-	}
-	sort.Strings(sites)
-	return sites, len(c.calls[key]), true
 }
 
 func containsName(names []string, n string) bool {

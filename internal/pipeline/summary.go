@@ -86,10 +86,33 @@ func Summarize(w contract.Workspace) (*Summary, error) {
 	return s, nil
 }
 
-// WriteMarkdown renders the summary.
+// tierTitles head the confirmed findings by rank (internal/poc/rank.go);
+// 0 is a verdict written before ranking (go2lean rank adds it).
+var tierTitles = map[int]string{
+	1: "Confirmed, tier 1: a caller can pass this input",
+	2: "Confirmed, tier 2: depends on the callers",
+	3: "Confirmed, tier 3: no caller in the module passes this input",
+	4: "Confirmed, tier 4: an input the test forged",
+	0: "Confirmed, unranked",
+}
+
+func tier(f Finding) int {
+	if f.Verdict.Rank == nil {
+		return 0
+	}
+	return f.Verdict.Rank.Tier
+}
+
+// WriteMarkdown renders the summary: confirmed findings by rank, the ones
+// a reader should look at first on top.
 func (s *Summary) WriteMarkdown(out io.Writer) {
-	fmt.Fprintf(out, "# go2lean summary\n\n%d properties; %d confirmed, %d spurious, %d inconclusive; proofs: %v\n\n",
-		s.Properties, len(s.Confirmed), len(s.Spurious), len(s.Inconclusive), s.Proofs)
+	byTier := map[int][]Finding{}
+	for _, f := range s.Confirmed {
+		byTier[tier(f)] = append(byTier[tier(f)], f)
+	}
+	fmt.Fprintf(out, "# go2lean summary\n\n%d properties; %d confirmed (%d at tier 1, %d at tier 2, %d at tier 3, %d at tier 4, %d unranked), %d spurious, %d inconclusive; proofs: %v\n\n",
+		s.Properties, len(s.Confirmed), len(byTier[1]), len(byTier[2]), len(byTier[3]), len(byTier[4]), len(byTier[0]),
+		len(s.Spurious), len(s.Inconclusive), s.Proofs)
 	section := func(title string, fs []Finding) {
 		if len(fs) == 0 {
 			return
@@ -97,6 +120,12 @@ func (s *Summary) WriteMarkdown(out io.Writer) {
 		fmt.Fprintf(out, "## %s (%d)\n\n", title, len(fs))
 		for _, f := range fs {
 			fmt.Fprintf(out, "### %s\n\n", f.Verdict.Counterexample)
+			if r := f.Verdict.Rank; r != nil {
+				fmt.Fprintf(out, "- rank %d: %s\n", r.Tier, r.Reason)
+				for _, site := range r.Sites {
+					fmt.Fprintf(out, "  - %s\n", site)
+				}
+			}
 			if f.Property != nil {
 				fmt.Fprintf(out, "- property: `%s` (%s) — %s\n", f.Property.ID, f.Property.Kind, f.Property.NL)
 			}
@@ -129,7 +158,9 @@ func (s *Summary) WriteMarkdown(out io.Writer) {
 			fmt.Fprintln(out)
 		}
 	}
-	section("Confirmed", s.Confirmed)
+	for _, t := range []int{1, 2, 3, 4, 0} {
+		section(tierTitles[t], byTier[t])
+	}
 	section("Spurious", s.Spurious)
 	section("Inconclusive", s.Inconclusive)
 }

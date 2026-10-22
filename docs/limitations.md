@@ -87,21 +87,30 @@ The 82 bugs published for tingly-box are the result of hand triage; the
 tool itself does not rank. `nil_opaque_input` is a first tag, not a ranking.
 
 Since 2026-10-21 every confirmed verdict carries a `rank`
-(`internal/poc/rank.go`; `go2lean rank` re-ranks an existing workspace):
+(`internal/poc/rank.go`, `nilflow.go`; `go2lean rank` re-ranks an existing
+workspace, `go2lean summary` groups the findings by tier):
 
 | tier | input |
 |---|---|
-| 1 | plain values any caller of the package's API can pass, or a call site in the module passes the same nil |
-| 2 | plain values to an unexported function (depends on its callers), or a hand-written spec violated |
-| 3 | a nil argument no call site in the module passes, or an agent-written spec violated |
+| 1 | plain values any caller of the package's API can pass; a caller in the module can pass the same nil; or every caller passes constants and these are among them |
+| 2 | plain values to an unexported function whose callers pass variables, a nil a caller may pass (a field, a global: not traced to a nil), or a hand-written spec violated |
+| 3 | a nil no caller in the module can pass, an unexported function whose callers all pass other constants, or an agent-written spec violated |
 | 4 | an input the test forged: an opaque value left nil, package state the program may initialise first |
 
-On the 53 confirmed results of an older tingly-box workspace
-(`out-tingly6`) this gives 1 / 9 / 43 / 0: 33 are nil receivers or
-arguments of functions with no static call site (methods called through an
-interface, mostly `Error()` on a nil pointer), 10 have call sites none of
-which passes nil. Call sites are found syntactically (a literal `nil` at
-the position); a nil that flows in from a variable is not traced yet.
+Nil-ness is traced through the callers' SSA (since 2026-10-22): a nil
+constant through phis and conversions, a caller's parameter up to three
+callers up, the results of functions that return nil; a call reached only
+past `v != nil` (a dominating check) is not counted; a nil receiver is also
+traced to the places a nil pointer of its type is stored in an interface
+(a typed nil). On the 53 confirmed results of an older tingly-box workspace
+(`out-tingly6`) this gives 1 / 10 / 42 / 0: 33 are nil receivers of methods
+called only through an interface (mostly `Error()`) where no nil of that
+type is ever boxed; 5 have call sites none of which can pass nil; 4 are
+`truncate(s, n)` helpers whose callers all pass constants such as 30 or
+200, so a negative `n` is not reachable; 5 have callers passing a field
+whose nil-ness is not traced. The first version (literal `nil` at the call
+site only) had marked one finding tier 1 that a dominating `e != nil`
+check rules out.
 
 ## 4. Evidence comes from one codebase
 
