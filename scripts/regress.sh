@@ -33,5 +33,6 @@ if diff -u "$GOLDEN" "$WS/outcomes.txt"; then
   echo "regress: $(wc -l < "$GOLDEN") properties as expected ($(grep -c '^confirmed' "$GOLDEN") confirmed)"
 else
   echo "regress: outcomes differ from $GOLDEN (- expected, + now); log: $WS/run.log"
+  grep -o 'prover: not proved.*' "$WS/run.log" | sort | uniq -c | head -20
   exit 1
 fi

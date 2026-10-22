@@ -665,8 +665,11 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			// generic case split blow up (minutes, then no proof).
 			if opts.Prove && status == contract.ProofExhausted && prop.Kind == contract.KindNoPanic && prover.Eligible(abi) {
 				// A certificate for the sample; try one for every input.
-				if p := prove(leanDir, report, prop, abi, fid, sid, opts); p != nil {
+				p, why := prove(leanDir, report, prop, abi, fid, sid, opts)
+				if p != nil {
 					pr = p
+				} else {
+					summary = append(summary, "prover: not proved ("+why+")")
 				}
 			}
 			if err := ws.WriteProofResult(pr); err != nil {
@@ -698,12 +701,13 @@ const narrowMark = "18446744073709551617"
 const seqExhaustLimit = 2_000_000
 
 // prove writes and checks the theorem that the property holds for every
-// input; nil when Lean did not prove it (the exhaustive result stands).
+// input; nil and the reason when Lean did not prove it (the exhaustive
+// result stands).
 func prove(leanDir string, report *contract.ModelReport, prop *contract.Property, abi *contract.ABI,
-	fid, sid int, opts SearchOptions) *contract.ProofResult {
+	fid, sid int, opts SearchOptions) (*contract.ProofResult, string) {
 	rel, err := prover.Theorem(leanDir, report, prop, abi, fid, sid, prover.Closure(report, fid, sid))
 	if err != nil {
-		return nil
+		return nil, err.Error()
 	}
 	budget := time.Duration(opts.ProveSeconds) * time.Second
 	if budget <= 0 {
@@ -711,11 +715,11 @@ func prove(leanDir string, report *contract.ModelReport, prop *contract.Property
 	}
 	r := prover.Check(leanDir, rel, budget)
 	if !r.Proved {
-		return nil
+		return nil, r.Error
 	}
 	return &contract.ProofResult{Property: prop.ID, Status: contract.ProofProved, Tactic: "simp, split, bv_decide",
 		Domain:   fmt.Sprintf("every input (all %d parameters over their full width); runs within fuel %d, no havoc read, no assumption taken", len(abi.Params), prover.Fuel),
-		LeanFile: filepath.Join("lean", rel), TimeMs: r.Time.Milliseconds(), Trust: r.Trust}
+		LeanFile: filepath.Join("lean", rel), TimeMs: r.Time.Milliseconds(), Trust: r.Trust}, ""
 }
 
 // stuckNote names the most frequent site at which the model got stuck.
