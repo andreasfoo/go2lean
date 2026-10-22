@@ -399,6 +399,20 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 			diag.Reason = "panic_kind_mismatch"
 			diag.Notes = []string{fmt.Sprintf("expected %s, got %s", prop.ExpectedPanic, ClassifyPanic(r.Panic))}
 		}
+	case contract.KindSequence:
+		// The sequence spec is the target: a panic while it drives the
+		// code, or a false verdict, is the violation.
+		switch {
+		case r.Panicked:
+			v.Status = contract.VerdictConfirmed
+			diag = nil
+		case r.Ret == "false":
+			v.Status = contract.VerdictConfirmed
+			diag = nil
+		default:
+			v.Status = contract.VerdictSpurious
+			diag.Reason = "oracle_holds_in_real_run"
+		}
 	case contract.KindPostcondition, contract.KindEquivalence, contract.KindCustom:
 		switch {
 		case r.Panicked:

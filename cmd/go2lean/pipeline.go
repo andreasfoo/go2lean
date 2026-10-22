@@ -40,6 +40,7 @@ func searchFlags(fs *flag.FlagSet, budget int) *engineOptions {
 	fs.BoolVar(&o.NilInputs, "nil-inputs", false, "let top-level pointer arguments and receivers be nil")
 	fs.IntVar(&o.Jobs, "jobs", 0, "properties searched in parallel (default: number of CPUs)")
 	fs.IntVar(&o.BudgetSeconds, "budget", budget, "seconds each engine may spend on one property (0: unlimited)")
+	fs.BoolVar(&o.Prove, "prove", true, "after an exhaustive pass on integer and bool parameters, try a Lean proof for every input")
 	return &engineOptions{o, engine}
 }
 

@@ -26,9 +26,17 @@ confidence in a finding comes from `go test`. What Lean adds over the same
 model written in Go is a semantics that can also be the subject of a
 theorem; that path is not walked yet.
 
-Planned: proof engines in the pipeline, each result labelled with its trust
-base (`kernel`, `compiler`), and certificates named for what they are
-(`bounded_search`), not proofs.
+Since 2026-10-22 the pipeline proves part of it (design §5.3, rung 3): for
+a `no_panic` property of a function whose parameters are integers and
+bools, M2 writes a theorem over every input and records `proved` with its
+trust base read from `#print axioms` (`kernel`, or `compiler` when
+`Lean.ofReduceBool` appears). On the example packages 7 of the 13 eligible
+properties that held are proved, all `kernel`. Everything else is still
+what this section says: postconditions, functions taking slices, strings,
+pointers or interfaces, and the LLVM line get bounded searches only, and
+`exhausted` remains a name for a search, not a proof. The theorem is about
+the model; how faithfully the model follows Go is §5's question, which no
+proof answers.
 
 ## 2. Under-approximations are not tracked mechanically
 
@@ -161,8 +169,14 @@ generated Lean model.
 
 - Unit tests are thin (7 test files for 35 Go files); the gates are the
   end-to-end regression and differential scripts, which are slow.
-- Concurrency is out of scope: `sync.Mutex` is ignored and runs are single
-  threaded. Reports on concurrent code should say so prominently.
+- Concurrency is out of scope: one goroutine, `sync` calls ignored, no
+  channels or `select` interleaving, so data races, deadlocks and
+  ordering bugs can be neither stated nor found. Reports on concurrent code
+  should say so prominently. Properties are about one run of a function;
+  properties of a sequence of calls over a finite input are written as
+  `go2lean:sequence` specs (design §5.2) and checked by bounded model
+  checking, which covers "always" after each step and "eventually" at the
+  end of a finite stream, not infinite traces or fairness.
 - The agent comparison (Opus vs MiniMax-M3) rests on single runs, without
   repetitions, cost accounting or ablations.
 - Resource limits are ad hoc (64 KB strings, 8 GB cache sweep, 24 leaves

@@ -12,4 +12,4 @@ defaultTargets = ["Go2Lean"]
 [[lean_lib]]
 name = "Go2Lean"
 roots = []
-globs = ["Go2Lean", "Go2Lean.SSA.+", "Go2Lean.Dialect.+", "Go2Lean.Search", "Go2Lean.Driver"]
+globs = ["Go2Lean", "Go2Lean.SSA.+", "Go2Lean.Dialect.+", "Go2Lean.Proof.+", "Go2Lean.Search", "Go2Lean.Driver"]

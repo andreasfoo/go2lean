@@ -37,7 +37,7 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 	for _, f := range report.Funcs {
 		// Generic instances (Map[int]) are modelled for their callers; a
 		// harness cannot name them.
-		if f.Status == contract.ModelRejected || f.SpecFor != "" || f.Closure || f.WrappedBy != "" || f.CtorOnly != "" || f.TestFile || strings.Contains(f.Name, "[") {
+		if f.Status == contract.ModelRejected || f.SpecFor != "" || f.SequenceFor != "" || f.Closure || f.WrappedBy != "" || f.CtorOnly != "" || f.TestFile || strings.Contains(f.Name, "[") {
 			continue
 		}
 		out = append(out, &contract.Property{
@@ -63,6 +63,22 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 			Kind:     contract.KindPostcondition,
 			NL:       fmt.Sprintf("%s satisfies the spec-in-Go oracle %s", f.SpecFor, f.Name),
 			Spec:     &contract.SpecRef{GoFunc: f.Name, LeanDecl: fmt.Sprintf("%s.f%d", report.LeanModule, f.ID)},
+			MaxLen:   f.SpecMaxLen,
+			Frontend: report.Frontend,
+			Source:   "template",
+		})
+	}
+	for _, f := range report.Funcs {
+		// A sequence spec is its own target: every input sequence makes it
+		// return true (it drives SequenceFor and checks along the way).
+		if f.SequenceFor == "" || f.Status == contract.ModelRejected {
+			continue
+		}
+		out = append(out, &contract.Property{
+			ID:       PropertyID(contract.PackageKey(report.Package), key[f.Name], "sequence"),
+			Target:   contract.TargetID(report.Package, key[f.Name]),
+			Kind:     contract.KindSequence,
+			NL:       fmt.Sprintf("%s holds over every input sequence (it drives %s)", f.Name, f.SequenceFor),
 			MaxLen:   f.SpecMaxLen,
 			Frontend: report.Frontend,
 			Source:   "template",

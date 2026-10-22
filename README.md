@@ -77,7 +77,14 @@ exhaustive enumeration of a small domain (narrow signatures only), which
 records an `exhausted` certificate when it passes (`exhausted_havoc` when
 some inputs ran through values the model does not know, of which it tried
 only a few; `exhausted_assuming`, with the list, when some runs took an
-under-approximation such as a dropped store to a global). A spec whose verdict
+under-approximation such as a dropped store to a global). When it passes on
+a `no_panic` property of a function of integer and bool parameters, a Lean
+theorem over every input is generated and checked, and the result becomes
+`proved`, with the trust base `kernel` or `compiler` read from
+`#print axioms` (design doc §5.3). A third property shape,
+`go2lean:sequence`, states what must hold over a sequence of calls (an
+invariant after every event, a condition at the end of the stream) and is
+checked by bounded model checking over short sequences (design doc §5.2). A spec whose verdict
 depended on a havoc value (it looked inside an opaque value, or called
 something unmodelled) is reported as unknown, never as a counterexample
 or a certificate. Both run in `go2lean-search`, a native
@@ -164,6 +171,7 @@ outcome (confirmed, certified, none) with
 | `examples/maps` | `Pick` indexes `names[pos[want]-1]` with the position of a missing or first name; `Counter.Share` divides by a limit `NewCounter` accepts as 0 | both confirmed (`index out of range [-1]`; `integer divide by zero` through `Counter.Share~NewCounter`, the receiver built by the constructor); `Registry.Put` is targeted as `Registry.Put~NewRegistry` and certified (a registry no constructor made has a nil map: a misuse, not a target); `Distinct` (`len` of a built map) and `Sum` (`delete`, `range`) certified |
 | `examples/globals` | `At` indexes a package-level slice nothing fills; `Slot` indexes four slots with a generator the package initializer sets to one that yields 7 (only a `...ForTest` helper replaces it) | both confirmed (`index out of range`): a package-level variable nothing writes loads as its zero value, one only the initializer sets to a constant or function loads as that; `Blank` (`==` on `[4]byte` against such a variable) certified |
 | `examples/closures` | `Last` returns the last element a closure appended, and indexes `-1` when it never ran | confirmed (`index out of range [-1]`); `HasNeg` (a function passed as a value), `HasAbove` (a closure through `slices.ContainsFunc`) and `Total` (a closure updating a captured variable) certified; `anyOf` with a nil func confirmed as `nil_opaque_input` |
+| `examples/stream` | a converter that assembles content-block events into one message drops the open block's text when a second `Start` arrives; properties of the event sequence, written as `go2lean:sequence` specs | `SeqComplete` (every byte received is in the message at the end of the stream) confirmed on a 7-event sequence found by random search; `SeqBounded` (an invariant after every event) holds on all 538,084 sequences of up to 3 events |
 | `examples/portable` | constructs that gave spurious or missed results on one-api and spf13/cast: `URL` slices the `BaseURL` of a `*meta.Meta` (a struct of exported fields from another package, which has a function returning one); `Pick` indexes with `rand.Intn(len(xs))`; `Parse` and `parse` (ids differ only in case) divide by `strconv.Atoi`'s result; `Port` calls the generic `Must`; `Unit` reads group 2 of a one-group regexp; `Minor` divides by group 2 of a version, read through a helper that takes the regexp; `Head` divides by the first element after checking a sentinel error; `Per` divides by a `uint8` case of a type switch on `any`; `Label` reads a field of a handle (`*meta.Session`), then divides by a name's length; `Tokens` divides through a pointer only `InitEncoder` sets; `ring.push` would panic on a ring with an empty buffer, which only a receiver built field by field has; `Shrink` and `Budget` use `min`/`max`; `Drain` divides by an `atomic.Int64`; `Kind.String` and `Label2` read a stringer's index table | `URL`, `Pick` (Go's own `invalid argument to Intn`), `Parse`, `parse`, `Port` (via `Must[int]`), `Head`, `Per` (with `uint8(0)`), `Unit`, `Minor` (`"v0.0"`, a string the search drew from the pattern), `Label`, `Shrink`, `Drain`, `Label2` and `Tokens` confirmed (`Tokens` with the note `reads_unknown_state`: the program may call `InitEncoder` first, as one-api's `CountToken*` rely on `InitTokenEncoders`); `Count` (`errors.Is` on the sentinel `first` returns covers the empty slice), `Digit` (`rand.Intn` stays below its bound), `IntPart` (a one-group match has two elements), `PerMB` (`var mb = kb * 1024` folded), `PerMax` (`Atoi` of an out-of-range number is `MaxInt64`, not 0) and `Month` (both ends of a regexp group checked) certified (`Fill`, through `newRing`, `Budget` and `Kind.String` too); `ring.push` is no target (its unexported type is built by `newRing` only); the helper `group` as a target of its own is inconclusive (a `*regexp.Regexp` input cannot be generated) |
 
 ## On a real module
@@ -290,7 +298,7 @@ docs/semantics.md      the Go semantics modelled, by construct, with status
 
 Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 
-**Go line (go/ssa → GoSSA)**: 12 / 15
+**Go line (go/ssa → GoSSA)**: 14 / 17
 - ✅ SSA core with an executable, fuel-bounded semantics; GoSSA dialect
 - ✅ Heap model: pointers, slices, arrays, structs, writes through aliases
 - ✅ Maps, interfaces, closures, function values, methods
@@ -299,11 +307,13 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
 - ✅ Spec-in-Go properties and probes (model value vs real value)
 - ✅ LLM agent: proposes specs, runs them, reports
-- ✅ Regression gate in CI (166 properties); benchmark of hand-found bugs (34/34)
+- ✅ Regression gate in CI (170 properties); benchmark of hand-found bugs (34/34)
 - ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
-- ✅ Proof prototype: `bv_decide` proves a spec for all 64-bit inputs (`lean/Proofs`)
+- ✅ Proof prototype: a postcondition proved for all 64-bit inputs by hand (`lean/Proofs`)
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))
-- 🚧 Proof engines in the pipeline (`bv_omega` for linear functions, `bv_decide` for loop-free ones)
+- ✅ Proofs over all inputs in the pipeline for `no_panic` on integer and bool functions, each with its trust base (7 of 13 eligible on the examples, all kernel-checked)
+- ✅ Sequence specs (`go2lean:sequence`): properties of a sequence of calls, bounded model checking over short sequences
+- 🚧 Proofs of postconditions and of functions over slices and strings
 - ⬜ Floats; `init` functions and package state
 - ⬜ Goroutines, `select`, channels, `defer` of modelled functions
 

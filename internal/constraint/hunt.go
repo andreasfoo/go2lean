@@ -13,8 +13,10 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
+	"github.com/andreasfoo/go2lean/internal/prover"
 	"github.com/andreasfoo/go2lean/internal/repo"
 	"github.com/andreasfoo/go2lean/internal/ssaout"
 )
@@ -52,6 +54,11 @@ type SearchOptions struct {
 	// (0: the default, 10; negative: none). A property with expensive inputs
 	// then reports fewer trials instead of stalling the sweep.
 	BudgetSeconds int
+	// Prove tries a Lean proof over all inputs when the exhaustive engine
+	// passed on a function of integer and bool parameters (internal/prover).
+	Prove bool
+	// ProveSeconds bounds each proof attempt (0: 120).
+	ProveSeconds int
 }
 
 func (o SearchOptions) withDefaults() SearchOptions {
@@ -545,6 +552,8 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			return nil, "", fmt.Errorf("spec %s not in model report", prop.Spec.GoFunc)
 		}
 		leanProp = map[string]any{"kind": "postcondition", "f": fid, "spec": sid}
+	case contract.KindSequence:
+		leanProp = map[string]any{"kind": "sequence", "f": fid}
 	default:
 		return nil, "", fmt.Errorf("property kind %s has no search engine yet", prop.Kind)
 	}
@@ -615,6 +624,13 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s%s", res.Trials, res.OutOfFuel, res.Moot, exitNote(specExits, res.SpecExits), note, stuckNote(res.StuckSites, report.Havoc, reportsByKey(ws, report.Frontend, res.StuckSites))))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
+		if prop.Kind == contract.KindSequence {
+			// Bounded model checking: every sequence up to the exhaustive
+			// length over the program's own constants (narrowMark in
+			// Search.lean), not over all boundary values.
+			spec["extra"] = append(slices.Clone(extra), json.Number(narrowMark))
+			spec["limit"] = max(opts.ExhaustLimit, seqExhaustLimit)
+		}
 		res, err := runSearch(leanDir, prop.ID+"_exhaustive", spec, "exhaustive")
 		if err != nil {
 			return nil, "", err
@@ -625,6 +641,9 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			return cx, fmt.Sprintf("exhaustive: found at input %d", res.Trial), err
 		case res.Exhaustive:
 			domain := fmt.Sprintf("%.0f inputs: boundary values, mined literals and |v|<=8, slices up to length %d, strings of a named type limited to its constants, \"\" and \"a\"", res.Domain, res.MaxLen)
+			if prop.Kind == contract.KindSequence {
+				domain = fmt.Sprintf("%.0f inputs: every sequence of up to %d events whose integers are the program's constants (with their neighbours), 0 and 1", res.Domain, res.MaxLen)
+			}
 			if prop.Kind == contract.KindPostcondition {
 				_, checked := exitCounts(specExits, res.SpecExits)
 				domain += fmt.Sprintf("; %d of them got past the spec's guards", checked)
@@ -642,6 +661,14 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 				domain += fmt.Sprintf("; runs took %d under-approximations (see assumptions)", len(res.Assumptions))
 			}
 			pr := &contract.ProofResult{Property: prop.ID, Status: status, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain, Assumptions: res.Assumptions}
+			// Specs are not attempted yet: composing target and spec makes the
+			// generic case split blow up (minutes, then no proof).
+			if opts.Prove && status == contract.ProofExhausted && prop.Kind == contract.KindNoPanic && prover.Eligible(abi) {
+				// A certificate for the sample; try one for every input.
+				if p := prove(leanDir, report, prop, abi, fid, sid, opts); p != nil {
+					pr = p
+				}
+			}
 			if err := ws.WriteProofResult(pr); err != nil {
 				return nil, "", err
 			}
@@ -659,6 +686,36 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		}
 	}
 	return nil, strings.Join(summary, "; "), nil
+}
+
+// narrowMark is Search.lean's narrowMark (2^64 + 1): in the literal pool,
+// it selects the narrow integer domain of the exhaustive engine.
+const narrowMark = "18446744073709551617"
+
+// seqExhaustLimit is the domain a sequence spec's exhaustive pass may
+// enumerate: its runs are short, and covering every sequence up to the
+// length is the point.
+const seqExhaustLimit = 2_000_000
+
+// prove writes and checks the theorem that the property holds for every
+// input; nil when Lean did not prove it (the exhaustive result stands).
+func prove(leanDir string, report *contract.ModelReport, prop *contract.Property, abi *contract.ABI,
+	fid, sid int, opts SearchOptions) *contract.ProofResult {
+	rel, err := prover.Theorem(leanDir, report, prop, abi, fid, sid, prover.Closure(report, fid, sid))
+	if err != nil {
+		return nil
+	}
+	budget := time.Duration(opts.ProveSeconds) * time.Second
+	if budget <= 0 {
+		budget = 120 * time.Second
+	}
+	r := prover.Check(leanDir, rel, budget)
+	if !r.Proved {
+		return nil
+	}
+	return &contract.ProofResult{Property: prop.ID, Status: contract.ProofProved, Tactic: "simp, split, bv_decide",
+		Domain:   fmt.Sprintf("every input (all %d parameters over their full width); runs within fuel %d, no havoc read, no assumption taken", len(abi.Params), prover.Fuel),
+		LeanFile: filepath.Join("lean", rel), TimeMs: r.Time.Milliseconds(), Trust: r.Trust}
 }
 
 // stuckNote names the most frequent site at which the model got stuck.

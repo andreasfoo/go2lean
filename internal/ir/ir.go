@@ -546,16 +546,18 @@ type Func struct {
 	TestFile  bool
 	// SpecMaxLen is the spec's go2lean:maxlen directive (0: none).
 	SpecMaxLen int
-	Consts     []string         // integer literals, see contract.ModelFunc.Consts
-	StrConsts  []string         // string literals
-	MapKeys    []string         // string constants used as map keys
-	UsesJSON   bool             // the body decodes JSON (json.Unmarshal)
-	CmpStrs    []string         // string constants compared with == or !=
-	Variants   []string         // union variant fields (Of<Variant>) the body reads
-	Calls      []int            // callees within the program, by function id
-	XCalls     []contract.XCall // callees in other packages of the same compile
-	Exits      []contract.ExitSite
-	ABI        contract.ABI
+	// SequenceFor names the function a `go2lean:sequence` spec drives.
+	SequenceFor string
+	Consts      []string         // integer literals, see contract.ModelFunc.Consts
+	StrConsts   []string         // string literals
+	MapKeys     []string         // string constants used as map keys
+	UsesJSON    bool             // the body decodes JSON (json.Unmarshal)
+	CmpStrs     []string         // string constants compared with == or !=
+	Variants    []string         // union variant fields (Of<Variant>) the body reads
+	Calls       []int            // callees within the program, by function id
+	XCalls      []contract.XCall // callees in other packages of the same compile
+	Exits       []contract.ExitSite
+	ABI         contract.ABI
 }
 
 // Prog is one package's worth of functions. Func indices are the Lean FuncIds.

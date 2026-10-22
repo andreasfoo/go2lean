@@ -431,6 +431,7 @@ cross-check results, and optionally a natural-language focus from the user.
 |---|---|---|---|
 | `no_panic` | no panic under a precondition | `run f args ≠ .panic _` | mechanical: `defer recover()` |
 | `postcondition` | the result satisfies a predicate | derived from the spec function | the agent's `Spec(args…, ret) bool` |
+| `sequence` | a `go2lean:sequence` spec returns true for every input sequence | `run seq args = .ok (.bool true)` | the spec itself, called with the sequence |
 | `equivalence` | `f ≡ g` | `run f = run g` | run both, compare |
 | `crosscheck` | GoSSA model ≡ LLVM model | core-level comparison | `go test` vs `tinygo test` |
 | `custom` | the agent writes Lean directly | agent-written | agent-written (mandatory) |
@@ -442,6 +443,25 @@ is `run Sum args = .ok r → run SpecSum (args ++ [r]) = .ok true`. The Lean
 form and the Go oracle agree by construction; nobody has to write Lean.
 `custom` is the only place the agent writes Lean, and its counterexamples are
 flagged separately.
+
+**Sequence specs** (built, 2026-10-22): properties of a sequence of calls
+(a stream converter that eventually emits the whole message, an invariant
+that holds after every event) are written as a Go function with a
+`// go2lean:sequence Target` doc comment that takes the events (and any
+other inputs), drives `Target` over them, checks the invariant after each
+step ("always") and the end condition when the input ends ("eventually",
+for a finite stream: at its end), and returns a bool. The function is its
+own target; the property `sequence` says it returns true without
+panicking. Random search draws sequences up to `-maxlen` (or the spec's
+`go2lean:maxlen`); the exhaustive engine enumerates every sequence up to the
+exhaustive length over a narrow alphabet (the program's own integer
+constants with their neighbours, 0 and 1; up to 2,000,000 sequences), which
+makes it bounded model checking of the spec; M3 replays the failing
+sequence. `examples/stream`: a converter that drops an open block's text
+on a second `Start` is caught (random search, trial 25, confirmed), and the
+invariant `SeqBounded` holds on all 538,084 sequences of up to 3 events.
+This is not temporal logic: no infinite traces, no fairness, and no
+concurrency (one goroutine, `sync` ignored); docs/limitations.md §7.
 
 ### 5.3 Engine ladder
 
@@ -462,29 +482,30 @@ flagged separately.
    cap. No counterexample yields a `ProofResult` of status `exhausted`, a
    weak but honest bounded certificate; havoc sites are not enumerated and
    the record says so.
-3. **Proof for linear functions**: `bv_omega` after unfolding `run` for a
-   fixed fuel; polynomial, no SAT.
-4. **`bv_decide`, conditionally**: only for loop-free functions or fuel ≤ ~8,
-   with a hard timeout, after the engines above found nothing. Bit-blasting
-   is dominated by `mul`/`div` and by loop unrolling, and the interpreter has
-   to be `simp`-unfolded first (the `h ▸` width casts in `binInt` are hostile
-   to that). Measure on `Clamp` before investing further.
-   **Measured (prototype, `lean/Proofs/OobClampIdentity.lean`):** for all
-   64-bit `v lo hi`, the model of `oob.Clamp` followed by
-   `SpecClampIdentity` returns true; checked in 9 s, axioms `propext`,
-   `Classical.choice`, `Quot.sound` only. What made it work: the needed
-   functions are looked up in the generated program by `rfl` lemmas
-   (`prog.funcs[0]? = some f0`) instead of unfolding all of it (that times
-   out), and each op used gets an `rfl` lemma at its width
-   (`denote or h .slt [.int 64 a, .int 64 b] = .ok (.bool (a.slt b), h)`)
-   instead of unfolding `denote` (generating its equation lemmas times
-   out). `simp` then leaves a case analysis on the comparisons, closed by
-   `cases`, `simp_all` and `bv_decide`. Not yet working: a spec that calls
-   the target again (`SpecClampIdempotent`): after splitting, lookups in
-   the environment array (`setIfInBounds` chains) are not reduced, so
-   `bv_decide` sees opaque booleans; this needs `getElem!`/`setIfInBounds`
-   simp lemmas and a generic split-simp loop before M2 can emit such
-   proofs for every loop-free integer function.
+3. **Proof over all inputs** (built, 2026-10-22, `internal/prover`, `-prove`,
+   on by default): when the exhaustive engine passed on a `no_panic`
+   property of a function whose parameters are all integers or bools, M2
+   writes a theorem over every value of every parameter: the model returns
+   without panicking, reads no havoc and takes no assumption, within fuel
+   64. The proof is generic: `simp` with the interpreter, `rfl` lemmas that
+   look the program's functions up (`prog.funcs[i]? = some fi`), the
+   dialect's integer lemmas (`Go2Lean.Proof.Simp`: one per op, so that
+   `denotePure`'s match over every op is never unfolded) and the core's
+   array lemmas for the environment; then `split`, `simp_all`, splitting
+   the run states' conjunctions and substituting them, `simp_all` again,
+   and `bv_decide` for what is left. The result is recorded as `proved`
+   with its trust base from `#print axioms`: `kernel` when only `propext`,
+   `Classical.choice` and `Quot.sound` appear, `compiler` when
+   `Lean.ofReduceBool` does (bv_decide's certificate check). On the example
+   packages 7 of the 13 eligible properties that held are proved, all with
+   trust `kernel`, in 15–25 s each (`checked.Double`, `checked.Half`,
+   `divzero.Ratio` including `MinInt / -1`, `oob.Clamp`, ...); the other 6
+   allocate, dispatch through an interface or call another package. Not
+   attempted yet: postconditions (target and spec composed: the generic
+   split takes minutes and fails; the hand-written
+   `lean/Proofs/OobClampIdentity.lean` shows targeted case splits work),
+   functions with slices, strings or pointers, and the LLVM line.
+4. **`bv_decide`** is the last step of rung 3; on its own it is not used.
 5. **SMT export** (Z3/cvc5) when complete bug-finding on loops is needed:
    external, asynchronous, better `mul`/`div` heuristics; no Lean certificate,
    which bug-finding does not need because M3 is the certificate.

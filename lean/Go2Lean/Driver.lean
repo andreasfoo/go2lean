@@ -70,6 +70,7 @@ def propertyOfJson (j : Json) : Except String Property := do
   match ← j.getObjValAs? String "kind" with
   | "noPanic" => return .noPanic (← j.getObjValAs? Nat "f")
   | "postcondition" => return .postcondition (← j.getObjValAs? Nat "f") (← j.getObjValAs? Nat "spec")
+  | "sequence" => return .sequence (← j.getObjValAs? Nat "f")
   | other => throw s!"unknown property kind {other}"
 
 /-- One search: everything `run` or `exhaust` takes, plus the model's key. -/

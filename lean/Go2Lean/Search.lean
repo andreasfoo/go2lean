@@ -81,6 +81,10 @@ inductive Property where
   | noPanic (f : FuncId)
   /-- `spec` takes the arguments of `f` followed by its result and returns a bool. -/
   | postcondition (f spec : FuncId)
+  /-- `f` (a `go2lean:sequence` spec) returns true without panicking: it
+  drives its target over an input event sequence, checks an invariant after
+  each step and a condition at the end of the stream. -/
+  | sequence (f : FuncId)
 
 inductive Outcome where
   | holds
@@ -538,11 +542,27 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
       | (.outOfFuel, s) => (.outOfFuel, s, some v)
     | (.panic k, s) => (.panicked k, s, none)
     | (.outOfFuel, s) => (.outOfFuel, s, none)
+  | .sequence f =>
+    match run p or h f args fuel heap with
+    | (.ok (.bool true), s) => (.holds, s, some (.bool true))
+    | (.ok (.bool false), s) =>
+      -- A false verdict that read havoc stands only if every other havoc
+      -- assignment gives it too.
+      let decided := s.log.isEmpty || (!alts.isEmpty && alts.all fun h' =>
+        match run p or h' f args fuel heap with
+        | (.ok (.bool false), _) => true
+        | _ => false)
+      if decided then (.violated, s, some (.bool false)) else (.specUnknown, s, some (.bool false))
+    | (.ok v, s) => (.specPanicked .modelStuck, s, some v)
+    | (.panic k, s) => (.panicked k, s, none)
+    | (.outOfFuel, s) => (.outOfFuel, s, none)
 
 /-- Does the outcome refute the property? A stuck model never does. -/
 def Outcome.refutes : Property → Outcome → Bool
   | .noPanic _, .panicked k => !k.isStuck
   | .postcondition .., .violated => true
+  | .sequence _, .violated => true
+  | .sequence _, .panicked k => !k.isStuck
   | _, _ => false
 
 /-- A run that is neither a refutation nor support: the model got stuck, or
@@ -552,6 +572,8 @@ def Outcome.moot : Property → Outcome → Bool
   | .postcondition .., .panicked _ => true
   | .postcondition .., .specPanicked _ => true
   | .postcondition .., .specUnknown => true
+  | .sequence _, .specUnknown => true
+  | .sequence _, .specPanicked _ => true
   | _, .panicked k => k.isStuck
   | _, _ => false
 
@@ -710,7 +732,8 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
 its end (the trial reached the oracle and the oracle finished). -/
 def specExit (prop : Property) (o : Outcome) (s : HState Val) : Option String :=
   match prop, o with
-  | .postcondition .., .holds | .postcondition .., .violated =>
+  | .postcondition .., .holds | .postcondition .., .violated
+  | .sequence _, .holds | .sequence _, .violated =>
     s.exit.map fun (_, b) => toString b
   | _, _ => none
 
@@ -782,9 +805,19 @@ where
 
 -- Exhaustive engine ---------------------------------------------------------
 
+/-- In `extra`, asks the exhaustive engine for the narrow integer domain:
+the program's own constants with 0 and 1 (a sequence spec's alphabet, so
+that every short sequence can be enumerated). Above 2^64, so no constant
+(a two's-complement bit pattern) is mistaken for it. -/
+def narrowMark : Nat := 2 ^ 64 + 1
+
 /-- The value set the exhaustive engine enumerates for `w`-bit integers:
-boundary values, mined literals and their neighbours, and magnitudes up to 8. -/
+boundary values, mined literals and their neighbours, and magnitudes up to 8
+(or the narrow domain, see `narrowMark`). -/
 def smallInts (w : Nat) (extra : List Nat) : List (BitVec w) :=
+  if extra.contains narrowMark then
+    ([0#w, 1#w] ++ (mined w (extra.filter (· != narrowMark))).toList).eraseDups
+  else
   ((specials w ++ mined w extra).toList ++
     (List.range 17).map fun n => BitVec.ofInt w (Int.ofNat n - 8)).eraseDups
 

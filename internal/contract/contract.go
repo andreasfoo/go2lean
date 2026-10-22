@@ -35,6 +35,9 @@ const (
 	KindEquivalence   PropertyKind = "equivalence"
 	KindCrosscheck    PropertyKind = "crosscheck"
 	KindCustom        PropertyKind = "custom"
+	// KindSequence: a `go2lean:sequence` spec returns true without
+	// panicking for every input sequence (bounded by the engines).
+	KindSequence PropertyKind = "sequence"
 )
 
 // GoLean carries the two forms of a predicate: the Go expression M3 can
@@ -259,7 +262,11 @@ type ProofResult struct {
 	Assumptions []string `json:"assumptions,omitempty"`
 	LeanFile    string   `json:"lean_file,omitempty"`
 	TimeMs      int64    `json:"time_ms,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	// Trust is what a proof's check relies on: "kernel" (the kernel and
+	// Lean's standard axioms) or "compiler" (also Lean.ofReduceBool, which
+	// bv_decide's certificate check uses).
+	Trust string `json:"trust,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // ModelGap is feedback from M3/M2 to M1: a place where the model's
@@ -483,6 +490,9 @@ type ModelFunc struct {
 	TestFile bool `json:"test_file,omitempty"`
 	// SpecMaxLen is a spec's `go2lean:maxlen N` directive.
 	SpecMaxLen int `json:"spec_max_len,omitempty"`
+	// SequenceFor names the function this `go2lean:sequence` spec drives
+	// over its input event sequence (the spec itself is the target).
+	SequenceFor string `json:"sequence_for,omitempty"`
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`

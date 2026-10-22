@@ -44,6 +44,10 @@ var specRe = regexp.MustCompile(`go2lean:spec\s+([\w.]+)`)
 // up to N long instead of the run's -maxlen.
 var maxLenRe = regexp.MustCompile(`go2lean:maxlen\s+(\d+)`)
 
+// seqRe marks a sequence spec: `go2lean:sequence Target` on a function
+// returning bool that drives Target over its input events.
+var seqRe = regexp.MustCompile(`go2lean:sequence\s+([\w.()*]+)`)
+
 // Translate loads the single package matching pattern (relative to dir) and
 // lowers every top-level function. It returns the program and the Go module
 // path.
@@ -1309,7 +1313,13 @@ func (t *fnState) translate() error {
 	}
 	t.out.ABI = *abi
 	t.out.SpecFor = t.prog.specFor(f)
-	if decl, ok := f.Syntax().(*ast.FuncDecl); ok && decl.Doc != nil && t.out.SpecFor != "" {
+	if decl, ok := f.Syntax().(*ast.FuncDecl); ok && decl.Doc != nil && t.out.SpecFor == "" &&
+		f.Signature.Results().Len() == 1 && isBool(f.Signature.Results().At(0).Type()) {
+		if m := seqRe.FindStringSubmatch(decl.Doc.Text()); m != nil {
+			t.out.SequenceFor = m[1]
+		}
+	}
+	if decl, ok := f.Syntax().(*ast.FuncDecl); ok && decl.Doc != nil && (t.out.SpecFor != "" || t.out.SequenceFor != "") {
 		if m := maxLenRe.FindStringSubmatch(decl.Doc.Text()); m != nil {
 			t.out.SpecMaxLen, _ = strconv.Atoi(m[1])
 		}
