@@ -125,6 +125,15 @@ Planned: a blind run with a frozen tool version and a protocol fixed in
 advance on codebases of other kinds (a CLI, a pure-Go database, a Kubernetes
 controller), with no tool changes during the measurement.
 
+First blind run (2026-10-22, `docs/eval/semver.md`): Masterminds/semver,
+protocol committed before the run. Templates alone: 8 confirmed, no bug.
+The agent's 21 blind specs: one bug confirmed (bare wildcards with `^`
+and `<=`; the `<=` half new), and Go's own fuzzer, given the same specs,
+found it plus one more new bug in seconds. One model gap (package
+`init()` not run, so regexps compiled there are unknown) made 44 of 53
+counterexamples spurious. The value on that package was in the specs,
+not in go2lean's search.
+
 ## 5. Hand-written semantics; the cross-check
 
 About 2,860 lines of GoSSA dialect and hand reimplementations of strings,

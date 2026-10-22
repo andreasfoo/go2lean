@@ -1,0 +1,698 @@
+package semver
+
+import "database/sql/driver"
+
+// go2lean:spec Version.Compare
+// SpecVersionComparePrecedence: for versions with a valid (or empty)
+// prerelease, Compare follows SemVer 2.0.0 precedence (spec item 11): core
+// numbers numerically, a prerelease below its release, prerelease identifiers
+// left to right, numeric identifiers compared numerically and below
+// alphanumeric ones, alphanumeric identifiers in ASCII order, and a longer
+// identifier list above its prefix. Build metadata is ignored.
+func SpecVersionComparePrecedence(v *Version, o *Version, ret int) bool {
+	if v == nil || o == nil {
+		return true
+	}
+	if v.pre != "" && validatePrerelease(v.pre) != nil {
+		return true
+	}
+	if o.pre != "" && validatePrerelease(o.pre) != nil {
+		return true
+	}
+	if v.major != o.major {
+		if v.major < o.major {
+			return ret == -1
+		}
+		return ret == 1
+	}
+	if v.minor != o.minor {
+		if v.minor < o.minor {
+			return ret == -1
+		}
+		return ret == 1
+	}
+	if v.patch != o.patch {
+		if v.patch < o.patch {
+			return ret == -1
+		}
+		return ret == 1
+	}
+	if v.pre == o.pre {
+		return ret == 0
+	}
+	if v.pre == "" {
+		return ret == 1
+	}
+	if o.pre == "" {
+		return ret == -1
+	}
+	a := v.pre
+	b := o.pre
+	i := 0
+	j := 0
+	for {
+		ie := i
+		for ie < len(a) && a[ie] != '.' {
+			ie++
+		}
+		je := j
+		for je < len(b) && b[je] != '.' {
+			je++
+		}
+		x := a[i:ie]
+		y := b[j:je]
+		if x != y {
+			xn := true
+			for k := 0; k < len(x); k++ {
+				if x[k] < '0' || x[k] > '9' {
+					xn = false
+				}
+			}
+			yn := true
+			for k := 0; k < len(y); k++ {
+				if y[k] < '0' || y[k] > '9' {
+					yn = false
+				}
+			}
+			if xn != yn {
+				if xn {
+					return ret == -1
+				}
+				return ret == 1
+			}
+			if xn && len(x) != len(y) {
+				// numeric identifiers without leading zeros: longer is larger
+				if len(x) < len(y) {
+					return ret == -1
+				}
+				return ret == 1
+			}
+			want := 0
+			n := len(x)
+			if len(y) < n {
+				n = len(y)
+			}
+			for k := 0; k < n && want == 0; k++ {
+				if x[k] < y[k] {
+					want = -1
+				} else if x[k] > y[k] {
+					want = 1
+				}
+			}
+			if want == 0 {
+				if len(x) < len(y) {
+					want = -1
+				} else {
+					want = 1
+				}
+			}
+			return ret == want
+		}
+		aEnd := ie >= len(a)
+		bEnd := je >= len(b)
+		if aEnd && bEnd {
+			return ret == 0
+		}
+		if aEnd {
+			return ret == -1
+		}
+		if bEnd {
+			return ret == 1
+		}
+		i = ie + 1
+		j = je + 1
+	}
+}
+
+// go2lean:spec Version.Equal
+// SpecVersionEqualIgnoresMetadataAndIsSymmetric: Equal is symmetric, treats
+// nil only as equal to nil, and two versions that differ only in build
+// metadata are equal.
+func SpecVersionEqualIgnoresMetadataAndIsSymmetric(v *Version, o *Version, ret bool) bool {
+	if v == nil || o == nil {
+		return ret == (v == o)
+	}
+	if v.major == o.major && v.minor == o.minor && v.patch == o.patch && v.pre == o.pre {
+		return ret
+	}
+	return ret == o.Equal(v)
+}
+
+// go2lean:spec Collection.Less
+// SpecCollectionLessIsStrictOrder: Less is irreflexive and asymmetric, and
+// Less(i, j) holds exactly when element j compares greater than element i.
+func SpecCollectionLessIsStrictOrder(c Collection, i int, j int, ret bool) bool {
+	if i < 0 || j < 0 || i >= len(c) || j >= len(c) {
+		return true
+	}
+	if c[i] == nil || c[j] == nil {
+		return true
+	}
+	if i == j {
+		return !ret
+	}
+	if ret && c.Less(j, i) {
+		return false
+	}
+	return ret == (c[j].Compare(c[i]) > 0)
+}
+
+// go2lean:spec Version.IncPatchE
+// SpecVersionIncPatchENext: IncPatchE fails (returning the version unchanged)
+// exactly when a release patch is MaxUint64; otherwise it returns a release
+// with the same major and minor that is strictly greater than v: the same
+// patch for a prerelease, patch+1 for a release.
+func SpecVersionIncPatchENext(v Version, ret0 Version, ret1 error) bool {
+	if v.pre == "" && v.patch == ^uint64(0) {
+		return ret1 != nil && ret0 == v
+	}
+	if ret1 != nil {
+		return false
+	}
+	if ret0.pre != "" || ret0.metadata != "" {
+		return false
+	}
+	if ret0.major != v.major || ret0.minor != v.minor {
+		return false
+	}
+	if v.pre != "" {
+		if ret0.patch != v.patch {
+			return false
+		}
+	} else if ret0.patch != v.patch+1 {
+		return false
+	}
+	return v.LessThan(&ret0)
+}
+
+// go2lean:spec Version.IncMinorE
+// SpecVersionIncMinorENext: IncMinorE fails (returning v unchanged) exactly
+// when minor is MaxUint64; otherwise it returns major.(minor+1).0 with no
+// prerelease or metadata, strictly greater than v.
+func SpecVersionIncMinorENext(v Version, ret0 Version, ret1 error) bool {
+	if v.minor == ^uint64(0) {
+		return ret1 != nil && ret0 == v
+	}
+	if ret1 != nil {
+		return false
+	}
+	if ret0.major != v.major || ret0.minor != v.minor+1 || ret0.patch != 0 {
+		return false
+	}
+	if ret0.pre != "" || ret0.metadata != "" {
+		return false
+	}
+	return v.LessThan(&ret0)
+}
+
+// go2lean:spec Version.IncMajorE
+// SpecVersionIncMajorENext: IncMajorE fails (returning v unchanged) exactly
+// when major is MaxUint64; otherwise it returns (major+1).0.0 with no
+// prerelease or metadata, strictly greater than v.
+func SpecVersionIncMajorENext(v Version, ret0 Version, ret1 error) bool {
+	if v.major == ^uint64(0) {
+		return ret1 != nil && ret0 == v
+	}
+	if ret1 != nil {
+		return false
+	}
+	if ret0.major != v.major+1 || ret0.minor != 0 || ret0.patch != 0 {
+		return false
+	}
+	if ret0.pre != "" || ret0.metadata != "" {
+		return false
+	}
+	return v.LessThan(&ret0)
+}
+
+// go2lean:spec Version.SetPrerelease
+// SpecVersionSetPrereleaseRoundTrip: an invalid prerelease is rejected; a
+// valid one is stored, the rest of the version is kept, and the new
+// Original() parses back to the same version.
+func SpecVersionSetPrereleaseRoundTrip(v Version, prerelease string, ret0 Version, ret1 error) bool {
+	if prerelease != "" && validatePrerelease(prerelease) != nil {
+		return ret1 != nil
+	}
+	if ret1 != nil {
+		return false
+	}
+	if ret0.pre != prerelease || ret0.major != v.major || ret0.minor != v.minor || ret0.patch != v.patch || ret0.metadata != v.metadata {
+		return false
+	}
+	if v.metadata != "" && validateMetadata(v.metadata) != nil {
+		return true
+	}
+	orig := ret0.Original()
+	if len(orig) > 256 {
+		return true
+	}
+	w, err := NewVersion(orig)
+	if err != nil {
+		return false
+	}
+	return w.major == ret0.major && w.minor == ret0.minor && w.patch == ret0.patch && w.pre == prerelease && w.metadata == ret0.metadata
+}
+
+// go2lean:spec Version.SetMetadata
+// SpecVersionSetMetadataKeepsPrecedence: an invalid metadata string is
+// rejected; a valid one is stored and does not change precedence (the result
+// is Equal to v and keeps its prerelease).
+func SpecVersionSetMetadataKeepsPrecedence(v Version, metadata string, ret0 Version, ret1 error) bool {
+	if metadata != "" && validateMetadata(metadata) != nil {
+		return ret1 != nil
+	}
+	if ret1 != nil {
+		return false
+	}
+	if ret0.metadata != metadata || ret0.pre != v.pre {
+		return false
+	}
+	return ret0.Equal(&v) && v.Equal(&ret0)
+}
+
+// go2lean:spec Version.MarshalJSON
+// SpecVersionMarshalJSONRoundTrip: a version with valid prerelease and
+// metadata survives MarshalJSON followed by UnmarshalJSON.
+func SpecVersionMarshalJSONRoundTrip(v Version, ret0 []byte, ret1 error) bool {
+	if v.pre != "" && validatePrerelease(v.pre) != nil {
+		return true
+	}
+	if v.metadata != "" && validateMetadata(v.metadata) != nil {
+		return true
+	}
+	if ret1 != nil {
+		return false
+	}
+	if len(v.String()) > 256 {
+		return true
+	}
+	var w Version
+	if err := w.UnmarshalJSON(ret0); err != nil {
+		return false
+	}
+	return w.major == v.major && w.minor == v.minor && w.patch == v.patch && w.pre == v.pre && w.metadata == v.metadata
+}
+
+// go2lean:spec Version.MarshalText
+// SpecVersionMarshalTextRoundTrip: a version with valid prerelease and
+// metadata survives MarshalText followed by UnmarshalText.
+func SpecVersionMarshalTextRoundTrip(v Version, ret0 []byte, ret1 error) bool {
+	if v.pre != "" && validatePrerelease(v.pre) != nil {
+		return true
+	}
+	if v.metadata != "" && validateMetadata(v.metadata) != nil {
+		return true
+	}
+	if ret1 != nil {
+		return false
+	}
+	if len(ret0) > 256 {
+		return true
+	}
+	var w Version
+	if err := w.UnmarshalText(ret0); err != nil {
+		return false
+	}
+	return w.major == v.major && w.minor == v.minor && w.patch == v.patch && w.pre == v.pre && w.metadata == v.metadata
+}
+
+// go2lean:spec Version.Value
+// SpecVersionValueScanRoundTrip: a version with valid prerelease and metadata
+// survives Value followed by Scan.
+func SpecVersionValueScanRoundTrip(v Version, ret0 driver.Value, ret1 error) bool {
+	if v.pre != "" && validatePrerelease(v.pre) != nil {
+		return true
+	}
+	if v.metadata != "" && validateMetadata(v.metadata) != nil {
+		return true
+	}
+	if ret1 != nil {
+		return false
+	}
+	if len(v.String()) > 256 {
+		return true
+	}
+	var w Version
+	if err := w.Scan(ret0); err != nil {
+		return false
+	}
+	return w.major == v.major && w.minor == v.minor && w.patch == v.patch && w.pre == v.pre && w.metadata == v.metadata
+}
+
+// go2lean:spec New
+// SpecNewRoundTripsThroughStrictParse: New stores every part, and when the
+// prerelease and metadata are valid its Original() is a strictly valid
+// semantic version that StrictNewVersion parses back to the same parts.
+func SpecNewRoundTripsThroughStrictParse(major uint64, minor uint64, patch uint64, pre string, metadata string, ret *Version) bool {
+	if ret == nil {
+		return false
+	}
+	if ret.major != major || ret.minor != minor || ret.patch != patch || ret.pre != pre || ret.metadata != metadata {
+		return false
+	}
+	if pre != "" && validatePrerelease(pre) != nil {
+		return true
+	}
+	if metadata != "" && validateMetadata(metadata) != nil {
+		return true
+	}
+	orig := ret.Original()
+	if len(orig) > 256 {
+		return true
+	}
+	s, err := StrictNewVersion(orig)
+	if err != nil {
+		return false
+	}
+	return s.major == major && s.minor == minor && s.patch == patch && s.pre == pre && s.metadata == metadata
+}
+
+// go2lean:spec StrictNewVersion
+// SpecStrictNewVersionAgreesWithNewVersion: a string StrictNewVersion accepts
+// is canonical (String() gives it back) and NewVersion parses it to the same
+// version, prerelease and metadata.
+func SpecStrictNewVersionAgreesWithNewVersion(v string, ret0 *Version, ret1 error) bool {
+	if ret1 != nil {
+		return true
+	}
+	if ret0 == nil {
+		return false
+	}
+	if ret0.String() != v {
+		return false
+	}
+	n, err := NewVersion(v)
+	if err != nil {
+		return false
+	}
+	return n.Compare(ret0) == 0 && n.pre == ret0.pre && n.metadata == ret0.metadata
+}
+
+// go2lean:spec MustParse
+// SpecMustParseStringIsStrict: the String() of any version MustParse returns
+// is a strictly valid semantic version that parses back to the same version.
+func SpecMustParseStringIsStrict(v string, ret *Version) bool {
+	if ret == nil {
+		return false
+	}
+	if ret.Original() != v {
+		return false
+	}
+	s := ret.String()
+	if len(s) > 256 {
+		return true
+	}
+	w, err := StrictNewVersion(s)
+	if err != nil {
+		return false
+	}
+	return w.major == ret.major && w.minor == ret.minor && w.patch == ret.patch && w.pre == ret.pre && w.metadata == ret.metadata
+}
+
+// go2lean:sequence Constraints.Check
+// SeqConstraintOpsComplementary: for a single constraint version body (plain
+// version, partial version or wildcard) and any release version, "=" and
+// "!=", ">" and "<=", "<" and ">=" (and their aliases) give opposite answers.
+// segs holds the versions as consecutive (major, minor, patch) triples.
+func SeqConstraintOpsComplementary(body string, segs []uint64) bool {
+	for k := 0; k < len(body); k++ {
+		ch := body[k]
+		ok := (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '.' || ch == '-' || ch == '+' || ch == '*'
+		if !ok {
+			return true
+		}
+	}
+	pos := []string{"=", "", ">", ">", "<", "<"}
+	neg := []string{"!=", "!=", "<=", "=<", ">=", "=>"}
+	for i := 0; i+2 < len(segs); i += 3 {
+		v := New(segs[i], segs[i+1], segs[i+2], "", "")
+		for p := 0; p < len(pos); p++ {
+			a, errA := NewConstraint(pos[p] + body)
+			b, errB := NewConstraint(neg[p] + body)
+			if errA != nil || errB != nil {
+				continue
+			}
+			if a.Check(v) == b.Check(v) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:sequence Constraints.Check
+// SeqConstraintOpsComplementaryWithPrerelease: with IncludePrerelease set,
+// the complementary operator pairs still give opposite answers for
+// prerelease versions. An invalid or empty prerelease input is normalised to
+// "0".
+func SeqConstraintOpsComplementaryWithPrerelease(body string, pre string, segs []uint64) bool {
+	for k := 0; k < len(body); k++ {
+		ch := body[k]
+		ok := (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '.' || ch == '-' || ch == '+' || ch == '*'
+		if !ok {
+			return true
+		}
+	}
+	if pre == "" || validatePrerelease(pre) != nil {
+		pre = "0"
+	}
+	pos := []string{"=", "", ">", ">", "<", "<"}
+	neg := []string{"!=", "!=", "<=", "=<", ">=", "=>"}
+	for i := 0; i+2 < len(segs); i += 3 {
+		v := New(segs[i], segs[i+1], segs[i+2], pre, "")
+		for p := 0; p < len(pos); p++ {
+			a, errA := NewConstraint(pos[p] + body)
+			b, errB := NewConstraint(neg[p] + body)
+			if errA != nil || errB != nil {
+				continue
+			}
+			a.IncludePrerelease = true
+			b.IncludePrerelease = true
+			if a.Check(v) == b.Check(v) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:sequence Constraints.Check
+// SeqCaretMatchesDocumentedRange: for release versions, ^A.B.C, ^A.B, ^A.B.x,
+// ^A and ^A.x accept exactly the documented ranges:
+// ^A.B.C (A>0) = >=A.B.C <A+1; ^0.B.C (B>0) = >=0.B.C <0.B+1; ^0.0.C = 0.0.C;
+// ^A.B (A>0) = >=A.B.0 <A+1; ^0.B = >=0.B.0 <0.B+1; ^A = >=A.0.0 <A+1.
+func SeqCaretMatchesDocumentedRange(a uint64, b uint64, c uint64, form int, segs []uint64) bool {
+	f := form % 5
+	if f < 0 {
+		f = -f
+	}
+	full := New(a, b, c, "", "").String()
+	d1 := 0
+	for d1 < len(full) && full[d1] != '.' {
+		d1++
+	}
+	d2 := d1 + 1
+	for d2 < len(full) && full[d2] != '.' {
+		d2++
+	}
+	body := full
+	base := New(a, b, c, "", "")
+	if f == 1 {
+		body = full[:d2]
+		base = New(a, b, 0, "", "")
+	} else if f == 2 {
+		body = full[:d2] + ".x"
+		base = New(a, b, 0, "", "")
+	} else if f == 3 {
+		body = full[:d1]
+		base = New(a, 0, 0, "", "")
+	} else if f == 4 {
+		body = full[:d1] + ".x"
+		base = New(a, 0, 0, "", "")
+	}
+	cs, err := NewConstraint("^" + body)
+	if err != nil {
+		return false
+	}
+	for i := 0; i+2 < len(segs); i += 3 {
+		v := New(segs[i], segs[i+1], segs[i+2], "", "")
+		ge := v.Compare(base) >= 0
+		in := false
+		if f == 0 {
+			if a > 0 {
+				in = v.major == a
+			} else if b > 0 {
+				in = v.major == 0 && v.minor == b
+			} else {
+				in = v.major == 0 && v.minor == 0 && v.patch == c
+			}
+		} else if f <= 2 {
+			if a > 0 {
+				in = v.major == a
+			} else {
+				in = v.major == 0 && v.minor == b
+			}
+		} else {
+			in = v.major == a
+		}
+		if cs.Check(v) != (ge && in) {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:sequence Constraints.Check
+// SeqTildeMatchesDocumentedRange: for release versions, ~A.B.C = >=A.B.C
+// <A.B+1.0; ~A.B and ~A.B.x = >=A.B.0 <A.B+1.0; ~A and ~A.x = >=A.0.0 <A+1.0.0.
+func SeqTildeMatchesDocumentedRange(a uint64, b uint64, c uint64, form int, segs []uint64) bool {
+	f := form % 5
+	if f < 0 {
+		f = -f
+	}
+	full := New(a, b, c, "", "").String()
+	d1 := 0
+	for d1 < len(full) && full[d1] != '.' {
+		d1++
+	}
+	d2 := d1 + 1
+	for d2 < len(full) && full[d2] != '.' {
+		d2++
+	}
+	body := full
+	base := New(a, b, c, "", "")
+	if f == 1 {
+		body = full[:d2]
+		base = New(a, b, 0, "", "")
+	} else if f == 2 {
+		body = full[:d2] + ".x"
+		base = New(a, b, 0, "", "")
+	} else if f == 3 {
+		body = full[:d1]
+		base = New(a, 0, 0, "", "")
+	} else if f == 4 {
+		body = full[:d1] + ".x"
+		base = New(a, 0, 0, "", "")
+	}
+	cs, err := NewConstraint("~" + body)
+	if err != nil {
+		return false
+	}
+	for i := 0; i+2 < len(segs); i += 3 {
+		v := New(segs[i], segs[i+1], segs[i+2], "", "")
+		ge := v.Compare(base) >= 0
+		in := v.major == a
+		if f <= 2 {
+			in = in && v.minor == b
+		}
+		if cs.Check(v) != (ge && in) {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:sequence Constraints.Check
+// SeqWildcardMatchesEveryRelease: a bare wildcard (*, x or X) means any
+// version ("* is equivalent to >= 0.0.0", wildcards work for all operators),
+// so with "", "=", "~", "~>", "^", ">=", "=>", "<=" and "=<" it accepts every
+// release version.
+func SeqWildcardMatchesEveryRelease(sel int, segs []uint64) bool {
+	s := sel % 3
+	if s < 0 {
+		s = -s
+	}
+	w := "*"
+	if s == 1 {
+		w = "x"
+	} else if s == 2 {
+		w = "X"
+	}
+	ops := []string{"", "=", "~", "~>", "^", ">=", "=>", "<=", "=<"}
+	for i := 0; i+2 < len(segs); i += 3 {
+		v := New(segs[i], segs[i+1], segs[i+2], "", "")
+		for _, op := range ops {
+			cs, err := NewConstraint(op + w)
+			if err != nil {
+				return false
+			}
+			if !cs.Check(v) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// go2lean:sequence Constraints.Validate
+// SeqValidateAgreesWithCheck: for any parsed constraint and any version
+// (release or prerelease, IncludePrerelease on or off), Validate returns the
+// same verdict as Check, with no errors on success and at least one reason on
+// failure.
+func SeqValidateAgreesWithCheck(c string, pre string, mask int, segs []uint64) bool {
+	cs, err := NewConstraint(c)
+	if err != nil {
+		return true
+	}
+	if pre != "" && validatePrerelease(pre) != nil {
+		pre = "0"
+	}
+	cs.IncludePrerelease = mask&1 != 0
+	bit := 1
+	for i := 0; i+2 < len(segs); i += 3 {
+		bit = bit * 2
+		p := ""
+		if mask&bit != 0 {
+			p = pre
+		}
+		v := New(segs[i], segs[i+1], segs[i+2], p, "")
+		ok, errs := cs.Validate(v)
+		if ok != cs.Check(v) {
+			return false
+		}
+		if ok && len(errs) != 0 {
+			return false
+		}
+		if !ok && len(errs) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:sequence Constraints.UnmarshalText
+// SeqConstraintsTextRoundTrip: the text MarshalText produces for any parsed
+// constraint is accepted by UnmarshalText, and the result checks every
+// version (release or prerelease) the same way as the original.
+func SeqConstraintsTextRoundTrip(c string, pre string, mask int, segs []uint64) bool {
+	cs, err := NewConstraint(c)
+	if err != nil {
+		return true
+	}
+	text, err := cs.MarshalText()
+	if err != nil {
+		return false
+	}
+	var back Constraints
+	if err := back.UnmarshalText(text); err != nil {
+		return false
+	}
+	if pre != "" && validatePrerelease(pre) != nil {
+		pre = "0"
+	}
+	cs.IncludePrerelease = mask&1 != 0
+	back.IncludePrerelease = mask&1 != 0
+	bit := 1
+	for i := 0; i+2 < len(segs); i += 3 {
+		bit = bit * 2
+		p := ""
+		if mask&bit != 0 {
+			p = pre
+		}
+		v := New(segs[i], segs[i+1], segs[i+2], p, "")
+		if cs.Check(v) != back.Check(v) {
+			return false
+		}
+	}
+	return true
+}

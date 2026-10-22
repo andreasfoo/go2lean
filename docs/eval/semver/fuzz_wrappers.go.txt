@@ -1,0 +1,120 @@
+package semver
+
+import (
+	"encoding/binary"
+	"testing"
+)
+
+// Arm C.2 of docs/eval/semver.md: the agent's specs as Go fuzz targets.
+
+func skipOnPanic(t *testing.T) {
+	if recover() != nil {
+		t.Skip("target panicked (postcondition not applicable)")
+	}
+}
+
+func FuzzC2SpecNewRoundTripsThroughStrictParse(f *testing.F) {
+	f.Fuzz(func(t *testing.T, major, minor, patch uint64, pre, metadata string) {
+		var ret *Version
+		func() { defer skipOnPanic(t); ret = New(major, minor, patch, pre, metadata) }()
+		if !SpecNewRoundTripsThroughStrictParse(major, minor, patch, pre, metadata, ret) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzC2SpecStrictNewVersionAgreesWithNewVersion(f *testing.F) {
+	f.Fuzz(func(t *testing.T, v string) {
+		var r0 *Version
+		var r1 error
+		func() { defer skipOnPanic(t); r0, r1 = StrictNewVersion(v) }()
+		if !SpecStrictNewVersionAgreesWithNewVersion(v, r0, r1) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzC2SpecMustParseStringIsStrict(f *testing.F) {
+	f.Fuzz(func(t *testing.T, v string) {
+		var r *Version
+		ok := false
+		func() { defer func() { _ = recover() }(); r = MustParse(v); ok = true }()
+		if !ok {
+			t.Skip("MustParse panicked (documented)")
+		}
+		if !SpecMustParseStringIsStrict(v, r) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+// Extra (beyond the protocol): sequence specs, segs decoded from bytes.
+func segsOf(b []byte) []uint64 {
+	var out []uint64
+	for len(b) >= 8 {
+		out = append(out, binary.LittleEndian.Uint64(b))
+		b = b[8:]
+	}
+	if len(b) > 0 {
+		var x [8]byte
+		copy(x[:], b)
+		out = append(out, binary.LittleEndian.Uint64(x[:]))
+	}
+	return out
+}
+
+func FuzzX1SeqConstraintOpsComplementary(f *testing.F) {
+	f.Fuzz(func(t *testing.T, body string, b []byte) {
+		if !SeqConstraintOpsComplementary(body, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzX2SeqConstraintOpsComplementaryWithPrerelease(f *testing.F) {
+	f.Fuzz(func(t *testing.T, body, pre string, b []byte) {
+		if !SeqConstraintOpsComplementaryWithPrerelease(body, pre, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzX3SeqCaretMatchesDocumentedRange(f *testing.F) {
+	f.Fuzz(func(t *testing.T, a, bb, c uint64, form int, b []byte) {
+		if !SeqCaretMatchesDocumentedRange(a, bb, c, form, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzX4SeqTildeMatchesDocumentedRange(f *testing.F) {
+	f.Fuzz(func(t *testing.T, a, bb, c uint64, form int, b []byte) {
+		if !SeqTildeMatchesDocumentedRange(a, bb, c, form, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzX5SeqWildcardMatchesEveryRelease(f *testing.F) {
+	f.Fuzz(func(t *testing.T, sel int, b []byte) {
+		if !SeqWildcardMatchesEveryRelease(sel, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzX6SeqValidateAgreesWithCheck(f *testing.F) {
+	f.Fuzz(func(t *testing.T, c, pre string, mask int, b []byte) {
+		if !SeqValidateAgreesWithCheck(c, pre, mask, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
+
+func FuzzX7SeqConstraintsTextRoundTrip(f *testing.F) {
+	f.Fuzz(func(t *testing.T, c, pre string, mask int, b []byte) {
+		if !SeqConstraintsTextRoundTrip(c, pre, mask, segsOf(b)) {
+			t.Fatal("spec false")
+		}
+	})
+}
