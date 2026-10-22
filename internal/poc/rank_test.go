@@ -149,3 +149,17 @@ func TestPanicSite(t *testing.T) {
 		t.Errorf("panicSite outside the package = %q", got)
 	}
 }
+
+func TestCalleeOf(t *testing.T) {
+	for site, want := range map[string]string{
+		"processEvent: call (github.com/openai/openai-go/v3/responses.ResponseStreamEventUnion).AsResponseIncomplete.Response.ID": "(github.com/openai/openai-go/v3/responses.ResponseStreamEventUnion).AsResponseIncomplete",
+		"newResponsesToAnthropicConverter: call github.com/tingly-dev/tingly-box/internal/protocol/ids.Message":                   "github.com/tingly-dev/tingly-box/internal/protocol/ids.Message",
+		"f: call strings.SplitSeq":               "strings.SplitSeq",
+		"f: call t11 (callee stuck).InputTokens": "",
+		"f: map lookup #0":                       "",
+	} {
+		if got := calleeOf(site); got != want {
+			t.Errorf("calleeOf(%q) = %q, want %q", site, got, want)
+		}
+	}
+}

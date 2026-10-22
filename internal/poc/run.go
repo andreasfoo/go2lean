@@ -54,6 +54,9 @@ type prepared struct {
 	// state lists the package-level variables the model read as havoc on
 	// the way to the counterexample (sites from the model reports).
 	state []string
+	// guessed lists the calls the model does not model whose results
+	// the counterexample's run read (havoc it chose).
+	guessed []string
 }
 
 // VerifyAll realises the counterexamples, runs those of each package in a
@@ -138,7 +141,7 @@ func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &prepared{cx: cx, prop: prop, target: target, state: unknownState(ws, cx)}
+	p := &prepared{cx: cx, prop: prop, target: target, state: unknownState(ws, cx), guessed: guessedCalls(ws, cx)}
 	p.fn, p.imps, err = HarnessFunc(target, prop, cx, abi)
 	if err != nil {
 		p.v = &contract.Verdict{Counterexample: cx.ID, Status: contract.VerdictInconclusive,
@@ -249,7 +252,65 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 			"the run that panicked read package-level state the model does not know (" + strings.Join(p.state, "; ") +
 				"): check that the program does not initialise it before calls like this one"}}
 	}
+	if (v.Status == contract.VerdictSpurious || v.Status == contract.VerdictInconclusive) && v.Diagnosis != nil && len(p.guessed) > 0 {
+		// The likeliest cause of a model that disagrees with Go: it chose
+		// the results of calls it does not model. Name them.
+		names := p.guessed
+		more := ""
+		if len(names) > 5 {
+			names, more = names[:5], fmt.Sprintf(" and %d more", len(p.guessed)-5)
+		}
+		v.Diagnosis.Notes = append(v.Diagnosis.Notes, "the model chose the results of calls it does not model: "+
+			strings.Join(names, ", ")+more+"; a choice Go does not make gives a spurious counterexample. "+
+			"Compiling with -deps models the functions of the dependency packages called")
+	}
 	return v
+}
+
+// guessedCalls names the callees of the unmodelled calls whose results a
+// counterexample's run read (havoc sites of reason unmodeled-call), in
+// the order the run read them.
+func guessedCalls(ws contract.Workspace, cx *contract.Counterexample) []string {
+	var out []string
+	for _, site := range havocSites(ws, cx) {
+		if site.Reason != "unmodeled-call" {
+			continue
+		}
+		if c := calleeOf(site.Site); c != "" && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// calleeOf extracts the callee from a havoc site text "fn: call
+// <callee>[.Field...]": a function pkg/path.Name or a method
+// (pkg/path.T).Name, without the result fields after it.
+func calleeOf(site string) string {
+	_, rest, ok := strings.Cut(site, ": call ")
+	if !ok {
+		return ""
+	}
+	if strings.HasPrefix(rest, "(") {
+		i := strings.Index(rest, ")")
+		if i < 0 {
+			return ""
+		}
+		name, _, _ := strings.Cut(rest[i+1:], " ")
+		if !strings.HasPrefix(name, ".") {
+			return ""
+		}
+		method, _, _ := strings.Cut(name[1:], ".")
+		return rest[:i+1] + "." + method
+	}
+	slash := strings.LastIndex(rest, "/") + 1
+	dot := strings.Index(rest[slash:], ".")
+	if dot < 0 || strings.ContainsAny(rest[:slash+dot], " (") {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest[slash+dot+1:], ".")
+	name, _, _ = strings.Cut(name, " ")
+	return rest[:slash+dot+1] + name
 }
 
 // nilArguments names the top-level arguments a counterexample sets to nil.
@@ -273,6 +334,18 @@ func nilArguments(cx *contract.Counterexample) []string {
 // run read as havoc (unmodeled loads), resolved in their packages' reports.
 func unknownState(ws contract.Workspace, cx *contract.Counterexample) []string {
 	var out []string
+	for _, site := range havocSites(ws, cx) {
+		if site.Reason == "unmodeled-load" && !slices.Contains(out, site.Site) {
+			out = append(out, site.Site)
+		}
+	}
+	return out
+}
+
+// havocSites are the model-report sites of the havoc values a
+// counterexample's run read.
+func havocSites(ws contract.Workspace, cx *contract.Counterexample) []contract.ABIHavoc {
+	var out []contract.ABIHavoc
 	reports := map[string]*contract.ModelReport{}
 	for _, h := range cx.Havoc {
 		key, idx, ok := strings.Cut(h.Origin, "#")
@@ -289,9 +362,7 @@ func unknownState(ws contract.Workspace, cx *contract.Counterexample) []string {
 		if r == nil || err != nil || i >= len(r.Havoc) {
 			continue
 		}
-		if site := r.Havoc[i]; site.Reason == "unmodeled-load" && !slices.Contains(out, site.Site) {
-			out = append(out, site.Site)
-		}
+		out = append(out, r.Havoc[i])
 	}
 	return out
 }

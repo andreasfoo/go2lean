@@ -20,7 +20,12 @@ func cmdAgent(args []string) error {
 	report := fs.Bool("report", true, "ask the agent for a report (and possibly revised specs) after the verdicts")
 	guidance := fs.String("guidance", "", "file with guidance for the proposal round (bug classes, invariants, functions to target)")
 	specFile := fs.String("spec-file", "", "name of the spec file the agent writes in the package (default go2lean_specs_test.go)")
-	deps := fs.Bool("deps", false, "also model the functions of dependency packages the package calls")
+	// On by default: specs drive the code under test through its
+	// dependencies (an SDK's decoders and accessors), and a guessed result
+	// there gives spurious counterexamples. The model grows (a stream
+	// converter package: 17 s and 3 MB of Lean without, 98 s and 16 MB
+	// with), which an agent run, hours long, absorbs.
+	deps := fs.Bool("deps", true, "also model the functions of dependency packages the package calls (-deps=false: only the package)")
 	// The agent's specs are few and target large functions (a trial on a
 	// converter with a thousand generated fields takes seconds): a 10 s
 	// budget left some of them with a handful of trials.

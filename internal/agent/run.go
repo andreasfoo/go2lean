@@ -256,6 +256,9 @@ func verdictSummary(ws contract.Workspace, res *pipeline.Result) string {
 		fmt.Fprintf(&b, "\n    real: %v", v.Observed)
 		if v.Diagnosis != nil {
 			fmt.Fprintf(&b, "\n    diagnosis: %s %s", v.Diagnosis.Reason, v.Diagnosis.ModelVsReal)
+			for _, n := range v.Diagnosis.Notes {
+				fmt.Fprintf(&b, "\n    note: %s", n)
+			}
 		}
 		b.WriteString("\n")
 	}

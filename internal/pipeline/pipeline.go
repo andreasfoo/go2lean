@@ -234,6 +234,11 @@ func printVerdict(v *contract.Verdict, out io.Writer) {
 		fmt.Fprintf(out, " (%s)", v.Diagnosis.Reason)
 	}
 	fmt.Fprintln(out)
+	if v.Status == contract.VerdictSpurious && v.Diagnosis != nil {
+		for _, n := range v.Diagnosis.Notes {
+			fmt.Fprintf(out, "      %s\n", n)
+		}
+	}
 	if v.Status == contract.VerdictConfirmed {
 		if v.Evidence.PanicSite != "" {
 			fmt.Fprintf(out, "      at %s\n", v.Evidence.PanicSite)
