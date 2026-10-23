@@ -11,9 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/andreasfoo/go2lean/internal/constraint"
 	"github.com/andreasfoo/go2lean/internal/contract"
+	"github.com/andreasfoo/go2lean/internal/fuzzexport"
 	"github.com/andreasfoo/go2lean/internal/pipeline"
 )
 
@@ -32,6 +34,10 @@ type Options struct {
 	// SpecFile overrides the name of the file the agent writes (default
 	// SpecFile); it must end in _test.go.
 	SpecFile string
+	// FuzzTime, when positive, also hands every spec to Go's fuzzer for
+	// that long (internal/fuzzexport) after the pipeline ran; the report
+	// round sees what it found.
+	FuzzTime time.Duration
 }
 
 // Run drives the agent on one package: propose specs, repair until they
@@ -141,13 +147,22 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 	if err != nil {
 		return err
 	}
+	fuzzNote := ""
+	if opts.FuzzTime > 0 {
+		fmt.Fprintf(out, "== go test -fuzz (%s per spec)\n", opts.FuzzTime)
+		results, skipped, err := fuzzexport.Run(ws, moduleDir, pkgPath, fuzzexport.Options{FuzzTime: opts.FuzzTime})
+		if err != nil {
+			fmt.Fprintf(out, "  fuzz: %v\n", err)
+		}
+		fuzzNote = fuzzSummary(results, skipped, out)
+	}
 	if !opts.ReportRound {
 		return nil
 	}
 
 	// Report round: source and verdicts back to the agent; a revised spec
 	// file triggers one more pass.
-	resp, err = ask(reportPrompt, reportUserPrompt(pkgPath, pkgName, source, spec, verdictSummary(ws, res)))
+	resp, err = ask(reportPrompt, reportUserPrompt(pkgPath, pkgName, source, spec, verdictSummary(ws, res)+fuzzNote))
 	if err != nil {
 		return err
 	}
@@ -280,6 +295,25 @@ func verdictSummary(ws contract.Workspace, res *pipeline.Result) string {
 			}
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", p.ID, status)
+	}
+	return b.String()
+}
+
+// fuzzSummary prints what Go's fuzzer found on the specs and renders it
+// for the report prompt.
+func fuzzSummary(results []fuzzexport.Result, skipped []fuzzexport.Skipped, out io.Writer) string {
+	var b strings.Builder
+	b.WriteString("\nGo's fuzzer on the same specs (go test -fuzz, real code, coverage-guided; a postcondition skips inputs on which the target panics):\n")
+	for _, r := range results {
+		fmt.Fprintf(out, "  %-60s %s (%s execs)\n", r.Property, r.Status, r.Execs)
+		fmt.Fprintf(&b, "- %s: %s after %.0fs", r.Property, r.Status, r.Seconds)
+		if r.Status == "violated" {
+			fmt.Fprintf(&b, ": %s; failing input %s", r.Message, strings.ReplaceAll(strings.TrimSpace(r.Input), "\n", " "))
+		}
+		b.WriteString("\n")
+	}
+	for _, s := range skipped {
+		fmt.Fprintf(&b, "- %s: not fuzzed (%s)\n", s.Property, s.Reason)
 	}
 	return b.String()
 }

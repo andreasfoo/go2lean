@@ -569,6 +569,26 @@ This follows the "distinguishing mutant" rule of Theorem's OSS Verify
 fuzz-target guidelines (a property no change can make fail checks
 nothing). Not mutated yet: constants, stores, calls.
 
+**Specs as Go fuzz targets** (`go2lean fuzz`, `internal/fuzzexport`;
+since 2026-10-23). The semver blind run showed Go's own fuzzer finding,
+in seconds, violations of the agent's specs the model could not reach:
+the value was in the specs, and both searches should run on them. `go2lean
+fuzz <pkg>` writes every postcondition and sequence spec of the package
+as a `FuzzGo2Lean_<Spec>` target: parameters of the types Go's fuzzer
+takes are fuzz arguments, slices, arrays, structs and pointers to them
+are decoded from one extra `[]byte` (little-endian integers, lengths up to
+8, strings up to 32 bytes); a postcondition calls the target (function or
+method) and skips inputs on which it panics, as the model's postcondition
+does. The targets are built with coverage instrumentation through an
+overlay (`go test -c -fuzz`, nothing written into the package) and each
+is fuzzed in the sandbox for `-fuzztime`; a failing input is kept in the
+workspace in Go's corpus format with the generated file and the command
+that replays it. `go2lean agent` runs it after the pipeline (`-fuzztime`,
+30 s per spec by default) and gives the results to the report round. On
+the semver agent specs all 21 export; 6 are violated within seconds, the
+four the hand-written wrappers of the frozen run found and two on
+receivers built field by field.
+
 Not yet: ranking properties by expected yield, `ModelGap` records from
 spurious verdicts, generalising a confirmed bug to neighbouring functions, and
 proof attempts.

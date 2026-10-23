@@ -104,7 +104,7 @@ func bwrapArgs(w, bin string) []string {
 // BuildTest compiles pkg's tests plus the given files (base name to
 // source, placed in pkgDir through an overlay) into the binary out. The
 // package directory is not written. stderr holds the compiler's errors.
-func BuildTest(root, pkg, pkgDir string, files map[string][]byte, out string) (stderr string, exit int, err error) {
+func BuildTest(root, pkg, pkgDir string, files map[string][]byte, out string, flags ...string) (stderr string, exit int, err error) {
 	tmp, err := os.MkdirTemp("", "go2lean-overlay-")
 	if err != nil {
 		return "", 0, err
@@ -123,7 +123,8 @@ func BuildTest(root, pkg, pkgDir string, files map[string][]byte, out string) (s
 	if err := os.WriteFile(ovPath, ov, 0o644); err != nil {
 		return "", 0, err
 	}
-	cmd := exec.Command("go", "test", "-c", "-overlay", ovPath, "-o", out, pkg)
+	args := append([]string{"test", "-c", "-overlay", ovPath, "-o", out}, flags...)
+	cmd := exec.Command("go", append(args, pkg)...)
 	cmd.Dir = root
 	var eb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &eb, &eb
@@ -139,17 +140,25 @@ func BuildTest(root, pkg, pkgDir string, files map[string][]byte, out string) (s
 // testdata directory; an empty dir gives an empty one) under the machine's
 // Mode and the limits. env adds to a minimal environment.
 func Run(bin, dir string, args, env []string, lim Limits) (stdout, stderr string, exit int, err error) {
+	stdout, stderr, exit, _, err = RunCollect(bin, dir, args, env, lim, "")
+	return
+}
+
+// RunCollect is Run that also returns the files the run left under
+// collect, a directory relative to the copy of dir (a fuzzer's
+// testdata/fuzz), keyed by their path relative to it.
+func RunCollect(bin, dir string, args, env []string, lim Limits, collect string) (stdout, stderr string, exit int, files map[string][]byte, err error) {
 	w, err := os.MkdirTemp("", "go2lean-sbx-")
 	if err != nil {
-		return "", "", 0, err
+		return "", "", 0, nil, err
 	}
 	defer os.RemoveAll(w)
 	if err := os.MkdirAll(filepath.Join(w, "pkg"), 0o755); err != nil {
-		return "", "", 0, err
+		return "", "", 0, nil, err
 	}
 	if dir != "" {
 		if err := copyPackage(dir, filepath.Join(w, "pkg")); err != nil {
-			return "", "", 0, err
+			return "", "", 0, nil, err
 		}
 	}
 	for _, d := range []string{"home", "tmp"} {
@@ -191,17 +200,30 @@ func Run(bin, dir string, args, env []string, lim Limits) (stdout, stderr string
 	var ob, eb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &ob, &eb
 	err = cmd.Run()
+	if collect != "" {
+		files = map[string][]byte{}
+		base := filepath.Join(w, "pkg", collect)
+		filepath.WalkDir(base, func(p string, d fs.DirEntry, e error) error {
+			if e == nil && d.Type().IsRegular() {
+				if b, e := os.ReadFile(p); e == nil {
+					rel, _ := filepath.Rel(base, p)
+					files[rel] = b
+				}
+			}
+			return nil
+		})
+	}
 	if ctx.Err() != nil {
 		fmt.Fprintf(&eb, "\ngo2lean: sandbox: killed after the wall-clock limit (%s)\n", lim.Wall)
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		return ob.String(), eb.String(), ee.ExitCode(), nil
+		return ob.String(), eb.String(), ee.ExitCode(), files, nil
 	}
 	if err != nil && ctx.Err() != nil {
-		return ob.String(), eb.String(), -1, nil
+		return ob.String(), eb.String(), -1, files, nil
 	}
-	return ob.String(), eb.String(), 0, err
+	return ob.String(), eb.String(), 0, files, err
 }
 
 // copyPackage copies dir's regular files and its testdata tree to dst.

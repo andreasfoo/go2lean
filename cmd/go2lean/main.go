@@ -35,6 +35,8 @@ func main() {
 		err = cmdRank(os.Args[2:])
 	case "agent":
 		err = cmdAgent(os.Args[2:])
+	case "fuzz":
+		err = cmdFuzz(os.Args[2:])
 	case "summary":
 		err = cmdSummary(os.Args[2:])
 	case "llvm":
@@ -58,6 +60,7 @@ func usage() {
   go2lean hunt    [-workspace out] [-property id] M2: search for counterexamples
   go2lean poc     [-workspace out] -counterexample id   M3: realise and verify
   go2lean run     [-workspace out] <package>      all of the above
+  go2lean fuzz    [-workspace out] [-fuzztime 30s] [-spec-file f] <package>   the package's specs as go test -fuzz targets
   go2lean rank    [-workspace out]                 order confirmed verdicts by how plausible their input is (tiers 1-4)
   go2lean summary [-workspace out]                 all verdicts and proofs of a workspace as Markdown
   go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>

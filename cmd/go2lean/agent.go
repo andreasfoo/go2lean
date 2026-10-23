@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/andreasfoo/go2lean/internal/agent"
 )
@@ -29,6 +30,7 @@ func cmdAgent(args []string) error {
 	// The agent's specs are few and target large functions (a trial on a
 	// converter with a thousand generated fields takes seconds): a 10 s
 	// budget left some of them with a handful of trials.
+	fuzzTime := fs.Duration("fuzztime", 30*time.Second, "after the pipeline, fuzz each spec with go test -fuzz this long (0: off)")
 	opts := searchFlags(fs, 120)
 	fs.Parse(args)
 	guidanceText := ""
@@ -52,6 +54,6 @@ func cmdAgent(args []string) error {
 		return err
 	}
 	return agent.Run(context.Background(), w, env, fs.Arg(0), llm, agent.Options{
-		Search: opts.get(), MaxRepairs: *repairs, ReportRound: *report, Guidance: guidanceText, SpecFile: *specFile,
+		Search: opts.get(), MaxRepairs: *repairs, ReportRound: *report, Guidance: guidanceText, SpecFile: *specFile, FuzzTime: *fuzzTime,
 	}, os.Stdout)
 }
