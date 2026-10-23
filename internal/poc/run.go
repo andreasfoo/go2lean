@@ -260,9 +260,14 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 		if len(names) > 5 {
 			names, more = names[:5], fmt.Sprintf(" and %d more", len(p.guessed)-5)
 		}
-		v.Diagnosis.Notes = append(v.Diagnosis.Notes, "the model chose the results of calls it does not model: "+
-			strings.Join(names, ", ")+more+"; a choice Go does not make gives a spurious counterexample. "+
-			"Compiling with -deps models the functions of the dependency packages called")
+		note := "the model chose the results of calls it does not model: " +
+			strings.Join(names, ", ") + more + "; a choice Go does not make gives a spurious counterexample"
+		if slices.ContainsFunc(p.guessed, func(c string) bool { return !stdCallee(c) }) {
+			// -deps compiles dependency packages, not the standard
+			// library (whose unmodelled functions stay unmodelled).
+			note += ". Compiling with -deps models the functions of the dependency packages called, if it was off"
+		}
+		v.Diagnosis.Notes = append(v.Diagnosis.Notes, note)
 	}
 	return v
 }
@@ -281,6 +286,14 @@ func guessedCalls(ws contract.Workspace, cx *contract.Counterexample) []string {
 		}
 	}
 	return out
+}
+
+// stdCallee says whether a callee named by calleeOf is in the standard
+// library (no dot in the first element of its package path).
+func stdCallee(c string) bool {
+	c = strings.TrimPrefix(strings.TrimPrefix(c, "("), "*")
+	first, _, hasSlash := strings.Cut(c, "/")
+	return !hasSlash || !strings.Contains(first, ".")
 }
 
 // calleeOf extracts the callee from a havoc site text "fn: call

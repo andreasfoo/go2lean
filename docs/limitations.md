@@ -43,7 +43,7 @@ proof answers.
 P1 says the model may over-approximate, never under-approximate.
 `docs/semantics.md` lists places where it does under-approximate: a loop over
 an unknown map runs zero times, an update to one is dropped, `len` of one is
-havoc below 16; writes to globals are dropped, `init` does not run, `defer`
+havoc below 16; writes to globals are dropped, `init` does not run (except the stores it makes on every path, since 2026-10-23), `defer`
 of an unmodelled function and calls without results are ignored; two non-nil
 errors compare equal; a slice from an unmodelled function has 0 to 3 zero
 elements. A spec verdict that read a havoc value is reported as unknown, but

@@ -433,12 +433,16 @@ func representable(c constant.Value, b *types.Basic) bool {
 // ...ForTest or ...ForTesting, and their closures) do not count. With bodies
 // for every package (deps) that covers every variable; otherwise only the
 // unexported ones of the compiled packages, which no other package can
-// reach.
+// reach. A store an init function makes on every path through it (see
+// initStore) counts as the initializer's, when the initializer does not
+// set the variable too: init functions run after the variable
+// initializers and before any other code.
 func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.Global]ssa.Value {
 	touched := map[*ssa.Global]bool{}
 	inits := map[*ssa.Global]ssa.Value{}
 	loads := map[*ssa.Global][]*ssa.UnOp{}
 	alias := map[*ssa.Global]*ssa.Global{} // var B = A, set by an initializer
+	var userStores []*ssa.Store            // made by init functions, on every path
 	for f := range ssautil.AllFunctions(sprog) {
 		if testHelper(f) {
 			continue
@@ -451,6 +455,16 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 						loads[g] = append(loads[g], u)
 					}
 					continue
+				}
+				if st, ok := in.(*ssa.Store); ok && userInit(f) && initStore(b) {
+					if g, ok := st.Addr.(*ssa.Global); ok && g.Pkg == f.Pkg {
+						userStores = append(userStores, st)
+						// Its operands are read after the initializers ran.
+						if _, ok := st.Val.(*ssa.Global); ok {
+							touched[st.Val.(*ssa.Global)] = true
+						}
+						continue
+					}
 				}
 				if st, ok := in.(*ssa.Store); ok && pkgInit {
 					if g, ok := st.Addr.(*ssa.Global); ok && g.Pkg == f.Pkg {
@@ -487,6 +501,34 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 				}
 			}
 		}
+	}
+	// Stores of init functions, after every initializer: a variable the
+	// initializer sets as well, or two init stores set, is written twice.
+	initSet := map[*ssa.Global]int{}
+	for _, st := range userStores {
+		initSet[st.Addr.(*ssa.Global)]++
+	}
+	for _, st := range userStores {
+		g := st.Addr.(*ssa.Global)
+		if _, ok := inits[g]; ok || initSet[g] > 1 || alias[g] != nil {
+			touched[g] = true
+			continue
+		}
+		val := st.Val
+		if c, ok := foldInit(val, inits); ok {
+			val = c
+		}
+		switch v := val.(type) {
+		case *ssa.Const, *ssa.Function:
+			inits[g] = val
+			continue
+		case *ssa.MakeMap:
+			if constMapEntries(v) != nil {
+				inits[g] = val
+				continue
+			}
+		}
+		touched[g] = true
 	}
 	// An alias of a lookup table (var B = A) is the same table; one that
 	// another initializer also writes is not.
@@ -556,7 +598,7 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 }
 
 // constMapEntries returns the updates that fill the map mm makes, when
-// they all put a constant under a constant key and mm is used for nothing
+// they all put a constant (or a package function) under a constant key and mm is used for nothing
 // else but being stored; nil otherwise.
 func constMapEntries(mm *ssa.MakeMap) []*ssa.MapUpdate {
 	var ups []*ssa.MapUpdate
@@ -565,6 +607,9 @@ func constMapEntries(mm *ssa.MakeMap) []*ssa.MapUpdate {
 		case *ssa.MapUpdate:
 			_, kc := r.Key.(*ssa.Const)
 			_, vc := r.Value.(*ssa.Const)
+			if fn, ok := r.Value.(*ssa.Function); ok && len(fn.FreeVars) == 0 {
+				vc = true // a table of functions (an operator table)
+			}
 			if !kc || !vc {
 				return nil
 			}
@@ -3716,8 +3761,9 @@ func compiledPattern(v ssa.Value) (*regexp.Regexp, bool) {
 	return re, err == nil
 }
 
-// loadedInit is the value a package initializer stores in the package
-// variable v loads, when it stores one exactly once.
+// loadedInit is the value a package initializer, or an init function on
+// every path through it, stores in the package variable v loads, when they
+// store one exactly once.
 func loadedInit(v ssa.Value) (ssa.Value, bool) {
 	u, ok := v.(*ssa.UnOp)
 	if !ok || u.Op != token.MUL {
@@ -3732,17 +3778,55 @@ func loadedInit(v ssa.Value) (ssa.Value, bool) {
 		return nil, false
 	}
 	var init ssa.Value
-	for _, b := range initFn.Blocks {
-		for _, in := range b.Instrs {
-			if st, ok := in.(*ssa.Store); ok && st.Addr == g {
-				if init != nil {
-					return nil, false // written twice
+	for _, f := range initFuncs(initFn) {
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				if st, ok := in.(*ssa.Store); ok && st.Addr == g {
+					if init != nil || (f != initFn && !initStore(b)) {
+						return nil, false // written twice, or on some paths only
+					}
+					init = st.Val
 				}
-				init = st.Val
 			}
 		}
 	}
 	return init, init != nil
+}
+
+// initFuncs is the package initializer and the init functions it calls
+// (init#1, init#2, ...: the bodies of the package's `func init()`).
+func initFuncs(initFn *ssa.Function) []*ssa.Function {
+	out := []*ssa.Function{initFn}
+	for _, b := range initFn.Blocks {
+		for _, in := range b.Instrs {
+			if c, ok := in.(*ssa.Call); ok {
+				if f := c.Call.StaticCallee(); f != nil && userInit(f) && f.Pkg == initFn.Pkg {
+					out = append(out, f)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// userInit says whether f is the body of a `func init()`.
+func userInit(f *ssa.Function) bool {
+	return strings.HasPrefix(f.Name(), "init#") && f.Parent() == nil && f.Synthetic == ""
+}
+
+// initStore says whether block b of an init function runs on every path
+// that returns from it: it dominates every returning block. (A path that
+// panics ends the program before any other code runs.)
+func initStore(b *ssa.BasicBlock) bool {
+	for _, r := range b.Parent().Blocks {
+		if len(r.Instrs) == 0 {
+			continue
+		}
+		if _, ok := r.Instrs[len(r.Instrs)-1].(*ssa.Return); ok && !b.Dominates(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // sentinelErr is the identity of a sentinel error: v loads a package
@@ -3886,11 +3970,94 @@ func regexpPattern(v ssa.Value) (string, bool) {
 	if f := c.Call.StaticCallee(); f == nil || f.String() != "regexp.MustCompile" {
 		return "", false
 	}
+	if pat, ok := constSprintf(c.Call.Args[0]); ok {
+		return pat, true
+	}
 	k, ok := c.Call.Args[0].(*ssa.Const)
 	if !ok || k.Value == nil || k.Value.Kind() != constant.String {
 		return "", false
 	}
 	return constant.StringVal(k.Value), true
+}
+
+// constSprintf evaluates fmt.Sprintf of a constant format and constant
+// string, integer and bool arguments (a pattern assembled from constant
+// pieces), as Go would.
+func constSprintf(v ssa.Value) (string, bool) {
+	c, ok := v.(*ssa.Call)
+	if !ok || len(c.Call.Args) != 2 {
+		return "", false
+	}
+	if f := c.Call.StaticCallee(); f == nil || f.String() != "fmt.Sprintf" {
+		return "", false
+	}
+	format, ok := c.Call.Args[0].(*ssa.Const)
+	if !ok || format.Value == nil || format.Value.Kind() != constant.String {
+		return "", false
+	}
+	var args []any
+	switch a := c.Call.Args[1].(type) {
+	case *ssa.Const: // nil: no arguments
+		if a.Value != nil {
+			return "", false
+		}
+	case *ssa.Slice:
+		arr, ok := a.X.(*ssa.Alloc)
+		if !ok {
+			return "", false
+		}
+		n := int(arr.Type().(*types.Pointer).Elem().(*types.Array).Len())
+		args = make([]any, n)
+		set := 0
+		for _, r := range *arr.Referrers() {
+			ia, ok := r.(*ssa.IndexAddr)
+			if !ok {
+				if r == a {
+					continue
+				}
+				return "", false
+			}
+			i, ok := ia.Index.(*ssa.Const)
+			if !ok {
+				return "", false
+			}
+			for _, w := range *ia.Referrers() {
+				st, ok := w.(*ssa.Store)
+				if !ok {
+					return "", false
+				}
+				mi, ok := st.Val.(*ssa.MakeInterface)
+				if !ok {
+					return "", false
+				}
+				k, ok := mi.X.(*ssa.Const)
+				if !ok || k.Value == nil {
+					return "", false
+				}
+				switch k.Value.Kind() {
+				case constant.String:
+					args[i.Int64()] = constant.StringVal(k.Value)
+				case constant.Int:
+					x, exact := constant.Int64Val(k.Value)
+					if !exact {
+						return "", false
+					}
+					args[i.Int64()] = x
+				case constant.Bool:
+					args[i.Int64()] = constant.BoolVal(k.Value)
+				default:
+					return "", false
+				}
+				set++
+			}
+		}
+		if set != n {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(constant.StringVal(format.Value), args...), true
 }
 
 // atomicCall lowers Load, Store and Add on sync/atomic's Bool, Int32,

@@ -163,3 +163,17 @@ func TestCalleeOf(t *testing.T) {
 		}
 	}
 }
+
+func TestStdCallee(t *testing.T) {
+	for c, want := range map[string]bool{
+		"(*regexp.Regexp).FindAllStringSubmatch": true,
+		"strings.SplitSeq":                       true,
+		"encoding/json.Marshal":                  true,
+		"github.com/tingly-dev/tingly-box/internal/protocol/ids.Message":                           false,
+		"(github.com/openai/openai-go/v3/responses.ResponseStreamEventUnion).AsResponseIncomplete": false,
+	} {
+		if got := stdCallee(c); got != want {
+			t.Errorf("stdCallee(%q) = %v, want %v", c, got, want)
+		}
+	}
+}
