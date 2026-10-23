@@ -10,15 +10,24 @@ Go source ─► go/ssa ─► Lean SSA model ─► counterexample ─► go te
             M1 programmatic        M2 constraint engines / agent        M3 poc
 ```
 
-Status: working proof of concept. Four ground-truth packages run end to end
-in 2–5 s each; every planted bug is confirmed by a real Go run and every
-correct function gets a bounded certificate or "no counterexample". The design
-and roadmap are in [docs/design.md](docs/design.md); the Go semantics
-modelled (and how faithfully) are listed in [docs/semantics.md](docs/semantics.md).
-What it does not deliver yet (no proofs in the pipeline; certificates are
-bounded searches the Lean kernel does not check; findings are not ranked by
-reachability; evidence from one codebase) is in
-[docs/limitations.md](docs/limitations.md).
+Status: research prototype, not a production tool. What it is: a
+bounded, search-based bug finder (random search steered by the program's
+constants, exhaustive search of small domains), not a symbolic executor;
+proofs over all inputs exist only for `no_panic` of integer and bool
+functions. 26 ground-truth packages run in CI (187 properties, each outcome
+pinned, including every spec's mutation score). The design is in
+[docs/design.md](docs/design.md); the Go semantics modelled, and how
+faithfully, in [docs/semantics.md](docs/semantics.md); what it does not
+deliver, in [docs/limitations.md](docs/limitations.md).
+
+Evidence beyond the codebase it was built on comes from blind runs with a
+protocol committed before each run and the tool frozen:
+[Masterminds/semver](docs/eval/semver.md) (templates alone found no bug;
+the agent's blind specs found one, half new, and Go's own fuzzer on the
+same specs found one more; most counterexamples were spurious from one
+model gap, fixed since and reported separately) and
+[gobwas/glob](docs/eval/glob.md) (in progress). The 85 tingly-box findings
+were triaged by hand ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box)).
 
 ## Quick start
 
