@@ -272,3 +272,37 @@ func Label2(k Kind) string {
 	}
 	return _Kind_name[_Kind_index[k+1]:_Kind_index[k+2]]
 }
+
+// scratch is a buffer released by a deferred call, as gobwas/glob's
+// Pattern.Match releases its matching state (a defer of a modelled
+// function, once rejected: the function was not searched at all).
+type scratch struct{ buf []int }
+
+func release(s *scratch) { s.buf = s.buf[:0] }
+
+// SumFirst adds the first n of xs. Bug: n is not checked against len(xs).
+func SumFirst(xs []int, n int) int {
+	s := &scratch{}
+	if n > 0 {
+		defer release(s)
+	}
+	total := 0
+	for i := 0; i < n; i++ {
+		total += xs[i]
+	}
+	return total
+}
+
+type session struct{ open []int }
+
+func finish(s *session) { s.open = s.open[:len(s.open)-1] }
+
+// Enter returns how many entries are open, closing the last one on the
+// way out. Bug: with nothing open the deferred finish panics.
+func Enter(s *session, push bool) int {
+	if push {
+		s.open = append(s.open, 1)
+	}
+	defer finish(s)
+	return len(s.open)
+}

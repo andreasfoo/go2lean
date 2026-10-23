@@ -68,7 +68,11 @@ exhausted iface_sq_area_nopanic
 confirmed iface_unwrap_nopanic
 proved initvars_add_nopanic
 exhausted initvars_apply_nopanic
+exhausted initvars_band_nopanic
+exhausted initvars_bandwidth_nopanic
+exhausted initvars_endsclause_nopanic
 confirmed initvars_last_nopanic
+confirmed initvars_laststop_nopanic
 exhausted initvars_newrange_nopanic
 exhausted initvars_pair_nopanic
 exhausted initvars_range_contains_newrange_nopanic
@@ -117,7 +121,9 @@ exhausted portable_budget_nopanic
 exhausted portable_count_nopanic
 exhausted_havoc portable_digit_nopanic
 confirmed portable_drain_nopanic
+confirmed portable_enter_nopanic
 exhausted portable_fill_nopanic
+confirmed portable_finish_nopanic
 exhausted portable_first_nopanic
 inconclusive portable_group_nopanic
 confirmed portable_head_nopanic
@@ -138,7 +144,9 @@ exhausted portable_permax_nopanic
 proved portable_permb_nopanic
 confirmed portable_pick_nopanic
 confirmed portable_port_nopanic
+exhausted portable_release_nopanic
 confirmed portable_shrink_nopanic
+confirmed portable_sumfirst_nopanic
 confirmed portable_tokens_nopanic
 confirmed portable_unit_nopanic
 confirmed portable_url_nopanic

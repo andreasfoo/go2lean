@@ -148,7 +148,8 @@ memory).
 | a modelled callee that gets stuck | the call's fallback binds a havoc result | havoc |
 | recursion, loops | fuel-bounded | exact up to fuel (`outOfFuel` beyond) |
 | `defer f()` of an unmodelled function | ignored | assumption |
-| `defer` of a modelled function | — | rejected |
+| `defer f(args)` of a modelled function, not in a loop | the arguments are evaluated at the `defer` statement; at each return the calls whose `defer` statement ran are made, last first (go/ssa's `RunDefers`; a panic in one ends the run with it) | exact for returns; on the way out of a panic no deferred call is made (the run ends with the panic, as a panic does here anyway) |
+| `defer` of a modelled function in a loop | — | rejected |
 | `panic(v)` | `panic explicit` | exact |
 | `recover()` | havoc | unreachable in practice (a panic ends the run) |
 
@@ -157,7 +158,8 @@ memory).
 | Go | model | status |
 |---|---|---|
 | a variable nothing writes after init, initialised to a constant or a function | its value | exact (writes from `…ForTest` helpers ignored) |
-| an array its initializer fills with constants and nothing else writes, read by element (`var table = [256]encoding{...}`, a stringer's `_X_index`) | the constant array; `table[i]` indexes it (out of range panics, as in Go) | exact |
+| an array its initializer sets to a literal of constants, arrays and struct literals of constants (`var table = [256]encoding{...}`, a stringer's `_X_index`, utf8's `acceptRanges`), or fills element by element with constants, and nothing else writes; read whole, by element or by field of an element | the constant array; `table[i]` indexes it (out of range panics, as in Go), `table[i].f` reads the field | exact |
+| a slice its initializer sets to a slice literal of such constants, or to an `append` of such slices (`var inTermsBreakers = append(inTextBreakers, '}', ',')`), and no code writes an element of | a fresh slice holding the constants at each load | exact while nothing writes it; a callee that writes into the slice it was passed is not seen by the next load: assumption |
 | a variable initialised to a constant expression over constants and such variables (`var mb = kb * 1024`) | its value, folded at compile time | exact (an expression that would wrap or divide by zero is not folded: havoc) |
 | a zero-valued variable no function writes | the zero value | exact |
 | any other load | havoc (a confirmed panic whose run read one carries the verdict note `reads_unknown_state`, naming it: the program may initialise it first) | havoc |
@@ -206,7 +208,7 @@ Calls not listed here are unmodelled (§4.6).
 | `strings.NewReplacer` with literal pairs, `Replace` | exact (first matching old string, left to right) |
 | `strconv.ParseFloat(s, 64)` | exact for decimal syntax away from the float64 limit (value as JSON encodes it, syntax and range errors); infinities, NaN and hex floats havoc; checked by `scripts/json-diff.sh` |
 | `json.NewEncoder(&b)` on a `strings.Builder`, `SetEscapeHTML` with a constant before every `Encode`, `Encode` | exact (`Marshal`, without HTML escaping when the encoder says so, and a newline); checked by `scripts/json-diff.sh` |
-| `strings`, `bytes`, `strconv`, `unicode/utf8`, `unicode/utf16` | translated from their Go source under `-deps` (as `net/url`), except the functions with a model of their own in the rows above, which keep it; calls into assembly (`internal/bytealg`) and `unsafe` conversions inside them are havoc, `defer`/`recover` (`bytes.growSlice`) an assumption |
+| `strings`, `bytes`, `strconv`, `unicode/utf8`, `unicode/utf16` | translated from their Go source under `-deps` (as `net/url`), except the functions with a model of their own in the rows above, which keep it; the assembly primitives of `internal/bytealg` (`IndexByte`, `IndexByteString`, `Index`, `IndexString`, `Count`, `CountString`) are leaf operations of the model (the rest of `internal/bytealg`, `internal/stringslite`, `internal/strconv`, `math/bits` and `unicode` are translated too; `bytealg.MaxLen` is 63, an AVX2 machine's value, which picks an algorithm, not a result), `unsafe` conversions inside them are havoc, `defer`/`recover` (`bytes.growSlice`) an assumption. The hand-written models of `strings` and `strconv` functions and the translation of their source are both checked against Go by `PKG=testdata/stdaudit DEPS=1 scripts/json-diff.sh` (the second with `GO2LEAN_NO_STDLIB_OPS=strings,strconv`; with `unicode/utf8` decoding, 444 same, 0 different); the hand-written ones stay, because the translation alone leaves `strings.Builder` (`unsafe`) and `strconv.Atoi`'s callers with havoc (the regression gate: 3 spurious, 4 certificates weakened) |
 | pointer sentinels: a package variable its initializer sets to `&T{...}` of constants (sjson's `errNoChange`) | boxed as an error it compares by identity like `errors.New` sentinels; its fields read as the constants |
 | `net/url` | translated from its Go source under `-deps` (the standard-library packages listed in `modelledStdlib`), like a dependency: `url.Parse`, `Hostname`, `Port`, `Query` and the rest are the library's own code. Not modelled inside it: IPv6 literals (`netip.ParseAddr`) and the `urlstrictcolons` GODEBUG setting (a host with two colons), both havoc. Checked by `DEPS=1 PKG=testdata/urldiff` (90 same, 0 different) |
 | `github.com/google/uuid.New` | a fresh value distinct from every other in the run (real UUIDs collide with negligible probability) |
@@ -246,7 +248,7 @@ writes the same value as a Go literal.
 ## 8. Not modelled (rejected functions)
 
 Goroutines, `select` and channel operations (so `range` over a channel);
-`defer` of a modelled function; string orderings (`<` on strings);
+`defer` of a modelled function in a loop; string orderings (`<` on strings);
 `unsafe` conversions; parameters of type `*testing.T` (test helpers);
 generic functions as targets (their instances are not targets either:
 a harness cannot name them).

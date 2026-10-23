@@ -223,8 +223,9 @@ otherwise copies into a fresh backing array of twice the capacity (Go's
 exact growth is implementation-defined and visible only through `cap`).
 Interfaces, maps, funcs, channels, floats and `unsafe.Pointer` are opaque
 values (history §9b); `range` over strings is modelled, over maps assumed empty;
-deferred calls the model does not look into are ignored. Not yet:
-closures, goroutines, `select`, `defer` of modelled functions.
+deferred calls the model does not look into are ignored, deferred calls
+to modelled functions run at the returns. Not yet: goroutines, `select`,
+`defer` of a modelled function in a loop.
 
 The original design notes (the parts not built yet) are in
 [history.md](history.md) §4.3b.

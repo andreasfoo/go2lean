@@ -368,6 +368,8 @@ inductive Op where
   grows by one. -/
   | freshArr (n : Nat)
   | strIndexByte | strLastIndex | strCount | strEqualFold
+  /-- How often byte `c` occurs in `s` (`internal/bytealg.CountString`). -/
+  | strCountByte
   | strTrim | strTrimLeft | strTrimRight
   | strToLower | strToUpper | strReplaceAll
   /-- `strings.Split`: a slice of strings. -/
@@ -1199,6 +1201,10 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
       if y.isEmpty then .ok (.int 64 (BitVec.ofNat 64 (x.length + 1)))
       else .ok (.int 64 (BitVec.ofNat 64 (splitBytes x y).length.pred))
     | _, _ => .panic .modelStuck
+  | .strCountByte, [s, .int _ c] =>
+    match strBytes heap s with
+    | some x => .ok (.int 64 (BitVec.ofNat 64 (x.filter (· == c.toNat)).length))
+    | none => .panic .modelStuck
   | .strEqualFold, [s, p] =>
     match strBytes heap s, strBytes heap p with
     | some x, some y => .ok (.bool (x.map lowerByte == y.map lowerByte))

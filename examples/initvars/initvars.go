@@ -1,7 +1,9 @@
 // Package initvars is a ground-truth package for package-level variables an
 // init function sets: a regexp compiled there (from a constant expression
-// and from fmt.Sprintf of constants), a table of functions, a constant.
-// Code that runs after init sees those values, never the zero value.
+// and from fmt.Sprintf of constants), a table of functions, a constant;
+// and for data tables the variable initializers build: a slice literal,
+// an append of it, an array of struct literals. Code that runs after init
+// sees those values, never the zero value.
 package initvars
 
 import (
@@ -94,3 +96,38 @@ func NewRange(lo, hi int) (*Range, error) {
 // that failed to build is never used (value receiver, constructor with an
 // error).
 func (r Range) Contains(i int) bool { return r.lo <= i && i <= r.hi }
+
+var (
+	stops    = []rune{'.', ','}
+	allStops = append(stops, ';')
+	bands    = [3]struct{ lo, hi byte }{{0, 9}, {10, 99}, {100, 255}}
+	widths   = []int{10, 90, 156}
+)
+
+// EndsClause reports whether s ends with a stop character. It never
+// panics: allStops has three elements.
+func EndsClause(s string) bool {
+	if s == "" {
+		return false
+	}
+	r := rune(s[len(s)-1])
+	return allStops[0] == r || allStops[1] == r || allStops[2] == r
+}
+
+// LastStop returns the last stop character. Bug: stops has two elements;
+// the third is only in allStops.
+func LastStop() rune { return stops[2] }
+
+// band returns the band b falls in.
+func band(b byte) int {
+	for i := range bands {
+		if bands[i].lo <= b && b <= bands[i].hi {
+			return i
+		}
+	}
+	return -1
+}
+
+// BandWidth returns the width of b's band. It never panics: the bands
+// cover every byte, so band never returns -1.
+func BandWidth(b byte) int { return widths[band(b)] }

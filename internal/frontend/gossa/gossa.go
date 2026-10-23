@@ -301,7 +301,7 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 					if (mainPaths[path] && !instance) || (isStdlib(path) && !(instance && path == "slices") && !modelledStdlib[path]) {
 						continue
 					}
-					if _, std := ir.StdlibOps[callee.String()]; std {
+					if _, std := stdlibOp(callee.String()); std {
 						continue
 					}
 					if count >= depLimit {
@@ -497,6 +497,8 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 							known = true
 						case *ssa.MakeMap:
 							known = constMapEntries(v) != nil
+						case *ssa.Slice, *ssa.Call:
+							_, known = constSlice(v, inits)
 						case *ssa.UnOp:
 							if a, ok := v.X.(*ssa.Global); ok && v.Op == token.MUL && alias[g] == nil {
 								alias[g] = a
@@ -558,6 +560,20 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 			inits[b] = inits[a]
 		} else {
 			touched[b] = true
+		}
+	}
+	// A constant slice stays one while no code writes an element of it
+	// (each load builds a fresh copy; see sliceOf).
+	for g, init := range inits {
+		if _, ok := constSlice(init, inits); !ok {
+			continue
+		}
+		for _, u := range loads[g] {
+			for _, r := range *u.Referrers() {
+				if ia, ok := r.(*ssa.IndexAddr); ok && !addrRead(ia) {
+					touched[g] = true
+				}
+			}
 		}
 	}
 	// A lookup table stays one only while every load just reads it (or
@@ -900,18 +916,91 @@ func invokedNames(sprog *ssa.Program) map[string]bool {
 	return out
 }
 
+// bytealgCall lowers the assembly primitives of internal/bytealg (functions
+// without a Go body) that the standard library's string and byte code
+// bottoms out in: the only hand-written part of strings, bytes and strconv
+// when those are translated from source. The []byte forms read the bytes
+// as a string. Compare stays unmodelled.
+func (t *fnState) bytealgCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	if callee.Pkg == nil || callee.Pkg.Pkg.Path() != "internal/bytealg" || len(callee.Blocks) > 0 {
+		return false, nil
+	}
+	ops := map[string]string{"IndexByteString": "strIndexByte", "IndexString": "strIndexOf", "CountString": "strCountByte",
+		"IndexByte": "strIndexByte", "Index": "strIndexOf", "Count": "strCountByte"}
+	if callee.Name() == "MakeNoZero" && len(x.Call.Args) == 1 {
+		n, err := t.val(x.Call.Args[0])
+		if err != nil {
+			return true, err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.MakeSlice{Zero: ir.IntVal{Width: 8, Bits: "0"}}, Args: []ir.Var{n, n}})
+		return true, nil
+	}
+	op, ok := ops[callee.Name()]
+	if !ok || len(x.Call.Args) != 2 {
+		return false, nil
+	}
+	var args []ir.Var
+	for _, a := range x.Call.Args {
+		v, err := t.val(a)
+		if err != nil {
+			return true, err
+		}
+		if isByteSlice(a.Type()) {
+			s := t.fresh()
+			t.emit(ir.Instr{Dst: s, Op: ir.Simple("bytesToStr"), Args: []ir.Var{v}})
+			v = s
+		}
+		args = append(args, v)
+	}
+	t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple(op), Args: args})
+	return true, nil
+}
+
+// stdlibOp is the hand-written model of a standard-library function, if
+// it has one. GO2LEAN_NO_STDLIB_OPS (a comma-separated list of package
+// paths) turns those of the listed packages off, so their functions are
+// translated from source: to check whether a hand model is still needed.
+func stdlibOp(name string) (ir.Op, bool) {
+	op, ok := ir.StdlibOps[name]
+	if !ok {
+		return nil, false
+	}
+	if off := os.Getenv("GO2LEAN_NO_STDLIB_OPS"); off != "" {
+		pkg := strings.TrimPrefix(name, "(*")
+		pkg = strings.TrimPrefix(pkg, "(")
+		if i := strings.LastIndex(pkg, "/"); i >= 0 {
+			pkg = pkg[:i] + strings.SplitN(pkg[i:], ".", 2)[0]
+		} else {
+			pkg = strings.SplitN(pkg, ".", 2)[0]
+		}
+		for _, p := range strings.Split(off, ",") {
+			if p == pkg {
+				return nil, false
+			}
+		}
+	}
+	return op, true
+}
+
 // isStdlib says whether an import path belongs to the standard library
 // (no dot in its first element).
 // modelledStdlib lists standard-library packages whose functions are
 // modelled from their Go source under -deps, like any dependency, instead
 // of being unmodelled calls: their code only uses what the model covers.
 var modelledStdlib = map[string]bool{
-	"strings":       true,
-	"bytes":         true,
-	"strconv":       true,
-	"net/url":       true,
-	"unicode/utf8":  true,
-	"unicode/utf16": true,
+	// The pure-Go layers under them: internal/bytealg's assembly
+	// primitives are lowered by bytealgCall, its Go functions translated.
+	"internal/bytealg":     true,
+	"internal/stringslite": true,
+	"internal/strconv":     true,
+	"math/bits":            true,
+	"unicode":              true,
+	"strings":              true,
+	"bytes":                true,
+	"strconv":              true,
+	"net/url":              true,
+	"unicode/utf8":         true,
+	"unicode/utf16":        true,
 }
 
 func isStdlib(path string) bool {
@@ -1071,13 +1160,17 @@ type progState struct {
 	tables map[*ssa.Global]ir.Val
 }
 
-// arrayTable is the value of a package-level array a lookup table: its
-// initializer sets elements with constant indices to constants (var
-// table = [256]encoding{'a': ..., ...}), and everything else only reads
-// elements (*&table[i]). Such reads are indexes into the constant array.
+// arrayTable is the value of a package-level array that is a lookup
+// table: its initializer sets it to a literal of constants (var table =
+// [256]uint8{...}, or an array of struct literals, as utf8's
+// acceptRanges), or sets elements with constant indices to constants, and
+// everything else only reads it: loads of the array, of an element or of
+// a field of one (*&table[i].f). Such reads index the constant array
+// (tableLoad).
 func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
 	if s.tables == nil {
 		s.tables = map[*ssa.Global]ir.Val{}
+		full := map[*ssa.Global]ir.Val{}
 		elems := map[*ssa.Global]map[int64]*ssa.Const{}
 		bad := map[*ssa.Global]bool{}
 		for f := range ssautil.AllFunctions(s.sprog) {
@@ -1092,13 +1185,16 @@ func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
 						if st, ok := in.(*ssa.Store); ok && pkgInit && st.Addr == g {
 							// var table = [N]T{...}: the literal is built in a
 							// local array, element by element, then stored.
-							es, ok := localArrayLit(st.Val)
-							if !ok || elems[g] != nil {
+							v, ok := constData(st.Val)
+							if _, arr := v.(ir.ArrVal); !ok || !arr || full[g] != nil {
 								bad[g] = true
 								continue
 							}
-							elems[g] = es
+							full[g] = v
 							continue
+						}
+						if u, ok := in.(*ssa.UnOp); ok && u.Op == token.MUL && u.X == g {
+							continue // a load of the whole array
 						}
 						ia, ok := in.(*ssa.IndexAddr)
 						if !ok || ia.X != g {
@@ -1106,37 +1202,40 @@ func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
 							continue
 						}
 						for _, r := range *ia.Referrers() {
-							switch r := r.(type) {
-							case *ssa.UnOp:
-								if r.Op != token.MUL {
+							st, ok := r.(*ssa.Store)
+							if !ok {
+								if !addrRead(r) {
 									bad[g] = true
 								}
-							case *ssa.Store:
-								k, kok := ia.Index.(*ssa.Const)
-								v, vok := r.Val.(*ssa.Const)
-								if !pkgInit || r.Addr != ia || !kok || !vok || k.Value == nil {
-									bad[g] = true
-									continue
-								}
-								i, ok := constant.Int64Val(k.Value)
-								if !ok {
-									bad[g] = true
-									continue
-								}
-								if elems[g] == nil {
-									elems[g] = map[int64]*ssa.Const{}
-								}
-								elems[g][i] = v
-							default:
-								bad[g] = true
+								continue
 							}
+							k, kok := ia.Index.(*ssa.Const)
+							v, vok := st.Val.(*ssa.Const)
+							if !pkgInit || st.Addr != ia || !kok || !vok || k.Value == nil {
+								bad[g] = true
+								continue
+							}
+							i, ok := constant.Int64Val(k.Value)
+							if !ok {
+								bad[g] = true
+								continue
+							}
+							if elems[g] == nil {
+								elems[g] = map[int64]*ssa.Const{}
+							}
+							elems[g][i] = v
 						}
 					}
 				}
 			}
 		}
+		for g, v := range full {
+			if !bad[g] && elems[g] == nil && len(v.(ir.ArrVal).Elems) <= 4096 {
+				s.tables[g] = v
+			}
+		}
 		for g, es := range elems {
-			if bad[g] {
+			if bad[g] || full[g] != nil {
 				continue
 			}
 			arr, ok := g.Type().(*types.Pointer).Elem().Underlying().(*types.Array)
@@ -1169,45 +1268,151 @@ func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
 	return v, ok
 }
 
-// localArrayLit reads an array composite literal go/ssa built in a local
-// array: v loads an Alloc whose only other uses are stores of constants
-// at constant indices. It returns those elements.
-func localArrayLit(v ssa.Value) (map[int64]*ssa.Const, bool) {
-	u, ok := v.(*ssa.UnOp)
-	if !ok || u.Op != token.MUL {
-		return nil, false
+// tableRoot says whether addr is a lookup table (arrayTable), or the
+// address of an element or a field inside one.
+func (s *progState) tableRoot(addr ssa.Value) bool {
+	for {
+		switch a := addr.(type) {
+		case *ssa.IndexAddr:
+			addr = a.X
+		case *ssa.FieldAddr:
+			addr = a.X
+		case *ssa.Global:
+			_, ok := s.arrayTable(a)
+			return ok
+		default:
+			return false
+		}
 	}
-	a, ok := u.X.(*ssa.Alloc)
+}
+
+// addrRead says whether in only reads through the address it uses: a
+// load, or the address of an element or field that is itself only read.
+func addrRead(in ssa.Instruction) bool {
+	switch in := in.(type) {
+	case *ssa.UnOp:
+		return in.Op == token.MUL
+	case *ssa.IndexAddr, *ssa.FieldAddr:
+		for _, r := range *in.(ssa.Value).Referrers() {
+			if !addrRead(r) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// constData is the value v has when a package initializer computes it from
+// constants only: a constant, or an array or struct literal of such
+// values (go/ssa builds one in a local, element by element, then loads
+// it).
+func constData(v ssa.Value) (ir.Val, bool) {
+	switch v := v.(type) {
+	case *ssa.Const:
+		c, err := constVal(v)
+		return c, err == nil
+	case *ssa.UnOp:
+		if a, ok := v.X.(*ssa.Alloc); ok && v.Op == token.MUL {
+			return literal(a, v)
+		}
+	}
+	return nil, false
+}
+
+// literal is the array or struct value of the composite literal go/ssa
+// builds in a: every use of a but the one that reads it out (use) is the
+// address of an element or a field, with a constant index, into which a
+// constant datum (constData) is stored once.
+func literal(a *ssa.Alloc, use ssa.Instruction) (ir.Val, bool) {
+	zero, ok := zeroVal(a.Type().(*types.Pointer).Elem())
 	if !ok {
 		return nil, false
 	}
-	es := map[int64]*ssa.Const{}
+	var parts []ir.Val
+	switch z := zero.(type) {
+	case ir.ArrVal:
+		parts = slices.Clone(z.Elems)
+	case ir.StructVal:
+		parts = slices.Clone(z.Fields)
+	default:
+		return nil, false
+	}
+	set := make([]bool, len(parts))
 	for _, r := range *a.Referrers() {
-		if r == u {
+		if r == use {
 			continue
 		}
-		ia, ok := r.(*ssa.IndexAddr)
-		if !ok || ia.X != a {
+		var i int64
+		switch r := r.(type) {
+		case *ssa.IndexAddr:
+			k, ok := r.Index.(*ssa.Const)
+			if !ok || k.Value == nil {
+				return nil, false
+			}
+			if i, ok = constant.Int64Val(k.Value); !ok {
+				return nil, false
+			}
+		case *ssa.FieldAddr:
+			i = int64(r.Field)
+		default:
 			return nil, false
 		}
-		k, ok := ia.Index.(*ssa.Const)
-		if !ok || k.Value == nil {
+		addr := r.(ssa.Value)
+		refs := *addr.Referrers()
+		if i < 0 || i >= int64(len(parts)) || set[i] || len(refs) != 1 {
 			return nil, false
 		}
-		i, ok := constant.Int64Val(k.Value)
+		st, ok := refs[0].(*ssa.Store)
+		if !ok || st.Addr != addr {
+			return nil, false
+		}
+		val, ok := constData(st.Val)
 		if !ok {
 			return nil, false
 		}
-		for _, rr := range *ia.Referrers() {
-			st, ok := rr.(*ssa.Store)
-			c, cok := st.Val.(*ssa.Const)
-			if !ok || st.Addr != ia || !cok {
+		parts[i], set[i] = val, true
+	}
+	if _, arr := zero.(ir.ArrVal); arr {
+		return ir.ArrVal{Elems: parts}, true
+	}
+	return ir.StructVal{Fields: parts}, true
+}
+
+// constSlice is the elements of the slice v holds when a package
+// initializer computes it from constants only: a slice literal, or an
+// append of such slices (var b = append(a, x, y), where a is a package
+// variable whose initializer, in inits, is one).
+func constSlice(v ssa.Value, inits map[*ssa.Global]ssa.Value) ([]ir.Val, bool) {
+	switch v := v.(type) {
+	case *ssa.Slice:
+		a, ok := v.X.(*ssa.Alloc)
+		if !ok || v.Low != nil || v.High != nil || v.Max != nil {
+			return nil, false
+		}
+		arr, ok := literal(a, v)
+		if !ok {
+			return nil, false
+		}
+		return arr.(ir.ArrVal).Elems, true
+	case *ssa.UnOp:
+		if g, ok := v.X.(*ssa.Global); ok && v.Op == token.MUL && inits[g] != nil {
+			return constSlice(inits[g], inits)
+		}
+	case *ssa.Call:
+		if b, ok := v.Call.Value.(*ssa.Builtin); ok && b.Name() == "append" && len(v.Call.Args) == 2 {
+			x, ok := constSlice(v.Call.Args[0], inits)
+			if !ok {
 				return nil, false
 			}
-			es[i] = c
+			y, ok := constSlice(v.Call.Args[1], inits)
+			if !ok {
+				return nil, false
+			}
+			return append(slices.Clone(x), y...), true
 		}
 	}
-	return es, true
+	return nil, false
 }
 
 // kindTable lists the reflect.Kind of each type an interface value the
@@ -1339,6 +1544,9 @@ type fnState struct {
 	// quiet suppresses issues while the fallback block of a call is built:
 	// its havoc is a contingency, not a gap in the model.
 	quiet bool
+	// defers are the deferred calls to modelled functions, in the order
+	// their defer statements appear (deferCall).
+	defers []deferred
 	// pure caches readsOnly.
 	pure *bool
 }
@@ -1924,10 +2132,8 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.ChangeType:
 		return t.conv(x, x.X)
 	case *ssa.IndexAddr:
-		if g, ok := x.X.(*ssa.Global); ok {
-			if _, ok := t.prog.arrayTable(g); ok {
-				return nil // read through by the load (unop)
-			}
+		if t.prog.tableRoot(x) {
+			return nil // read through by the load (tableLoad)
 		}
 		if !isSlice(x.X.Type()) && !isPointerToArray(x.X.Type()) {
 			return fmt.Errorf("index into non-slice type %s", x.X.Type())
@@ -1936,7 +2142,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if err != nil {
 			return err
 		}
-		i, err := t.val(x.Index)
+		i, err := t.index(x.Index)
 		if err != nil {
 			return err
 		}
@@ -2008,18 +2214,18 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			return nil
 		})
 	case *ssa.Defer:
-		// A deferred call to a function in the model would need the defer
-		// stack; one the model does not look into (mutex unlocks, closes,
-		// closures) is an effect it does not model anyway.
+		// A deferred call to a function in the model runs at the function's
+		// returns (deferCall); one the model does not look into (mutex
+		// unlocks, closes, closures) is an effect it does not model anyway.
 		if callee := x.Call.StaticCallee(); callee != nil && callee.Parent() == nil {
 			if _, modelled := t.prog.ids[callee]; modelled {
-				return fmt.Errorf("deferred call to %s (defer of a modelled function)", callee.Name())
+				return t.deferCall(x, callee)
 			}
 		}
 		t.assume("deferred call %s ignored (effects not modelled)", x.Call.String())
 		return nil
 	case *ssa.RunDefers:
-		return nil
+		return t.runDefers()
 	case *ssa.Range:
 		if isString(x.X.Type()) {
 			// The iterator is a heap cell (s, pos) that strNext advances.
@@ -2108,7 +2314,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if err != nil {
 			return err
 		}
-		i, err := t.val(x.Index)
+		i, err := t.index(x.Index)
 		if err != nil {
 			return err
 		}
@@ -2119,6 +2325,9 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: op, Args: []ir.Var{a, i}})
 		return nil
 	case *ssa.FieldAddr:
+		if t.prog.tableRoot(x) {
+			return nil // read through by the load (tableLoad)
+		}
 		p, err := t.val(x.X)
 		if err != nil {
 			return err
@@ -2183,7 +2392,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if err != nil {
 			return err
 		}
-		i, err := t.val(x.Index)
+		i, err := t.index(x.Index)
 		if err != nil {
 			return err
 		}
@@ -2276,22 +2485,92 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	}
 }
 
+// index is the value of v, an index or a slice bound, as the model's
+// index operations read it: they sign-extend, so an unsigned index
+// narrower than 64 bits (a byte indexing a [256]T table) is zero-extended
+// first.
+func (t *fnState) index(v ssa.Value) (ir.Var, error) {
+	i, err := t.val(v)
+	if err != nil {
+		return 0, err
+	}
+	if w, signed, ok := intWidth(v.Type()); ok && !signed && w < 64 {
+		z := t.fresh()
+		t.emit(ir.Instr{Dst: z, Op: ir.Conv{Width: 64, SignExtend: false}, Args: []ir.Var{i}})
+		return z, nil
+	}
+	return i, nil
+}
+
+// tableLoad is the value at addr, a lookup table (arrayTable) or an
+// element or a field inside one: the constant array, indexed.
+func (t *fnState) tableLoad(addr ssa.Value) (ir.Var, error) {
+	v := t.fresh()
+	switch a := addr.(type) {
+	case *ssa.Global:
+		tbl, _ := t.prog.arrayTable(a)
+		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: tbl}})
+	case *ssa.IndexAddr:
+		base, err := t.tableLoad(a.X)
+		if err != nil {
+			return 0, err
+		}
+		i, err := t.index(a.Index)
+		if err != nil {
+			return 0, err
+		}
+		t.emit(ir.Instr{Dst: v, Op: ir.Simple("arrIndex"), Args: []ir.Var{base, i}})
+	case *ssa.FieldAddr:
+		base, err := t.tableLoad(a.X)
+		if err != nil {
+			return 0, err
+		}
+		t.emit(ir.Instr{Dst: v, Op: ir.Field{I: a.Field}, Args: []ir.Var{base}})
+	default:
+		return 0, fmt.Errorf("%s is not in a lookup table", addr.Name())
+	}
+	return v, nil
+}
+
+// sliceOf makes x a fresh slice holding elems: the value of a package
+// variable its initializer sets to a constant slice (constSlice). Each
+// load gets its own copy, so a write through one load would not be seen
+// by the next: zeroGlobals keeps only variables no code indexes to write.
+func (t *fnState) sliceOf(x ssa.Value, elems []ir.Val) error {
+	elem := x.Type().Underlying().(*types.Slice).Elem()
+	zero, ok := zeroVal(elem)
+	if !ok {
+		return fmt.Errorf("slice of unsupported type %s", x.Type())
+	}
+	n := t.fresh()
+	t.emit(ir.Instr{Dst: n, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: strconv.Itoa(len(elems))}}})
+	s := t.def(x)
+	t.emit(ir.Instr{Dst: s, Op: ir.MakeSlice{Zero: zero}, Args: []ir.Var{n, n}})
+	for i, e := range elems {
+		if e.Lean() == zero.Lean() {
+			continue
+		}
+		k := t.fresh()
+		t.emit(ir.Instr{Dst: k, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: strconv.Itoa(i)}}})
+		p := t.fresh()
+		t.emit(ir.Instr{Dst: p, Op: ir.Simple("indexAddr"), Args: []ir.Var{s, k}})
+		c := t.fresh()
+		t.emit(ir.Instr{Dst: c, Op: ir.Const{V: e}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{p, c}})
+	}
+	return nil
+}
+
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
-		if ia, ok := x.X.(*ssa.IndexAddr); ok {
-			if g, ok := ia.X.(*ssa.Global); ok {
-				if tbl, ok := t.prog.arrayTable(g); ok {
-					a := t.fresh()
-					t.emit(ir.Instr{Dst: a, Op: ir.Const{V: tbl}})
-					i, err := t.val(ia.Index)
-					if err != nil {
-						return err
-					}
-					t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("arrIndex"), Args: []ir.Var{a, i}})
-					return nil
-				}
+		if t.prog.tableRoot(x.X) {
+			v, err := t.tableLoad(x.X)
+			if err != nil {
+				return err
 			}
+			t.vars[x] = v
+			return nil
 		}
 		if t.intoHandle(x.X) {
 			// A handle is opaque: what its fields hold is havoc.
@@ -2336,6 +2615,12 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 			return nil
 		}
 		if g, isGlobal := x.X.(*ssa.Global); isGlobal {
+			if g.Pkg != nil && g.Pkg.Pkg.Path() == "internal/bytealg" && g.Name() == "MaxLen" {
+				// Set by an init from the CPU's features (63 with AVX2);
+				// any value from 4 up picks an algorithm, not a result.
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "63"}}})
+				return nil
+			}
 			if init, known := t.prog.zeros[g]; known {
 				if mm, ok := init.(*ssa.MakeMap); ok {
 					// A lookup table: built afresh from its constants.
@@ -2358,6 +2643,9 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 						t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("mapUpdate"), Args: []ir.Var{m, k, v}})
 					}
 					return nil
+				}
+				if elems, ok := constSlice(init, t.prog.zeros); ok {
+					return t.sliceOf(x, elems)
 				}
 				if init != nil {
 					v, err := t.val(init)
@@ -2480,15 +2768,15 @@ func (t *fnState) slice(x *ssa.Slice) error {
 		lo := t.fresh()
 		t.emit(ir.Instr{Dst: lo, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
 		if x.Low != nil {
-			if lo, err = t.val(x.Low); err != nil {
+			if lo, err = t.index(x.Low); err != nil {
 				return err
 			}
 		}
-		hi, err := t.val(x.High)
+		hi, err := t.index(x.High)
 		if err != nil {
 			return err
 		}
-		mx, err := t.val(x.Max)
+		mx, err := t.index(x.Max)
 		if err != nil {
 			return err
 		}
@@ -2508,7 +2796,7 @@ func (t *fnState) slice(x *ssa.Slice) error {
 	}
 	var lo, hi ir.Var
 	if x.Low != nil {
-		if lo, err = t.val(x.Low); err != nil {
+		if lo, err = t.index(x.Low); err != nil {
 			return err
 		}
 	} else {
@@ -2516,7 +2804,7 @@ func (t *fnState) slice(x *ssa.Slice) error {
 		t.emit(ir.Instr{Dst: lo, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
 	}
 	if x.High != nil {
-		if hi, err = t.val(x.High); err != nil {
+		if hi, err = t.index(x.High); err != nil {
 			return err
 		}
 	} else {
@@ -2792,7 +3080,10 @@ func (t *fnState) call(x *ssa.Call) error {
 	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
-		if op, ok := ir.StdlibOps[callee.String()]; ok {
+		if done, err := t.bytealgCall(x, callee); done || err != nil {
+			return err
+		}
+		if op, ok := stdlibOp(callee.String()); ok {
 			var args []ir.Var
 			for _, a := range x.Call.Args {
 				v, err := t.val(a)
@@ -4592,6 +4883,107 @@ func (t *fnState) emitCall(x *ssa.Call, term ir.Term, name string) error {
 		args = append(args, v)
 	}
 	return t.emitCallArgs(x, term, name, args)
+}
+
+// deferred is a deferred call to a modelled function: whether its defer
+// statement ran and the arguments it evaluated live in two cells the
+// function allocates on entry.
+type deferred struct {
+	callee, nargs int
+	name          string
+	flag, args    ir.Var
+}
+
+// deferCall lowers x, a defer of modelled function callee: the arguments
+// are evaluated now and kept, and runDefers makes the call at each return.
+// A defer statement in a loop could run any number of times: it is
+// rejected.
+func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function) error {
+	if inCycle(x.Block()) {
+		return fmt.Errorf("deferred call to %s in a loop", callee.Name())
+	}
+	var args []ir.Var
+	for _, a := range x.Call.Args {
+		v, err := t.val(a)
+		if err != nil {
+			return err
+		}
+		args = append(args, v)
+	}
+	d := deferred{callee: t.prog.ids[callee], nargs: len(args), name: callee.String(), flag: t.fresh(), args: t.fresh()}
+	// The cells, on entry: a return before the defer statement ran sees
+	// the flag false.
+	f, tr := t.fresh(), t.fresh()
+	entry := []ir.Instr{
+		{Dst: d.flag, Op: ir.Alloc{Zero: ir.BoolVal(false)}},
+		{Dst: d.args, Op: ir.Alloc{Zero: ir.Opaque{}}},
+		{Dst: f, Op: ir.Const{V: ir.BoolVal(false)}},
+		{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{d.flag, f}},
+	}
+	t.out.Blocks[0].Instrs = append(entry, t.out.Blocks[0].Instrs...)
+	t.emit(ir.Instr{Dst: tr, Op: ir.Const{V: ir.BoolVal(true)}})
+	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{d.flag, tr}})
+	tup := t.fresh()
+	t.emit(ir.Instr{Dst: tup, Op: ir.Simple("mkTuple"), Args: args})
+	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{d.args, tup}})
+	if !slices.Contains(t.out.Calls, d.callee) {
+		t.out.Calls = append(t.out.Calls, d.callee)
+	}
+	t.defers = append(t.defers, d)
+	return nil
+}
+
+// runDefers makes the deferred calls whose defer statements ran, last
+// first, before a return. A call that panics ends the run with that panic
+// (Go would run the remaining deferred calls first; their effects are not
+// seen). The calls on the way out of a panic are not made.
+func (t *fnState) runDefers() error {
+	for i := len(t.defers) - 1; i >= 0; i-- {
+		d := t.defers[i]
+		ran := t.fresh()
+		t.emit(ir.Instr{Dst: ran, Op: ir.Simple("loadPath"), Args: []ir.Var{d.flag}})
+		call := len(t.out.Blocks)
+		next, fb, join := call+1, call+2, call+3
+		name := t.cur.Name
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: ran, T: call, F: join}
+		t.out.Blocks = append(t.out.Blocks,
+			ir.Block{Name: name + ".defer"},
+			ir.Block{Name: name + ".defer-after"},
+			ir.Block{Name: name + ".defer-fallback"},
+			ir.Block{Name: name + ".defer-done"})
+		t.cur = &t.out.Blocks[call]
+		tup := t.fresh()
+		t.emit(ir.Instr{Dst: tup, Op: ir.Simple("loadPath"), Args: []ir.Var{d.args}})
+		args := make([]ir.Var, d.nargs)
+		for k := range args {
+			args[k] = t.fresh()
+			t.emit(ir.Instr{Dst: args[k], Op: ir.Extract{I: k}, Args: []ir.Var{tup}})
+		}
+		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
+		t.out.Blocks[next].Term = ir.Term{Kind: ir.TermJump, B: join}
+		// A deferred call the model gets stuck in: its effects are dropped.
+		t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
+		t.cur = &t.out.Blocks[join]
+	}
+	return nil
+}
+
+// inCycle says whether b can reach itself.
+func inCycle(b *ssa.BasicBlock) bool {
+	seen := map[*ssa.BasicBlock]bool{}
+	stack := slices.Clone(b.Succs)
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if c == b {
+			return true
+		}
+		if !seen[c] {
+			seen[c] = true
+			stack = append(stack, c.Succs...)
+		}
+	}
+	return false
 }
 
 // emitCallArgs is emitCall with the argument variables given.
