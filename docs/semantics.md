@@ -87,7 +87,6 @@ yields UB or poison, Go panics. A run ends in one of:
 | Go | model | status |
 |---|---|---|
 | literal, `len(s)`, `s[i]`, `s[lo:hi]`, `s + t`, `s == t`, `s != t`, `s < t` (and `<=`, `>`, `>=`: byte-wise) | `strConst strLen strIndex strSlice strConcat eq ne ult ule ugt uge` | exact (bounds panics as Go) |
-| `s < t` and other orderings | — | rejected |
 | `for i, r := range s` | `strNext` (UTF-8 decoding, invalid bytes → U+FFFD) | exact |
 | `for i := range n` (integer) | an ordinary loop | exact |
 | `[]byte(s)`, `string(b)`, `[]rune(s)`, `string(rs)`, `string(r)` | `strToBytes bytesToStr strToRunes runesToStr runeToStr` | exact |
