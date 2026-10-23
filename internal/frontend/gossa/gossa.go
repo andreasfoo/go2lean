@@ -808,13 +808,16 @@ func ctorWrapper(p *ir.Prog, ctor, m *ssa.Function, ctorID, mID int, deref bool)
 	} else {
 		b1.Term = ir.Term{Kind: ir.TermJump, B: 2}
 	}
+	// A value receiver is read only once the error is known to be nil: a
+	// constructor that fails returns a nil pointer with its error.
+	var b2 []ir.Instr
 	if deref {
 		val := fresh()
-		b1.Instrs = append(b1.Instrs, ir.Instr{Dst: val, Op: ir.Simple("loadPath"), Args: []ir.Var{recv}})
+		b2 = append(b2, ir.Instr{Dst: val, Op: ir.Simple("loadPath"), Args: []ir.Var{recv}})
 		recv = val
 	}
 	w.Blocks[1] = b1
-	w.Blocks[2] = ir.Block{Name: "method", Term: ir.Term{Kind: ir.TermCall, Callee: mID, CArgs: append([]ir.Var{recv}, w.Params[nc:]...), Dst: res, Next: 3, Fallback: 5}}
+	w.Blocks[2] = ir.Block{Name: "method", Instrs: b2, Term: ir.Term{Kind: ir.TermCall, Callee: mID, CArgs: append([]ir.Var{recv}, w.Params[nc:]...), Dst: res, Next: 3, Fallback: 5}}
 	w.Blocks[3] = ir.Block{Name: "ret", Term: ir.Term{Kind: ir.TermRet, V: res}}
 	w.Blocks[4] = ir.Block{Name: "ctor-error", Instrs: []ir.Instr{{Dst: unit, Op: ir.Const{V: ir.UnitVal{}}}}, Term: ir.Term{Kind: ir.TermRet, V: unit}}
 	w.Blocks[5] = ir.Block{Name: "stuck", Term: ir.Term{Kind: ir.TermPanic, Panic: contract.PanicOther}}
@@ -3849,13 +3852,17 @@ func sentinelErr(v ssa.Value) (ir.Val, bool) {
 		return nil, false
 	}
 	c, ok := init.(*ssa.Call)
-	if !ok || len(c.Call.Args) != 1 {
+	if !ok {
 		return nil, false
 	}
-	if f := c.Call.StaticCallee(); f == nil || (f.String() != "errors.New" && f.String() != "fmt.Errorf") {
-		return nil, false
-	}
-	if k, ok := c.Call.Args[0].(*ssa.Const); !ok || k.Value == nil || k.Value.Kind() != constant.String {
+	// errors.New of a constant, or fmt.Errorf of a constant format and
+	// arguments that wraps nothing (with %w, errors.Is would see through
+	// it to the wrapped error).
+	if f := c.Call.StaticCallee(); f != nil && f.String() == "errors.New" && len(c.Call.Args) == 1 {
+		if k, ok := c.Call.Args[0].(*ssa.Const); !ok || k.Value == nil || k.Value.Kind() != constant.String {
+			return nil, false
+		}
+	} else if format, ok := constFormat(c, "fmt.Errorf"); !ok || strings.Contains(format, "%w") {
 		return nil, false
 	}
 	h := fnv.New32a()
@@ -3985,26 +3992,57 @@ func regexpPattern(v ssa.Value) (string, bool) {
 // pieces), as Go would.
 func constSprintf(v ssa.Value) (string, bool) {
 	c, ok := v.(*ssa.Call)
-	if !ok || len(c.Call.Args) != 2 {
+	if !ok {
 		return "", false
 	}
-	if f := c.Call.StaticCallee(); f == nil || f.String() != "fmt.Sprintf" {
+	format, ok := constFormat(c, "fmt.Sprintf")
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf(format, constArgs(c)...), true
+}
+
+// constFormat is the format of a call to fn (fmt.Sprintf, fmt.Errorf)
+// whose format and arguments are all constants (see constArgs).
+func constFormat(c *ssa.Call, fn string) (string, bool) {
+	if f := c.Call.StaticCallee(); f == nil || f.String() != fn || len(c.Call.Args) != 2 {
 		return "", false
 	}
 	format, ok := c.Call.Args[0].(*ssa.Const)
 	if !ok || format.Value == nil || format.Value.Kind() != constant.String {
 		return "", false
 	}
+	if constArgs(c) == nil {
+		return "", false
+	}
+	return constant.StringVal(format.Value), true
+}
+
+// constArgs is the variadic arguments of a printf-like call c as Go
+// values, when each is a constant string, integer or bool (an empty,
+// non-nil slice for none); nil otherwise.
+func constArgs(c *ssa.Call) []any {
+	args, ok := constArgList(c)
+	if !ok {
+		return nil
+	}
+	if args == nil {
+		args = []any{}
+	}
+	return args
+}
+
+func constArgList(c *ssa.Call) ([]any, bool) {
 	var args []any
 	switch a := c.Call.Args[1].(type) {
 	case *ssa.Const: // nil: no arguments
 		if a.Value != nil {
-			return "", false
+			return nil, false
 		}
 	case *ssa.Slice:
 		arr, ok := a.X.(*ssa.Alloc)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		n := int(arr.Type().(*types.Pointer).Elem().(*types.Array).Len())
 		args = make([]any, n)
@@ -4015,24 +4053,24 @@ func constSprintf(v ssa.Value) (string, bool) {
 				if r == a {
 					continue
 				}
-				return "", false
+				return nil, false
 			}
 			i, ok := ia.Index.(*ssa.Const)
 			if !ok {
-				return "", false
+				return nil, false
 			}
 			for _, w := range *ia.Referrers() {
 				st, ok := w.(*ssa.Store)
 				if !ok {
-					return "", false
+					return nil, false
 				}
 				mi, ok := st.Val.(*ssa.MakeInterface)
 				if !ok {
-					return "", false
+					return nil, false
 				}
 				k, ok := mi.X.(*ssa.Const)
 				if !ok || k.Value == nil {
-					return "", false
+					return nil, false
 				}
 				switch k.Value.Kind() {
 				case constant.String:
@@ -4040,24 +4078,24 @@ func constSprintf(v ssa.Value) (string, bool) {
 				case constant.Int:
 					x, exact := constant.Int64Val(k.Value)
 					if !exact {
-						return "", false
+						return nil, false
 					}
 					args[i.Int64()] = x
 				case constant.Bool:
 					args[i.Int64()] = constant.BoolVal(k.Value)
 				default:
-					return "", false
+					return nil, false
 				}
 				set++
 			}
 		}
 		if set != n {
-			return "", false
+			return nil, false
 		}
 	default:
-		return "", false
+		return nil, false
 	}
-	return fmt.Sprintf(constant.StringVal(format.Value), args...), true
+	return args, true
 }
 
 // atomicCall lowers Load, Store and Add on sync/atomic's Bool, Int32,

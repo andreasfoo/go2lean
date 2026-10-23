@@ -76,3 +76,21 @@ func Slot(slots [2]int, i int) int {
 	}
 	return slots[i]
 }
+
+var errEmpty = fmt.Errorf("empty range")
+
+// Range is built by NewRange only.
+type Range struct{ lo, hi int }
+
+// NewRange returns the range [lo, hi], or an error when it is empty.
+func NewRange(lo, hi int) (*Range, error) {
+	if lo > hi {
+		return nil, errEmpty
+	}
+	return &Range{lo, hi}, nil
+}
+
+// Contains reports whether i is in the range. It never panics: a range
+// that failed to build is never used (value receiver, constructor with an
+// error).
+func (r Range) Contains(i int) bool { return r.lo <= i && i <= r.hi }
