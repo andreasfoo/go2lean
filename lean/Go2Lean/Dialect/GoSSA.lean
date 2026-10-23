@@ -224,6 +224,25 @@ inductive ReInst where
   | nop (out : Nat)
   deriving Repr
 
+/-- Heap operations the concurrent machine's programs use (C1). -/
+inductive ConcOp where
+  /-- The address of a package variable kept in a cell (one holding
+  synchronisation state): allocated holding `zero` on first use; the
+  directory of cells (key, pointer) lives in heap slot 0, which no pointer
+  reads (`ptr 0` is nil). No args. -/
+  | globalAddr (key : Nat) (zero : Val)
+  /-- `context`: a context is a heap object (`ctxObj`). `ctxBackground`
+  (no args) never ends; `ctxNew` `[parent]` is a cancellable child;
+  `ctxDone` `[ctx]` is its done channel (nil, which blocks forever, for a
+  context the model did not make); `ctxErr` `[ctx]` its error;
+  `ctxCancel code` `[ctx]` ends it and its children (1 canceled, 2
+  deadline exceeded). -/
+  | ctxBackground | ctxNew | ctxDone | ctxErr | ctxCancel (code : Nat)
+  /-- `sync.Cond`: `condEnter` `[cond]` takes a ticket for a `Wait`;
+  `condSignal all` `[cond]` releases the oldest ticket, or all. -/
+  | condEnter | condSignal (all : Bool)
+  deriving Repr
+
 inductive Op where
   | const (v : Val)
   -- integer arithmetic (same width on both operands)
@@ -276,11 +295,9 @@ inductive Op where
   /-- `make(chan T, cap)`; args `[cap]`. The channel is a heap object
   (`chanObj`); `zero` is what a receive on a closed channel yields. -/
   | chanMake (zero : Val)
-  /-- The address of a package variable kept in a cell (one holding
-  synchronisation state): allocated holding `zero` on first use; the
-  directory of cells (key, pointer) lives in heap slot 0, which no pointer
-  reads (`ptr 0` is nil). No args. -/
-  | globalAddr (key : Nat) (zero : Val)
+  /-- The heap operations of the concurrent model (`ConcOp`), kept out of
+  this type so that `denote` stays small for the prover's `simp`. -/
+  | conc (c : ConcOp)
   /-- `len(ch)`, `cap(ch)`; args `[ch]` (a nil channel has 0 of both). -/
   | chanLen | chanCap
   /-- Mark a `sync.Once` done (after its function ran); args `[ptr]`. -/
@@ -561,6 +578,19 @@ def setPath : Val → List Nat → Val → Option Val
 closed flag, and the zero value a receive on a closed channel yields. -/
 def chanObj (cap : BitVec 64) (buf : List Val) (closed : Bool) (zero : Val) : Val :=
   .structv [.int 64 cap, .arr buf, .bool closed, zero]
+
+/-- A context: its done channel, error code (0 while it lives) and children. -/
+def ctxObj (done : Val) (err : Nat) (children : List Val) : Val :=
+  .structv [done, .int 64 (BitVec.ofNat 64 err), .tuple children]
+
+def ctxGet (heap : Heap Val) (c : Val) : Option (Nat × Val × Nat × List Val) :=
+  match c with
+  | .ptr ref [] =>
+    if ref = 0 then none else
+    match heap[ref]? with
+    | some (.structv [done, .int 64 e, .tuple cs]) => some (ref, done, e.toNat, cs)
+    | _ => none
+  | _ => none
 
 /-- The channel `ch` points to: its heap ref, capacity, buffer, closed flag
 and zero value; `none` for anything else (a nil channel included). -/
@@ -2522,6 +2552,75 @@ def reFindAllRun (heap : Heap Val) (prog : List ReInst) (start ncap kind : Nat) 
       .ok (sliceOf heap elems)
   | _, _ => .panic .modelStuck
 
+/-- End context `c` and, to depth `n`, its children: set the error code and
+close the done channel (waking every receive on it). -/
+def ctxCancelRec (code : Nat) : Nat → Heap Val → Val → Heap Val
+  | 0, heap, _ => heap
+  | n + 1, heap, c =>
+    match ctxGet heap c with
+    | some (ref, done, 0, cs) =>
+      let heap := heap.set! ref (ctxObj done code cs)
+      let heap := match chanGet heap done with
+        | some (r, cap, buf, false, z) => heap.set! r (chanObj cap buf true z)
+        | _ => heap
+      cs.foldl (ctxCancelRec code n) heap
+    | _ => heap
+
+/-- A `sync.Cond`'s state, kept in its `notify` field (field 2): the next
+ticket and the tickets still waiting. Any other value is the zero state. -/
+def condState (heap : Heap Val) (c : Val) : Nat × List Nat :=
+  match c with
+  | .ptr r path =>
+    match heapLoad heap (.ptr r (path ++ [2])) with
+    | .ok (.tuple [.int _ n, .tuple ws]) => (n.toNat, ws.filterMap fun | .int _ t => some t.toNat | _ => none)
+    | _ => (0, [])
+  | _ => (0, [])
+
+def setCondState (heap : Heap Val) (c : Val) (n : Nat) (ws : List Nat) : Res (Heap Val) :=
+  match c with
+  | .ptr r path =>
+    heapStore heap (.ptr r (path ++ [2]))
+      (.tuple [.int 64 (BitVec.ofNat 64 n), .tuple (ws.map fun t => .int 64 (BitVec.ofNat 64 t))])
+  | _ => .panic .nilDereference
+
+/-- The `ConcOp`s, on the heap. -/
+def denoteConc (heap : Heap Val) : ConcOp → List Val → Res (Val × Heap Val)
+  | .ctxBackground, [] => .ok (heapAlloc heap (ctxObj (.ptr 0 []) 0 []))
+  | .ctxNew, [parent] =>
+    let (ch, heap) := heapAlloc heap (chanObj 0 [] false (.structv []))
+    let (c, heap) := heapAlloc heap (ctxObj ch 0 [])
+    match ctxGet heap parent with
+    | some (pref, pdone, pe, pcs) =>
+      let heap := heap.set! pref (ctxObj pdone pe (pcs ++ [c]))
+      .ok (c, if pe = 0 then heap else ctxCancelRec pe 16 heap c)
+    | none => .ok (c, heap)
+  | .ctxDone, [c] => .ok ((ctxGet heap c).elim (.ptr 0 []) (·.2.1), heap)
+  | .ctxErr, [c] => .ok (.err (match ctxGet heap c with | some (_, _, e, _) => e != 0 | none => false), heap)
+  | .ctxCancel code, [c] => .ok (.unit, ctxCancelRec code 16 heap c)
+  | .condEnter, [c] =>
+    let (n, ws) := condState heap c
+    match setCondState heap c (n + 1) (ws ++ [n]) with
+    | .ok heap => .ok (.int 64 (BitVec.ofNat 64 n), heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .condSignal all, [c] =>
+    let (n, ws) := condState heap c
+    match setCondState heap c n (if all then [] else ws.drop 1) with
+    | .ok heap => .ok (.unit, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .globalAddr key zero, [] =>
+    let dir := match heap[0]? with | some (.arr es) => es | _ => []
+    let found := dir.findSome? fun e => match e with
+      | .tuple [.int _ k, p] => if k.toNat == key then some p else none
+      | _ => none
+    match found with
+    | some p => .ok (p, heap)
+    | none =>
+      let (p, heap) := heapAlloc heap zero
+      .ok (p, heap.set! 0 (.arr (dir ++ [.tuple [.int 64 (BitVec.ofNat 64 key), p]])))
+  | _, _ => .panic .modelStuck
+
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
@@ -2945,16 +3044,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
         .ok (.int 64 (BitVec.ofNat 64 n), heap.set! ref (.arr (writeAt es off.toNat (ts.take n))))
       | _ => .panic .modelStuck
     | _, _ => .panic .modelStuck
-  | .globalAddr key zero, [] =>
-    let dir := match heap[0]? with | some (.arr es) => es | _ => []
-    let found := dir.findSome? fun e => match e with
-      | .tuple [.int _ k, p] => if k.toNat == key then some p else none
-      | _ => none
-    match found with
-    | some p => .ok (p, heap)
-    | none =>
-      let (p, heap) := heapAlloc heap zero
-      .ok (p, heap.set! 0 (.arr (dir ++ [.tuple [.int 64 (BitVec.ofNat 64 key), p]])))
+  | .conc c, args => denoteConc heap c args
   | .chanMake zero, [cap] =>
     match asIndex cap with
     | some c => if c.slt 0 then .panic .makeSliceLen else .ok (heapAlloc heap (chanObj c [] false zero))

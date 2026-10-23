@@ -745,6 +745,9 @@ func addCtorWrappers(p *ir.Prog, fns []*ssa.Function) {
 			continue
 		}
 		w.TestFile = p.Funcs[ids[m]].TestFile || p.Funcs[ids[ctor]].TestFile
+		// Wrappers come after markSync: the concurrent machine must give a
+		// call of a synchronising method a frame of its own.
+		w.Sync = p.Funcs[ids[m]].Sync || p.Funcs[ids[ctor]].Sync
 		p.Funcs[ids[m]].WrappedBy = w.Name
 		p.Funcs = append(p.Funcs, w)
 	}
@@ -1207,6 +1210,8 @@ type progState struct {
 	boxed []types.Type
 	// json describes the types the package encodes or decodes.
 	json *jsonTable
+	// helpers are the synthetic functions of the program (conc.go), by name.
+	helpers map[string]int
 	// regexps caches packageRegexps.
 	regexps map[*ssa.Package][]string
 	// tables caches arrayTable; nil until first used.
@@ -2309,7 +2314,21 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		if b, ok := x.Call.Value.(*ssa.Builtin); ok && b.Name() == "close" {
 			return t.deferCall(x, nil, "close")
 		}
+		if x.Call.IsInvoke() {
+			if op, ok := lockerOrCtx(x.Call.Value.Type(), x.Call.Method.Name()); ok && (op == "lockL" || op == "unlockL") {
+				return t.deferCall(x, nil, op)
+			}
+		} else if x.Call.StaticCallee() == nil {
+			// A call through a func value (`defer cancel()`).
+			return t.deferCall(x, nil, "dynamic")
+		}
 		if callee := x.Call.StaticCallee(); callee != nil {
+			switch callee.String() {
+			case "(*time.Ticker).Stop", "(*time.Timer).Stop":
+				// A ticker is a daemon, and a timer's late send never
+				// blocks (conc.go): stopping them changes nothing modelled.
+				return nil
+			}
 			if op, ok := syncOps[callee.String()]; ok && op != "onceDo" && op != "yield" {
 				return t.deferCall(x, callee, op)
 			}
@@ -3210,6 +3229,9 @@ func (t *fnState) call(x *ssa.Call) error {
 			return nil
 		}
 	}
+	if done, err := t.concCall(x); done || err != nil {
+		return err
+	}
 	if done, err := t.syncCall(x, callee); done || err != nil {
 		return err
 	}
@@ -3835,15 +3857,26 @@ func (t *fnState) ifaceAssert(x *ssa.TypeAssert, impls []types.Type) error {
 // whose method the model holds; a nil interface panics, any other value
 // makes the call unmodelled. It reports false when no type qualifies.
 func (t *fnState) invoke(x *ssa.Call) (bool, error) {
-	iface, ok := x.Call.Value.Type().Underlying().(*types.Interface)
+	fv, ok, err := t.dispatch(&x.Call)
+	if !ok || err != nil {
+		return ok, err
+	}
+	return true, t.emitCall(x, ir.Term{Kind: ir.TermCallV, FV: fv}, x.Call.Method.Name())
+}
+
+// dispatch is the func value an interface method call c calls: the method
+// of the receiver's dynamic type among the modelled implementers (a Dispatch
+// on its type tag). Not ok when no implementer is modelled.
+func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
+	iface, ok := c.Value.Type().Underlying().(*types.Interface)
 	if !ok {
-		return false, nil
+		return 0, false, nil
 	}
 	impls, ok := t.prog.implementers(iface)
 	if !ok {
-		return false, nil
+		return 0, false, nil
 	}
-	m := x.Call.Method
+	m := c.Method
 	var tags []uint32
 	var fns []*ssa.Function
 	for _, ty := range impls {
@@ -3864,23 +3897,23 @@ func (t *fnState) invoke(x *ssa.Call) (bool, error) {
 		fns = append(fns, fn)
 	}
 	if len(fns) == 0 {
-		return false, nil
+		return 0, false, nil
 	}
-	recv, err := t.val(x.Call.Value)
+	recv, err := t.val(c.Value)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	args := []ir.Var{recv}
 	for _, fn := range fns {
 		v := t.fresh()
 		if err := t.funcValue(v, fn, nil); err != nil {
-			return false, err
+			return 0, false, err
 		}
 		args = append(args, v)
 	}
 	fv := t.fresh()
 	t.emit(ir.Instr{Dst: fv, Op: ir.Dispatch{Tags: tags}, Args: args})
-	return true, t.emitCall(x, ir.Term{Kind: ir.TermCallV, FV: fv}, x.Call.Method.Name())
+	return fv, true, nil
 }
 
 // regexpCall lowers the methods of a *regexp.Regexp compiled from a
@@ -5159,6 +5192,9 @@ type deferred struct {
 	// sync is the synchronisation operation a deferred sync method makes
 	// (syncOps), "" for a call.
 	sync string
+	lock ir.SyncOp // lockL, unlockL: the op with its tags
+	// dynamic: a call through the func value that is the first argument.
+	dynamic bool
 }
 
 // deferCall lowers x, a defer of modelled function callee, or of a
@@ -5176,7 +5212,14 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) e
 	}
 	var args []ir.Var
 	callArgs := x.Call.Args
-	if mc, ok := x.Call.Value.(*ssa.MakeClosure); ok {
+	dynamic := syncOp == "dynamic"
+	if dynamic || x.Call.IsInvoke() {
+		// The func value, or the receiver, comes first.
+		callArgs = append([]ssa.Value{x.Call.Value}, callArgs...)
+		if dynamic {
+			syncOp = ""
+		}
+	} else if mc, ok := x.Call.Value.(*ssa.MakeClosure); ok {
 		// A closure: its captured values come first.
 		callArgs = append(append([]ssa.Value(nil), mc.Bindings...), callArgs...)
 	}
@@ -5192,7 +5235,10 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) e
 		t.emit(ir.Instr{Dst: d, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "18446744073709551615"}}})
 		args, syncOp = append(args, d), "wgAdd"
 	}
-	d := deferred{callee: t.prog.ids[callee], nargs: len(args), name: name, flag: t.fresh(), args: t.fresh(), sync: syncOp}
+	d := deferred{callee: t.prog.ids[callee], nargs: len(args), name: name, flag: t.fresh(), args: t.fresh(), sync: syncOp, dynamic: dynamic}
+	if syncOp == "lockL" || syncOp == "unlockL" {
+		d.lock = t.prog.lockerOp(syncOp)
+	}
 	// The cells, on entry: a return before the defer statement ran sees
 	// the flag false.
 	f, tr := t.fresh(), t.fresh()
@@ -5210,7 +5256,7 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) e
 	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{d.args, tup}})
 	if syncOp != "" {
 		t.sync = true
-	} else if !slices.Contains(t.out.Calls, d.callee) {
+	} else if !dynamic && !slices.Contains(t.out.Calls, d.callee) {
 		t.out.Calls = append(t.out.Calls, d.callee)
 	}
 	t.defers = append(t.defers, d)
@@ -5245,13 +5291,21 @@ func (t *fnState) runDefers() error {
 		}
 		t.out.Blocks[next].Term = ir.Term{Kind: ir.TermJump, B: join}
 		if d.sync != "" {
-			t.syncOp(ir.SyncOp{Kind: d.sync}, t.fresh(), args...)
+			op := ir.SyncOp{Kind: d.sync}
+			if d.lock.Kind != "" {
+				op = d.lock
+			}
+			t.syncOp(op, t.fresh(), args...)
 			t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 			t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
 			t.cur = &t.out.Blocks[join]
 			continue
 		}
-		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
+		if d.dynamic {
+			t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: args[0], CArgs: args[1:], Dst: t.fresh(), Next: next, Fallback: fb}
+		} else {
+			t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
+		}
 		// A deferred call the model gets stuck in: its effects are dropped.
 		t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
 		t.cur = &t.out.Blocks[join]
@@ -5294,13 +5348,14 @@ func (t *fnState) syncOp(op ir.SyncOp, dst ir.Var, args ...ir.Var) {
 
 // goStmt lowers `go f(args)`: a goroutine running the func value.
 func (t *fnState) goStmt(x *ssa.Go) error {
-	if x.Call.IsInvoke() {
-		t.assume("go %s: a goroutine running an interface method is not modelled", x.Call.Method.Name())
-		return nil
-	}
 	var fv ir.Var
 	switch v := x.Call.Value.(type) {
 	case *ssa.Builtin:
+		if v.Name() == "close" {
+			fv = t.fresh()
+			t.emit(ir.Instr{Dst: fv, Op: ir.FuncRef{ID: t.prog.closeHelper()}})
+			break
+		}
 		t.assume("go %s: a goroutine running a builtin is not modelled", v.Name())
 		return nil
 	case *ssa.Function:
@@ -5310,7 +5365,16 @@ func (t *fnState) goStmt(x *ssa.Go) error {
 		}
 	default:
 		var err error
-		if fv, err = t.val(v); err != nil {
+		if x.Call.IsInvoke() {
+			// The receiver's method, by its dynamic type (see invoke).
+			ok := false
+			if fv, ok, err = t.dispatch(&x.Call); err != nil {
+				return err
+			} else if !ok {
+				t.assume("go %s: a goroutine running an interface method no modelled type implements is not modelled", x.Call.Method.Name())
+				return nil
+			}
+		} else if fv, err = t.val(v); err != nil {
 			return err
 		}
 	}

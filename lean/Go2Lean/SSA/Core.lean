@@ -160,6 +160,13 @@ inductive SyncOp where
   | onceEnter
   /-- `time.Sleep`, `runtime.Gosched`: any goroutine may run next. -/
   | yield
+  /-- `[cond, ticket]`: a `sync.Cond.Wait`'s wait, until `Signal` or
+  `Broadcast` releases the ticket `condEnter` gave it. -/
+  | condWait
+  /-- `[locker]`: `Lock`, `Unlock` through a `sync.Locker`; a `*RWMutex`
+  (boxed with tag `rwTag`) takes its writer side, its `RLocker()` (tag
+  `rTag`) its reader side, anything else is a `*Mutex`. -/
+  | lockL (rwTag rTag : Nat) | unlockL (rwTag rTag : Nat)
   deriving Repr, DecidableEq
 
 inductive Term where
@@ -205,6 +212,9 @@ structure Func (Op : Type) where
   concurrent machine gives its calls frames of their own; a call of any
   other function runs to its end in one step. -/
   sync : Bool := false
+  /-- A goroutine running it does not keep a run alive (a ticker): the run
+  ends when only such goroutines can move and moving them wakes no other. -/
+  daemon : Bool := false
   deriving Repr
 
 structure Prog (Op : Type) where

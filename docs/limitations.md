@@ -79,9 +79,10 @@ list, instead of `exhausted`; counterexamples carry the list too. On the
 example packages 4 of 101 certificates changed (a store to a global
 dropped, a callee the model got stuck in, an assumed `errors.As` target).
 
-Still open: synchronisation the model does not cover yet (`sync.Cond`,
-`context`, timers, a `sync.Locker` through an interface) is havoc or
-ignored, with a note in the model report (§7); havoc sites are still sampled, not enumerated
+Still open: time itself is not modelled (a timer or a deadline may fire
+at any scheduling point; `time.Now` is havoc), and `context.WithValue`,
+`ctx.Value` and `ctx.Deadline` are havoc, with a note in the model report
+(§7); havoc sites are still sampled, not enumerated
 (`exhausted_havoc`); and the list is not yet a hypothesis of any theorem.
 
 ## 3. Confirmed is not the same as actionable
@@ -200,9 +201,11 @@ generated Lean model.
   end-to-end regression and differential scripts, which are slow.
 - Concurrency (C1, [concurrency.md](concurrency.md)): goroutines, channels,
   `select`, mutexes, wait groups and `Once` are modelled, and the search
-  finds deadlocks, leaks and misuse panics; but data races are not
-  modelled (the machine is sequentially consistent between scheduling
-  points), `context`, timers and `sync.Cond` are not yet, a certificate
+  finds deadlocks, leaks and misuse panics, as do `context`, timers and
+  `sync.Cond`; but data races are not modelled (the machine is
+  sequentially consistent between scheduling points), time is not (a
+  timeout may fire at any point, so a finding may need a deadline to
+  pass early), a certificate
   for a concurrent function covers sampled schedules only
   (`exhausted_havoc`), and M3 cannot steer Go's scheduler, so a bug that
   needs a rare interleaving stays `inconclusive`. Properties are about one run of a function;

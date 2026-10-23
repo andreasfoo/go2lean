@@ -1,8 +1,8 @@
 # Concurrency in the model (C1)
 
 Status, 2026-10-23: the machine, the frontend lowering and the M3 checks
-are built (C1a); `context`, timers, `sync.Cond` and deterministic replay
-are next. "Built" below lists what landed and how it differs from the
+are built (C1a), and `context`, timers and `sync.Cond` (C1b);
+deterministic replay is next. "Built" below lists what landed and how it differs from the
 plan; the rest of the page is the plan. What other
 projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 [related-work.md](related-work.md).
@@ -34,46 +34,69 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 - Not as planned: there is no separate `no_block` property; `no_panic`
   covers deadlocks and leaks (they end the run like a panic). Fuel counts
   goroutine steps, and the schedule is one havoc site.
-- Ground truth: `examples/conc` (6 planted bugs, 12 correct functions);
+- Ground truth: `examples/conc` (6 planted bugs in `conc.go`, 3 more with contexts, timers and a condition variable in `timeouts.go`);
   `scripts/goker.sh` runs GoKer.
+
+## Built (C1b)
+
+- `context`: a context is a heap object (done channel, error, children);
+  `WithCancel`, `WithTimeout` and `WithDeadline` make a child, the cancel
+  func is a synthetic function of the program (`$context.cancel`) that
+  closes the done channel and its children's, and a timeout or deadline is
+  a goroutine that cancels at any scheduling point (`$context.deadline`):
+  the deadline may pass at any time.
+- Timers: `time.After` and `NewTimer` are a one-value channel and a
+  goroutine that sends on it at any point without blocking (`$time.fire`);
+  `NewTicker` a daemon goroutine (`$time.tick`, `Func.daemon`) that does
+  not keep a run alive; `AfterFunc` a goroutine running the function.
+- `sync.Cond`: a ticket queue in the cond's `notify` field (`condEnter`,
+  `condSignal`, `SyncOp.condWait`); `Wait` unlocks and relocks `L` through
+  `sync.Locker`, whose `Lock`/`Unlock` dispatch on the boxed type (a
+  `*Mutex`, a `*RWMutex`'s writer side, its `RLocker()`'s reader side).
+- Also: deferred calls through func values (`defer cancel()`), `go` of an
+  interface method, `go close(ch)`; wrappers around synchronising methods
+  (`T.M~NewT`) now get frames; the writer-preference rule blocks new
+  readers only while a writer waits for readers to leave (a writer that
+  could take the lock is not waiting yet); the M3 leak scan waits while a
+  goroutine of the package is still running or sleeping.
 
 ### GoKer
 
 `scripts/goker.sh <gobench> <out>` on all 103 kernels (GoBench at
 2e91eb1), each kernel's test function as the target, default search
-budget, 2026-10-23. The kernels are the ground truth: each blocking kernel
-has a blocking bug its test can trigger; most non-blocking ones have a
-data race, which C1 does not model.
+budget, 2026-10-23, with C1b. The kernels are the ground truth: each
+blocking kernel has a blocking bug its test can trigger; most non-blocking
+ones have a data race, which C1 does not model.
 
 | | blocking (68) | non-blocking (35) |
 |---|---|---|
-| bug found by the model, confirmed by `go test` | **35** (10 deadlocks, 25 leaks) | 6 (3 leaks, 2 `closed_channel`, 1 nil dereference) |
-| found by the model, not reproduced by `go test` in 200 runs (`schedule_not_reproduced`, one `panic_kind_mismatch`) | 7 | 1 |
-| found by the model, refuted by `go test` (spurious) | 2 | 3 |
-| model stuck, mostly on a channel the model does not know (`ctx.Done()`, `time.After`, a timer's `C`) | 14 | 2 |
-| nothing found | 10 | 23 (holds) |
+| bug found by the model, confirmed by `go test` | **53** (16 deadlocks, 36 leaks, 1 double unlock) | 6 (3 leaks, 2 `closed_channel`, 1 nil dereference) |
+| found by the model, not reproduced by `go test` in 200 runs (`schedule_not_reproduced`, one `panic_kind_mismatch`) | 6 | 1 |
+| found by the model, refuted by `go test` (spurious) | 1 | 4 |
+| nothing found | 8 | 24 (holds) |
 
-So the model reports a blocking bug in 44 of the 68 blocking kernels and
-`go test` confirms 35 (a confirmed finding is the real kernel deadlocking,
-leaking or panicking, not the model). What the rest need:
+With C1a alone (no `context`, timers or `Cond`) the first row was 35 and
+16 blocking kernels got stuck on a channel the model did not know. The
+model now reports a blocking bug in 60 of the 68 blocking kernels; `go
+test` confirms 53 (a confirmed finding is the real kernel deadlocking,
+leaking or panicking, not the model).
 
-- `context` and timers (16 stuck, 3 not found: cockroach 10790, 13197,
-  13755, 18101, etcd 5509, 7492, grpc 862, 1275, 3017, hugo 5379, istio
-  17860, 18454, kubernetes 5316, 11298, 70277, moby 17176, 33781 and two
-  non-blocking): the next part of C1.
-- `sync.Cond` (cockroach 16167, kubernetes 58107, moby 29733, 30408).
-- `fmt` calling a `String` method that takes a read lock (cockroach 6181);
-  a goroutine started on an interface method (kubernetes 30872); an
-  external test package, `package x_test` (syncthing 5795).
-- Deterministic replay (C1c) for the 7 the model found and Go's scheduler
-  did not reproduce (cockroach 1462, 3710, 7504, istio 16224, kubernetes
-  62464, moby 27782, serving 2137).
-- The spurious findings rest on what the model does not see: `recover`
-  (etcd 7443 recovers its send on a closed channel), a package variable
-  initialised to `&T{...}` and read as a fresh object per load (hugo 3251),
-  stores to an `int` package variable ignored (etcd 8194), `sync.Cond`
-  (serving 6472), and a data race the model's sequentially consistent
-  steps turn into a panic (kubernetes 13058). M3 rejects each of them.
+- Not reproduced (cockroach 1462, 7504, 10214, 16167, istio 16224,
+  serving 2137; in an earlier run of the same model also etcd 5509 and
+  kubernetes 1321, 62464, which this run confirmed): the model's schedule
+  is one Go's scheduler rarely takes; deterministic replay (C1c) is for
+  these.
+- Not found: `fmt` calling a `String` method that takes a read lock
+  (cockroach 6181), `io.ReadFull` (grpc 1275), `cond.Wait` passed as a
+  func value (kubernetes 11298), a sync-holding package variable set by
+  `init` (moby 29733), an external test package `package x_test`
+  (syncthing 5795), and three whose trials all run out of fuel (grpc 862,
+  istio 18454, kubernetes 58107: polling loops).
+- Spurious, each rejected by M3: `recover` (etcd 7443 recovers its send on
+  a closed channel), a store to an `int` package variable ignored (etcd
+  8194), unmodelled `os/exec` and a callback (moby 18412, serving 6472),
+  and a data race the model's sequentially consistent steps turn into a
+  panic (kubernetes 13058).
 
 The split between confirmed and not reproduced moves a little between
 runs: Go's scheduler varies from run to run.

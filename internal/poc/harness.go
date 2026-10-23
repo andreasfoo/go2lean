@@ -93,10 +93,14 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 		go2leanHdr, _, _ := strings.Cut(go2leanG, " [")
 		go2leanOld[go2leanHdr] = true
 	}
+	// A goroutine of the package still running or sleeping may block or
+	// end shortly: wait (up to 200ms) until each is blocked or gone, and
+	// report one blocked throughout.
 	go2leanLeaked := func() string {
 		go2leanFound := ""
 		for go2leanW := 0; go2leanW < 20; go2leanW++ {
 			go2leanFound = ""
+			go2leanSettling := false
 			for _, go2leanG := range go2leanStacks() {
 				if !strings.Contains(go2leanG, {{printf "%q" .PkgPath}}+".") || strings.Contains(go2leanG, "TestGo2LeanPoC_") {
 					continue
@@ -105,13 +109,15 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 					continue
 				}
 				go2leanHdr, _, _ := strings.Cut(go2leanG, "\n")
+				go2leanBlocked := false
 				for _, go2leanSt := range []string{"[chan send", "[chan receive", "[select", "[sync.Mutex.Lock", "[sync.RWMutex.Lock", "[sync.RWMutex.RLock", "[sync.WaitGroup.Wait", "[semacquire", "[sync.Cond.Wait"} {
 					if strings.Contains(go2leanHdr, go2leanSt) {
-						go2leanFound = go2leanG
+						go2leanFound, go2leanBlocked = go2leanG, true
 					}
 				}
+				go2leanSettling = go2leanSettling || !go2leanBlocked
 			}
-			if go2leanFound == "" {
+			if go2leanFound == "" && !go2leanSettling {
 				return ""
 			}
 			time.Sleep(10 * time.Millisecond)

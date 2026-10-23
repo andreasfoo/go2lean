@@ -63,7 +63,7 @@ yields UB or poison, Go panics. A run ends in one of:
 | outcome | Go | kinds |
 |---|---|---|
 | `ok v` | returned | — |
-| `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex, negative wait group: fatal errors in Go), `deadlock`, `goroutine_leak` (§6), `other` |
+| `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex: a fatal error in Go), `deadlock`, `goroutine_leak` (§6), `other` |
 | `panic modelStuck` | — | the model cannot continue (stuck); not a Go panic, never reported as one |
 | `outOfFuel` | — | the step budget ran out (loops, recursion); moot |
 
@@ -236,11 +236,20 @@ records its schedule.
 | `select` (send and receive cases, with or without `default`) | any enabled case, chosen by the schedule; blocks when none is enabled and there is no `default` |
 | `sync.Mutex` `Lock Unlock TryLock` | a lock word in place of the field; `Unlock` of an unlocked mutex: `sync_fatal` |
 | `sync.RWMutex` `Lock Unlock RLock RUnlock` | readers count and writer flag; writer preference: a blocked `Lock` stops new `RLock`s, as Go does (read–write–read deadlock) |
-| `sync.WaitGroup` `Add Done Wait` | a counter; negative: `sync_fatal`; `Wait` blocks until zero |
+| `sync.WaitGroup` `Add Done Wait` | a counter; negative: `explicit` (Go's `sync: negative WaitGroup counter` panic); `Wait` blocks until zero |
 | `sync.Once` `Do` | not started / running / done; a `Do` while another runs blocks; `f` runs once |
 | `time.Sleep`, `runtime.Gosched` | a scheduling point; time is not modelled |
-| deferred `Unlock`, `RUnlock`, `Done`, `close` | run at the function's returns, as other deferred calls |
-| `sync.Cond`, `context`, timers (`time.After`, `NewTimer`, `NewTicker`), `sync.Locker` through an interface | not yet: havoc or ignored, with a note in the model report |
+| deferred `Unlock`, `RUnlock`, `Done`, `close`, and calls through a func value (`defer cancel()`) | run at the function's returns, as other deferred calls |
+| `go x.M()` on an interface value, `go close(ch)` | the method of the dynamic type (as a call through the interface); a goroutine closing `ch` |
+| `context.Background`, `TODO` | a context that never ends (`Done()` is a nil channel) |
+| `context.WithCancel`, `WithTimeout`, `WithDeadline` | a child context: its own done channel, registered with the parent (cancelling the parent cancels it, a cancelled parent makes it cancelled); the cancel func closes the done channel; for a timeout or deadline a goroutine cancels it at any scheduling point, as the deadline may pass at any time |
+| `ctx.Done()`, `ctx.Err()` | the done channel; nil, or a non-nil error once cancelled (which of `Canceled` and `DeadlineExceeded` is not modelled); a context the model did not make (an input) never ends, as `context.Background()` the harness passes |
+| `time.After`, `time.NewTimer` | a channel of one buffered value and a goroutine that sends on it at any scheduling point, without blocking when the buffer is full; `Timer.Reset` sends once more, `Timer.Stop` returns any bool and stops nothing (its late send cannot block anyone) |
+| `time.NewTicker` | a daemon goroutine sending forever: a run ends when only daemons can move and two steps each wake nobody; `Stop` changes nothing |
+| `time.AfterFunc(d, f)` | a goroutine running `f` |
+| `sync.NewCond`, `Cond.Wait`, `Signal`, `Broadcast` | a ticket queue in the cond's `notify` field: `Wait` takes a ticket, unlocks `L`, blocks until `Signal` (the oldest ticket) or `Broadcast` (all) releases it, then locks `L` again; a `Signal` with no waiter is lost, as in Go |
+| `Lock`, `Unlock` through a `sync.Locker` | the writer side of a `*RWMutex`, else a `*Mutex` (by the boxed value's type) |
+| time itself (`time.Now`, durations), `context.WithValue`, `ctx.Deadline`, `ctx.Value` | havoc; deadlines are not compared |
 
 The end of a run, when no goroutine can move: all goroutines done, the main
 goroutine's result; the main goroutine blocked, `deadlock` (Go's "all

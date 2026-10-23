@@ -237,7 +237,9 @@ func Print(p *ir.Prog, module string) string {
 			}
 			b.WriteString("\n")
 		}
-		if f.Sync {
+		if f.Sync && f.Daemon {
+			b.WriteString("  ],\n  sync := true, daemon := true }\n\n")
+		} else if f.Sync {
 			b.WriteString("  ],\n  sync := true }\n\n")
 		} else {
 			b.WriteString("  ] }\n\n")
