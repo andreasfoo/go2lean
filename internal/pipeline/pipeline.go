@@ -6,13 +6,16 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/andreasfoo/go2lean/internal/constraint"
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/frontend/gossa"
+	"github.com/andreasfoo/go2lean/internal/fuzzimport"
 	"github.com/andreasfoo/go2lean/internal/poc"
 	"github.com/andreasfoo/go2lean/internal/repo"
 	"github.com/andreasfoo/go2lean/internal/ssaout"
@@ -29,6 +32,12 @@ type Env struct {
 	// Resume skips properties whose search is recorded in the workspace and
 	// counterexamples that already have a verdict.
 	Resume bool
+	// FuzzSpecs reads the packages' Go fuzz targets as sequence specs
+	// (internal/fuzzimport); their generated file joins Overlay.
+	FuzzSpecs bool
+	// Overlay adds files to the packages for compiling and replaying
+	// (absolute path to contents), never written into them.
+	Overlay map[string][]byte
 }
 
 func (e Env) module() string {
@@ -60,7 +69,7 @@ func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*con
 // CompileAll runs M1 on every package matching the patterns (e.g. "./...")
 // with a single load of the dependency graph.
 func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string) ([]*contract.ModelReport, error) {
-	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: env.Deps}, patterns...)
+	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: env.Deps, Overlay: env.Overlay}, patterns...)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +221,7 @@ func VerifyAll(w contract.Workspace, env Env, ids []string, out io.Writer) ([]*c
 	var vs []*contract.Verdict
 	if len(ids) > 0 {
 		var err error
-		vs, err = poc.VerifyAll(w, env.module(), ids)
+		vs, err = poc.VerifyAll(w, env.module(), ids, env.Overlay)
 		if err != nil {
 			return nil, fmt.Errorf("poc: %w", err)
 		}
@@ -278,6 +287,26 @@ func Run(w contract.Workspace, env Env, pattern string, opts constraint.SearchOp
 // RunAll executes all three modules on every package matching the patterns
 // with a single load of the module, skipping packages with nothing modelled.
 func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io.Writer, patterns ...string) ([]*Result, error) {
+	if env.FuzzSpecs {
+		overlay, skipped, err := fuzzimport.Specs(env.module(), patterns...)
+		if err != nil {
+			return nil, err
+		}
+		if len(overlay) > 0 || len(skipped) > 0 {
+			fmt.Fprintln(out, "== fuzz targets as specs")
+		}
+		for path, src := range overlay {
+			fmt.Fprintf(out, "  %s: %d specs\n", filepath.Dir(path), strings.Count(string(src), "go2lean:sequence"))
+		}
+		for _, s := range skipped {
+			fmt.Fprintf(out, "  %s.%s not read: %s\n", s.Package, s.Fuzz, s.Reason)
+		}
+		env.Overlay = maps.Clone(env.Overlay)
+		if env.Overlay == nil {
+			env.Overlay = map[string][]byte{}
+		}
+		maps.Copy(env.Overlay, overlay)
+	}
 	fmt.Fprintln(out, "== M1 compile")
 	reports, err := CompileAll(w, env, out, patterns...)
 	if err != nil {

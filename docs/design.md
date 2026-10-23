@@ -589,6 +589,23 @@ the semver agent specs all 21 export; 6 are violated within seconds, the
 four the hand-written wrappers of the frozen run found and two on
 receivers built field by field.
 
+**Fuzz targets as specs** (`internal/fuzzimport`; `go2lean run`,
+`-fuzz-specs`, on by default; since 2026-10-23). The other direction: a
+package's own `FuzzXxx` targets are properties already written. The
+function each hands to `f.Fuzz` becomes a sequence spec
+`Go2LeanFuzz_FuzzXxx` over the same parameters, at the source level so
+the model needs nothing new: the body is kept inside a closure, and its
+`t` calls become plain code (`t.Fatal*`, `t.FailNow`: failed, return;
+`t.Error*`, `t.Fail`: failed; `t.Skip*`: passed, return; `t.Log*`,
+`t.Helper`: their arguments evaluated). A target that uses `t` otherwise
+(hands it to a helper, `t.Run`, inside a nested function) or reads a
+variable of `FuzzXxx` is left out with the reason. The generated file
+reaches the model and the M3 build through an overlay
+(`gossa.Options.Overlay`, `pipeline.Env.Overlay`, `poc.VerifyAll`):
+nothing is written into the package. `examples/fuzzed` holds a round trip
+whose planted bug the model finds and `go test` confirms, a target that
+holds, and one left out.
+
 Not yet: ranking properties by expected yield, `ModelGap` records from
 spurious verdicts, generalising a confirmed bug to neighbouring functions, and
 proof attempts.

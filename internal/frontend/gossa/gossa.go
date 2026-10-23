@@ -78,6 +78,9 @@ type Options struct {
 	// calls, as small extra programs the search driver links in; without
 	// it those calls are unmodelled (havoc results).
 	Deps bool
+	// Overlay adds or replaces files of the loaded packages (absolute path
+	// to contents): generated specs that are not in the package directory.
+	Overlay map[string][]byte
 }
 
 // Limits of the dependency walk: how deep it follows calls from the
@@ -92,7 +95,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 	// Tests: true also loads the package's internal test variant
 	// ("path [path.test]"), which includes *_test.go files of the same
 	// package: that is where agent-written spec-in-Go functions live.
-	cfg := &packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: dir, Tests: true}
+	cfg := &packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: dir, Tests: true, Overlay: opts.Overlay}
 	loaded, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, "", err

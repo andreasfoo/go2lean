@@ -147,6 +147,7 @@ func cmdRun(args []string) error {
 	opts := searchFlags(fs, 10)
 	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
 	resume := fs.Bool("resume", false, "skip properties already searched and counterexamples already verified in the workspace")
+	fuzzSpecs := fs.Bool("fuzz-specs", true, "read the packages' Go fuzz targets (FuzzXxx) as specs")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("run: at least one package pattern expected (e.g. ./...)")
@@ -155,7 +156,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	env.Deps, env.Resume = *deps, *resume
+	env.Deps, env.Resume, env.FuzzSpecs = *deps, *resume, *fuzzSpecs
 	_, err = pipeline.RunAll(w, env, opts.get(), os.Stdout, fs.Args()...)
 	return err
 }

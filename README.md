@@ -298,7 +298,7 @@ docs/semantics.md      the Go semantics modelled, by construct, with status
 
 Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 
-**Go line (go/ssa → GoSSA)**: 16 / 20
+**Go line (go/ssa → GoSSA)**: 17 / 20
 - ✅ SSA core with an executable, fuel-bounded semantics; GoSSA dialect
 - ✅ Heap model: pointers, slices, arrays, structs, writes through aliases
 - ✅ Maps, interfaces, closures, function values, methods
@@ -307,7 +307,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
 - ✅ Spec-in-Go properties and probes (model value vs real value)
 - ✅ LLM agent: proposes specs, runs them, reports
-- ✅ Regression gate in CI (183 properties); benchmark of hand-found bugs (34/34)
+- ✅ Regression gate in CI (187 properties); benchmark of hand-found bugs (34/34)
 - ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
 - ✅ Proof prototype: a postcondition proved for all 64-bit inputs by hand (`lean/Proofs`)
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))
@@ -315,7 +315,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ Sequence specs (`go2lean:sequence`): properties of a sequence of calls, bounded model checking over short sequences
 - ✅ Spec mutation check: each spec that held is run against mutants of the code under test; a spec no mutant fails is flagged as checking nothing
 - ✅ Specs as Go fuzz targets (`go2lean fuzz`, and in `agent`): the same properties searched by `go test -fuzz` on the real code
-- 🚧 Go fuzz targets (`FuzzXxx`) read as specs
+- ✅ Go fuzz targets (`FuzzXxx`) read as specs (`go2lean run`, `-fuzz-specs`): a project with fuzz targets needs no spec writing
 - 🚧 Proofs of postconditions and of functions over slices and strings
 - 🚧 `init` functions and package state (stores an `init` makes on every path, since 2026-10-23); floats ⬜
 - ⬜ Goroutines, `select`, channels, `defer` of modelled functions

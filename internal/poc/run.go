@@ -36,7 +36,7 @@ type result struct {
 var compileErr = regexp.MustCompile(`zz_go2lean_poc_\d+_test\.go:\d+(:\d+)?: .*`)
 
 func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error) {
-	vs, err := VerifyAll(ws, root, []string{cxID})
+	vs, err := VerifyAll(ws, root, []string{cxID}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,10 @@ type prepared struct {
 // writes a verdict and PoC deliverables for each. If a batch fails to
 // compile, its members are run one by one so a single bad harness only
 // affects itself.
-func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.Verdict, error) {
+//
+// overlay holds files the packages are built with but do not contain
+// (generated specs), by absolute path.
+func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[string][]byte) ([]*contract.Verdict, error) {
 	byPkg := map[string][]*prepared{}
 	var order []string
 	all := map[string]*prepared{}
@@ -87,7 +90,7 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.
 		if err != nil {
 			return nil, err
 		}
-		results, cmd, exit, out, errOut, err := runBatch(root, pkgDir, pkgName, pkg, batch)
+		results, cmd, exit, out, errOut, err := runBatch(root, pkgDir, pkgName, pkg, batch, overlay)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +102,7 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string) ([]*contract.
 				p.v = verdictOf(p, results, cmd, exit, out, errOut, root)
 				continue
 			}
-			r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{p})
+			r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{p}, overlay)
 			if err != nil {
 				return nil, err
 			}
@@ -153,7 +156,7 @@ func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 // runBatch builds one test file holding every test of the batch into the
 // package's test binary, runs it in the sandbox, and returns the parsed results keyed by counterexample
 // id (nil when the file did not compile).
-func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]result, string, int, string, string, error) {
+func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[string][]byte) (map[string]result, string, int, string, string, error) {
 	imports := map[string]bool{}
 	var funcs []string
 	for _, p := range batch {
@@ -189,7 +192,13 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared) (map[string]
 	defer os.RemoveAll(tmp)
 	bin := filepath.Join(tmp, "poc.test")
 	name := fmt.Sprintf("zz_go2lean_poc_%d_test.go", os.Getpid())
-	buildOut, exit, err := sandbox.BuildTest(root, pkg, pkgDir, map[string][]byte{name: []byte(src)}, bin)
+	files := map[string][]byte{name: []byte(src)}
+	for path, b := range overlay {
+		if filepath.Dir(path) == pkgDir {
+			files[filepath.Base(path)] = b
+		}
+	}
+	buildOut, exit, err := sandbox.BuildTest(root, pkg, pkgDir, files, bin)
 	if err != nil {
 		return nil, "", 0, "", "", err
 	}
