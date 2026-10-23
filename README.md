@@ -72,7 +72,7 @@ were triaged by hand ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean
 Requirements: Git, Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
 toolchain pinned in `lean/lean-toolchain` is fetched on the first build.
 Recommended on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
-(`apt install bubblewrap`), which isolates the replayed tests (M3); without
+(`apt install bubblewrap`), which isolates tests during the replay stage; without
 it they run with resource limits only.
 
 ### 2. Clone and run the included example
@@ -89,21 +89,21 @@ violate that rule without panicking.
 
 ### 3. Inspect the result
 
-Example output (search details may vary):
+Illustrative output (stage labels expanded for clarity; search details may vary):
 
 ```
-== M1 compile
+== Compile stage
 compiled github.com/andreasfoo/go2lean/examples/overflow -> out/lean/Go2Lean/Generated/gossa/overflow.lean
   SpecSum      complete  func(xs []int, ret int) bool  [spec for Sum]
   Sum          complete  func(xs []int) int
-== M2 properties
+== Spec & search stage: properties
   p_overflow_sum_nopanic       no_panic       Sum does not panic on any input
   p_overflow_sum_specsum       postcondition  Sum satisfies the spec-in-Go oracle SpecSum
-== M2 hunt
+== Spec & search stage: hunt
   p_overflow_sum_nopanic       random: none in 2000 trials; exhaustive: holds on 9724 inputs (recorded as exhausted)
   p_overflow_sum_specsum       random: found at trial 12 -> cx_overflow_sum_specsum_random_s42
       inputs map[xs_len:5 ...] memory map[xs:[1 0 0 0 9223372036854775807]] model ok -9223372036854775808
-== M3 poc
+== Replay stage: generate PoC and verify
   cx_overflow_sum_specsum_random_s42  confirmed    real: map[ret:-9223372036854775808]
       PoC: out/poc/cx_overflow_sum_specsum_random_s42
 ```
@@ -118,11 +118,14 @@ reproduction command. Everything the modules exchange is a JSON record under
 
 **Specs enter in two ways:** built-in properties such as `no_panic` are
 generated for eligible targets; business specs are Go functions written by
-a human or the optional agent. Go specs pass through M1 alongside the target
-source, then both kinds of properties guide the M2 search. A model
-counterexample is only a candidate until M3 replays it with the real Go toolchain.
+a human or the optional agent. Go specs pass through the compile stage alongside
+the target source, then both kinds of properties guide the spec & search stage.
+A model counterexample is only a candidate until the replay stage checks it
+with the real Go toolchain.
 
-**M1 — programmatic.** `golang.org/x/tools/go/ssa` lowers the package; the
+### Compile stage
+
+`golang.org/x/tools/go/ssa` lowers the package; the
 frontend turns it into a frontend-independent IR (blocks with parameters,
 one dialect op per instruction) and prints it as a Lean term over the `GoSSA`
 dialect. The Lean side is a small SSA core in the spirit of
@@ -132,7 +135,9 @@ come from a read-only memory oracle fixed per run; values the frontend cannot
 model are explicit havoc inputs. The model may over-approximate; it never
 silently guesses. Lean core only — no Mathlib.
 
-**M2 — constraint engines and agent.** Two property shapes are templated:
+### Spec & search stage
+
+Two property shapes are templated:
 `no_panic` for every modelled function, and `postcondition` for every
 **spec-in-Go** function — a Go function with a `// go2lean:spec Target` doc
 comment and signature `func Spec(<Target params>..., ret <result>) bool`,
@@ -166,7 +171,9 @@ the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
 the ones the frontend rejects, runs the pipeline, and writes a report from
 the verdicts.
 
-**M3 — poc.** A counterexample becomes a Go test in the target package,
+### Replay stage
+
+A counterexample becomes a Go test in the target package,
 which executes the real function with the generated inputs: run go2lean on
 a scratch clone, since a function that writes files will write them. The
 test never fails by itself; it prints what happened and the `poc` package
@@ -202,8 +209,9 @@ func SpecSum(xs []int, ret int) bool {
 The annotation associates the spec with `Sum`. Its arguments are the target's
 inputs followed by its result; `true` means the rule holds for that execution.
 Place the spec in the target package; the agent writes its specs to
-`go2lean_specs_test.go`. M1 compiles the spec alongside the target, M2 searches
-for inputs that make it return `false`, and M3 checks the same oracle in Go.
+`go2lean_specs_test.go`. The compile stage translates the spec alongside the
+target; the spec & search stage looks for inputs that make it return `false`;
+the replay stage checks the same oracle in Go.
 
 **Why not just use `no_panic`?** Go integer overflow wraps without panicking.
 The business spec detects a wrong result that a panic check cannot catch.
@@ -226,20 +234,20 @@ The LLM (Claude Opus 5.5 through the Anthropic SDK by default) is behind a
 one-method interface. `-model` and `-base-url` point the same client at any
 Anthropic-compatible endpoint (`-thinking=false` if the provider rejects the
 parameter); `mock:<dir>` replays scripted responses (`round-1.md`,
-`round-2.md`, …) for tests and offline runs.
+`round-2.md`, …) for tests and offline runs. Replace `model_name` below with
+a model ID supported by your chosen endpoint.
 
 ```sh
-go run ./cmd/go2lean agent -model MiniMax-M3 -base-url https://api.minimaxi.com/anthropic ./examples/oob
+go run ./cmd/go2lean agent -model model_name -base-url https://api.minimaxi.com/anthropic ./examples/oob
 ```
 
 Every prompt and response is
 written to `out/agent/<package>/`, and the report lands in `out/agent/<package>/report.md`. A
 revised spec file in the report round triggers one more pass.
 
-
 ## Commands
 
-```sh
+```text
 go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
 go2lean props   [-workspace out] -package <path>  template properties from the model report
 go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all] [-jobs n] [-budget s]
@@ -287,7 +295,7 @@ outcome (confirmed, certified, none) with
 
 ```sh
 go run ./cmd/go2lean compile -workspace out-tingly -module ../tingly-box ./...   # 156 packages, 15 s
-go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model MiniMax-M3 \
+go run ./cmd/go2lean agent -workspace out-tingly -module ../tingly-box -model model_name \
     -base-url https://api.minimaxi.com/anthropic github.com/tingly-dev/tingly-box/remote/scenario/builtin/claudecode
 ```
 
@@ -306,7 +314,7 @@ The tingly-box case study (hand-written specs, the rounds of hunting,
 PoCs, full-pass history and one page per finding) lives in its own
 repository, [andreasfoo/go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box).
 Its first finding: a hand-written postcondition on
-`ConvertAnthropicBetaToOpenAIRequest` is refuted and confirmed by M3:
+`ConvertAnthropicBetaToOpenAIRequest` is refuted by the search and confirmed by the replay stage:
 tool_use ids of 43 to 51 characters reach the assistant `tool_calls[].id`
 untruncated while the tool-result side is truncated to 40 (tingly-box
 issue #1924).
@@ -388,11 +396,11 @@ reuse it. What is modelled so far is in
 ```
 cmd/go2lean/           CLI
 internal/contract/     shared JSON records and the workspace layout
-internal/frontend/     M1 frontends: gossa (go/ssa), llvm (go-llvm, -tags llvm18)
+internal/frontend/     compile frontends: gossa (go/ssa), llvm (go-llvm, -tags llvm18)
 internal/ir, ssaout/   program representation, validation, Lean printer
-internal/constraint/   M2 core: property templates and engine runners
-internal/agent/        M2 agent: LLM interface, Claude, mock, prompts, loop
-internal/poc/          M3: harness generation, execution, verdicts
+internal/constraint/   spec & search: property templates and engine runners
+internal/agent/        spec-writing agent: LLM interface, Claude, mock, prompts, loop
+internal/poc/          replay: harness generation, execution, verdicts
 internal/llvmhunt/     the LLVM line: model, search, C replay under ASan/UBSan
 internal/pipeline/     the steps the CLI and the agent share
 lean/                  Lean 4 project: SSA core, GoSSA dialect, search engines
@@ -413,7 +421,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ Maps, interfaces, closures, function values, methods
 - ✅ Standard library and SDK models (list above); dependencies from source (`-deps`)
 - ✅ Engines: random search, exhaustive bounded certificates
-- ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
+- ✅ Replay stage: every counterexample replayed as a `go test`, verdict with PoC
 - ✅ Spec-in-Go properties and probes (model value vs real value)
 - ✅ LLM agent: proposes specs, runs them, reports
 - ✅ Regression gate in CI (199 properties); benchmark of hand-found bugs (34/34)

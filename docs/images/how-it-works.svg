@@ -85,9 +85,9 @@
     </g>
     <g text-anchor="middle" font-size="16" fill="#78786c">
       <text x="150" y="403">Target functions</text>
-      <text x="440" y="403">M1 · compile</text>
-      <text x="730" y="403">M2 · hunt</text>
-      <text x="1020" y="403">M3 · go test</text>
+      <text x="440" y="403">Compile stage</text>
+      <text x="730" y="403">Spec &amp; search stage</text>
+      <text x="1020" y="403">Replay stage</text>
     </g>
     <path d="M54 427H1146" stroke="#dedfd3"/>
     <text x="54" y="458" font-size="14" fill="#78786c">No counterexample found ≠ proved correct</text>
