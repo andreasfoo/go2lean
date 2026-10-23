@@ -1,7 +1,9 @@
 # Concurrency in the model (C1)
 
 Status: design, 2026-10-23. Nothing below is built yet; this page is the
-plan the code follows, and it is updated as parts land.
+plan the code follows, and it is updated as parts land. What other
+projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
+[related-work.md](related-work.md).
 
 ## Why
 
