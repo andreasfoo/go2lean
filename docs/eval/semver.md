@@ -221,3 +221,42 @@ The agent's specs, its report and the fuzz wrappers are in
 6. Sequence specs over `[]uint64` and specs over `*Version` cannot be
    handed to Go's fuzzer as they are; an export to fuzz targets would
    need a byte decoding like the one used above.
+
+## Rerun after the fixes (not part of the frozen run)
+
+The tool issues above, fixed one at a time afterwards (go2lean `26c79f7`
+to the commit that adds this section), then the same target and the
+agent's same round-1 specs run again (no report round). Numbers are not
+comparable to the frozen run's as a measurement: the tool was changed
+after looking at this target.
+
+Fixes, each generic and covered by an example package and the regression
+gate: stores `init` functions make on every path count as initializers
+(issue 1); constructor wrappers read a value receiver only after the
+constructor's error check (a model bug: every value-receiver method of a
+type whose constructor returns an error got a spurious nil dereference);
+`fmt.Errorf` sentinels; string ordering; operator tables of functions;
+the `-deps` hint only for non-standard-library callees (issue 2); the
+report round gets the spec file and mutation scores (issue 4); the
+standard-library packages `strings`, `bytes`, `strconv` translated from
+their source; `fmt.Fprintf` into a buffer; `regexp` `FindAll*`; and
+`%d` of unsigned integers (the hand-written `Sprintf` model printed them
+signed: a wrong value, not a havoc one).
+
+| | frozen run | after the fixes |
+|---|---|---|
+| A: templates, confirmed / spurious | 8 / 34 | 10 / 0 |
+| B: agent specs, confirmed / spurious / no counterexample | 1 / 10 / 10 | 3 / 0 / 18 |
+
+The two new template results are no bugs (`IncMajor` panics on overflow,
+as documented; `constraint.check` on a receiver built field by field).
+The two new agent results are bug 3 (`!=*`), which only Go's fuzzer had
+found in the frozen run: with the model complete, go2lean's own search
+finds every violation the fuzzer found on the same specs except the
+by-design `~0.0.0` one (`SeqTildeMatchesDocumentedRange` held, and the
+mutation check scores it 0 of 24, so it checked nothing in the model: a
+lead, not yet followed).
+
+Mutation scores of the 18 specs that held: 6 score 0 (`SeqCaret…`,
+`SeqTilde…`, `SeqValidateAgreesWithCheck`, and the JSON, text and
+`Value`/`Scan` round trips), the other 12 from 2 to 7 kills.

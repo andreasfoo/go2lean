@@ -455,7 +455,9 @@ inductive Op where
   | mapNext (zeroK zeroV : Val)
   /-- A method of a `*regexp.Regexp` compiled from a constant pattern, run
   on a string: kind 0 MatchString (bool), 1 FindStringSubmatch ([]string,
-  nil without a match), 2 FindString (string), 3 FindStringIndex ([]int). -/
+  nil without a match), 2 FindString (string), 3 FindStringIndex ([]int);
+  with a second argument `n`, 4 FindAllString, 5 FindAllStringSubmatch,
+  6 FindAllStringIndex (see `reAll`). -/
   | reFind (prog : List ReInst) (start ncap kind : Nat)
   /-- `reFind` on a regexp value (`.boxed _ (.int _ id)`): the program of
   `id` among these (id, program, start, ncap). -/
@@ -824,31 +826,37 @@ def hexDigits (x : List Nat) : List Nat :=
 
 /-- The bytes `%v` (and `%s`, `%d`, `%t`, and `%x` of a string or a byte
 slice, whose boxed type tag is `bytesTag`) prints for a value the program
-boxed, or `none`. Integers print signed: the model does not keep the
-signedness of a boxed integer, so a large unsigned value would print
-wrong; formats of those are rare in the code this models. -/
-def fmtArg (heap : Heap Val) (bytesTag verb : Nat) : Val → Option (List Nat)
+boxed, or `none`. An integer whose type tag is in `unsigned` (the frontend
+lists the unsigned integer types the program boxes) prints unsigned, any
+other signed. -/
+def fmtArg (heap : Heap Val) (bytesTag verb : Nat) (unsigned : List Nat := []) : Val → Option (List Nat)
   | .boxed _ (.str r o l) =>
     if verb == 115 || verb == 118 then strBytes heap (.str r o l)
     else if verb == 120 then hexDigits <$> strBytes heap (.str r o l) else none
   | .boxed t (.slice r o l _) =>
     if verb == 120 && t == bytesTag then hexDigits <$> strBytes heap (.str r o l) else none
-  | .boxed _ (.int _ v) => if verb == 100 || verb == 118 then some (itoaBytes v.toInt) else none
+  | .boxed t (.int _ v) =>
+    if verb == 100 || verb == 118 then
+      some (itoaBytes (if unsigned.contains t then (v.toNat : Int) else v.toInt))
+    else none
   | .boxed _ (.bool b) =>
     if verb == 116 || verb == 118 then some (if b then [116, 114, 117, 101] else [102, 97, 108, 115, 101]) else none
   | _ => none
 
+/-- The naturals of a constant array of integers (type tags). -/
+def natsOf (vs : List Val) : List Nat := vs.filterMap fun | .int _ v => some v.toNat | _ => none
+
 /-- Format `fmt` with `args` (see `Op.sprintf`). -/
-def sprintfBytes (heap : Heap Val) (bytesTag : Nat) : List Nat → List Val → Option (List Nat)
+def sprintfBytes (heap : Heap Val) (bytesTag : Nat) (unsigned : List Nat := []) : List Nat → List Val → Option (List Nat)
   | [], [] => some []
   | [], _ :: _ => none -- Go appends %!(EXTRA ...): not modelled
-  | 37 :: 37 :: rest, args => (37 :: ·) <$> sprintfBytes heap bytesTag rest args
+  | 37 :: 37 :: rest, args => (37 :: ·) <$> sprintfBytes heap bytesTag unsigned rest args
   | 37 :: verb :: rest, a :: args =>
-    match fmtArg heap bytesTag verb a, sprintfBytes heap bytesTag rest args with
+    match fmtArg heap bytesTag verb unsigned a, sprintfBytes heap bytesTag unsigned rest args with
     | some x, some y => some (x ++ y)
     | _, _ => none
   | 37 :: _, _ => none -- a missing argument or a bare % at the end
-  | c :: rest, args => (c :: ·) <$> sprintfBytes heap bytesTag rest args
+  | c :: rest, args => (c :: ·) <$> sprintfBytes heap bytesTag unsigned rest args
 
 /-- Key equality for maps: strings by their bytes, the rest by `eqVal`. -/
 def keyEq (heap : Heap Val) (a b : Val) : Bool :=
@@ -1308,7 +1316,7 @@ def reBT (prog : Array ReInst) (bs : Array Nat) : Nat → Nat → Nat → Array 
 /-- Unanchored search, as Go's regexp: start positions left to right (by
 rune), the first that matches. The capture slots of the match (group 0 is
 the whole match), `some none` without a match, `none` out of fuel. -/
-def reSearch (prog : Array ReInst) (start ncap : Nat) (bs : Array Nat) : Option (Option (Array (Option Nat))) :=
+def reSearch (prog : Array ReInst) (start ncap : Nat) (bs : Array Nat) (from_ : Nat := 0) : Option (Option (Array (Option Nat))) :=
   let fuel := prog.size * (bs.size + 1) + 2
   let rec go : Nat → Nat → Array Bool → Option (Option (Array (Option Nat)))
     | 0, _, _ => some none
@@ -1322,7 +1330,31 @@ def reSearch (prog : Array ReInst) (start ncap : Nat) (bs : Array Nat) : Option 
       | some (none, seen) =>
         if pos ≥ bs.size then some none
         else go k (pos + (decodeRuneA bs pos).2) seen
-  go (bs.size + 2) 0 (Array.replicate (prog.size * (bs.size + 1)) false)
+  go (bs.size + 2) from_ (Array.replicate (prog.size * (bs.size + 1)) false)
+
+/-- Go's `allMatches`: successive non-overlapping matches left to right,
+at most `n` (all when `n` is negative); an empty match right where the
+previous match ended is skipped, and after an empty match the search
+moves on one rune. Each match is its capture slots; `none`: out of fuel. -/
+def reAll (prog : Array ReInst) (start ncap : Nat) (bs : Array Nat) (n : Int) : Option (List (Array (Option Nat))) :=
+  let rec go : Nat → Nat → Option Nat → Nat → Option (List (Array (Option Nat)))
+    | 0, _, _, _ => some []
+    | fuel + 1, pos, prevEnd, count =>
+      if (n ≥ 0 && count ≥ n.toNat) || pos > bs.size then some [] else
+      match reSearch prog start ncap bs pos with
+      | none => none
+      | some none => some []
+      | some (some caps) =>
+        match caps[0]?, caps[1]? with
+        | some (some a), some (some b) =>
+          let empty := b == pos
+          let accept := !(empty && prevEnd == some a)
+          let next := if empty then (if pos < bs.size then pos + (decodeRuneA bs pos).2 else pos + 1) else b
+          match go fuel next (some b) (if accept then count + 1 else count) with
+          | none => none
+          | some rest => some (if accept then caps :: rest else rest)
+        | _, _ => none
+  go (bs.size + 2) 0 none 0
 
 /-- `bytes` as a string, invalid UTF-8 sequences replaced by U+FFFD. -/
 def utf8Lossy (bytes : List Nat) : String := Id.run do
@@ -2415,6 +2447,39 @@ def reFindRun (heap : Heap Val) (prog : List ReInst) (start ncap kind : Nat) (s 
       | _, _ => .panic .modelStuck
   | _, _ => .panic .modelStuck
 
+/-- The FindAll methods (`reFind` kinds 4 FindAllString, 5
+FindAllStringSubmatch, 6 FindAllStringIndex) on `s` with limit `n`: nil
+without a match, as Go returns. -/
+def reFindAllRun (heap : Heap Val) (prog : List ReInst) (start ncap kind : Nat) (s : Val) (n : Int) : Res (Val × Heap Val) :=
+  match s, strBytes heap s with
+  | .str ref off _, some x =>
+    let sub (a b : Nat) : Val := if b ≤ a then .str 0 0#64 0#64 else .str ref (off + BitVec.ofNat 64 a) (BitVec.ofNat 64 (b - a))
+    let slot (caps : Array (Option Nat)) (g : Nat) : Val :=
+      match caps[2 * g]?, caps[2 * g + 1]? with
+      | some (some a), some (some b) => sub a b
+      | _, _ => .str 0 0#64 0#64
+    let sliceOf (heap : Heap Val) (vs : List Val) : Val × Heap Val :=
+      let (p, heap) := heapAlloc heap (.arr vs)
+      match p with
+      | .ptr r _ => (.slice r 0#64 (BitVec.ofNat 64 vs.length) (BitVec.ofNat 64 vs.length), heap)
+      | _ => (.unit, heap)
+    match reAll prog.toArray start ncap x.toArray n with
+    | none => .panic .modelStuck
+    | some [] => .ok (.slice 0 0#64 0#64 0#64, heap)
+    | some ms =>
+      let (elems, heap) := ms.foldl (fun (acc, heap) caps =>
+        match kind with
+        | 4 => (acc ++ [slot caps 0], heap)
+        | 5 =>
+          let (v, heap) := sliceOf heap ((List.range (ncap / 2)).map (slot caps))
+          (acc ++ [v], heap)
+        | _ =>
+          let pos (i : Nat) : Val := .int 64 (BitVec.ofNat 64 ((caps[i]?).bind id |>.getD 0))
+          let (v, heap) := sliceOf heap [pos 0, pos 1]
+          (acc ++ [v], heap)) ([], heap)
+      .ok (sliceOf heap elems)
+  | _, _ => .panic .modelStuck
+
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
@@ -2568,14 +2633,14 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | some r => .ok (.bool r, heap) | none => .panic .modelStuck
   | .neDeep, [a, b] => match eqDeep heap a b with
     | some r => .ok (.bool !r, heap) | none => .panic .modelStuck
-  | .sprintfOk, [f, args, .int _ bt] =>
+  | .sprintfOk, [f, args, .int _ bt, .arr us] =>
     match strBytes heap f, sliceElems heap args with
-    | some fb, some xs => .ok (.bool ((sprintfBytes heap bt.toNat fb xs).isSome), heap)
+    | some fb, some xs => .ok (.bool ((sprintfBytes heap bt.toNat (natsOf us) fb xs).isSome), heap)
     | _, _ => .ok (.bool false, heap)
-  | .sprintf, [f, args, .int _ bt] =>
+  | .sprintf, [f, args, .int _ bt, .arr us] =>
     match strBytes heap f, sliceElems heap args with
     | some fb, some xs =>
-      match sprintfBytes heap bt.toNat fb xs with
+      match sprintfBytes heap bt.toNat (natsOf us) fb xs with
       | some r => if r.length > strLimit then .panic .modelStuck else .ok (strAlloc heap r)
       | none => .panic .modelStuck
     | _, _ => .panic .modelStuck
@@ -2773,9 +2838,14 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
         else .ok (strAlloc heap ((List.replicate n.toNat x).flatten))
       | none => .panic .modelStuck
   | .reFind prog start ncap kind, [s] => reFindRun heap prog start ncap kind s
+  | .reFind prog start ncap kind, [s, .int _ n] => reFindAllRun heap prog start ncap kind s n.toInt
   | .reFindIn progs kind, [.boxed _ (.int _ id), s] =>
     match progs.find? (fun (i, _) => i == id.toNat) with
     | some (_, prog, start, ncap) => reFindRun heap prog start ncap kind s
+    | none => .panic .modelStuck
+  | .reFindIn progs kind, [.boxed _ (.int _ id), s, .int _ n] =>
+    match progs.find? (fun (i, _) => i == id.toNat) with
+    | some (_, prog, start, ncap) => reFindAllRun heap prog start ncap kind s n.toInt
     | none => .panic .modelStuck
   | .strSplit, [s, sep] =>
     match strBytes heap s, strBytes heap sep with

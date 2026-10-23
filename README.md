@@ -307,7 +307,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
 - ✅ Spec-in-Go properties and probes (model value vs real value)
 - ✅ LLM agent: proposes specs, runs them, reports
-- ✅ Regression gate in CI (180 properties); benchmark of hand-found bugs (34/34)
+- ✅ Regression gate in CI (183 properties); benchmark of hand-found bugs (34/34)
 - ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
 - ✅ Proof prototype: a postcondition proved for all 64-bit inputs by hand (`lean/Proofs`)
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))

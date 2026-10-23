@@ -115,3 +115,27 @@ func SpecDotAtDiff(i int, ret string) bool {
 	go2leanProbe("re", ret)
 	return false
 }
+
+// go2lean:spec AllStar
+func SpecAllStarDiff(s string, ret string) bool {
+	go2leanProbe("re", ret)
+	return false
+}
+
+// go2lean:spec AllNot
+func SpecAllNotDiff(s string, ret string) bool {
+	go2leanProbe("re", ret)
+	return false
+}
+
+// go2lean:spec AllMail
+func SpecAllMailDiff(s string, ret string) bool {
+	go2leanProbe("re", ret)
+	return false
+}
+
+// go2lean:spec AllLines
+func SpecAllLinesDiff(s string, ret string) bool {
+	go2leanProbe("re", ret)
+	return false
+}

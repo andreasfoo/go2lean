@@ -4,6 +4,7 @@
 package builder
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -58,4 +59,30 @@ func Tag(b *strings.Builder, name string) {
 // SpecTagLen: the builder grew by len(name)+2 (it starts empty).
 func SpecTagLen(b *strings.Builder, name string) bool {
 	return b.Len() == len(name)+2
+}
+
+// Version writes "v<major>.<minor>" into a bytes.Buffer with fmt.Fprintf.
+func Version(major, minor uint8) string {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "v%d.%d", major, minor)
+	return buf.String()
+}
+
+// SpecVersionShape: the result starts with "v" and holds one dot.
+func SpecVersionShape(major, minor uint8, ret string) bool {
+	dots := 0
+	for i := 0; i < len(ret); i++ {
+		if ret[i] == '.' {
+			dots++
+		}
+	}
+	return len(ret) >= 4 && ret[0] == 'v' && dots == 1
+}
+
+// Third returns the third digit of n, written with fmt.Fprintf into a
+// strings.Builder. Bug: n below 100 has no third digit.
+func Third(n uint8) byte {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%d", n)
+	return sb.String()[2]
 }

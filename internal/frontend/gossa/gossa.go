@@ -238,6 +238,21 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 						}
 					}
 				}
+				// fmt.Fprintf into a *bytes.Buffer is lowered to its
+				// WriteString (fprintf).
+				if c, ok := in.(*ssa.Call); ok && len(c.Call.Args) == 3 {
+					if fn := c.Call.StaticCallee(); fn != nil && fn.String() == "fmt.Fprintf" {
+						if mi, ok := c.Call.Args[0].(*ssa.MakeInterface); ok {
+							if pt, ok := mi.X.Type().(*types.Pointer); ok {
+								if n, ok := pt.Elem().(*types.Named); ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "bytes" && n.Obj().Name() == "Buffer" {
+									if m := f.Prog.LookupMethod(pt, n.Obj().Pkg(), "WriteString"); m != nil {
+										refs = append(refs, m)
+									}
+								}
+							}
+						}
+					}
+				}
 				// A boxed value: the methods of its type some call on an
 				// interface may reach.
 				if mi, ok := in.(*ssa.MakeInterface); ok {
@@ -888,6 +903,9 @@ func invokedNames(sprog *ssa.Program) map[string]bool {
 // modelled from their Go source under -deps, like any dependency, instead
 // of being unmodelled calls: their code only uses what the model covers.
 var modelledStdlib = map[string]bool{
+	"strings":       true,
+	"bytes":         true,
+	"strconv":       true,
 	"net/url":       true,
 	"unicode/utf8":  true,
 	"unicode/utf16": true,
@@ -2680,6 +2698,11 @@ func (t *fnState) call(x *ssa.Call) error {
 	if callee != nil && callee.String() == "fmt.Sprintf" && len(x.Call.Args) == 2 {
 		return t.sprintf(x)
 	}
+	if callee != nil && callee.String() == "fmt.Fprintf" && len(x.Call.Args) == 3 {
+		if done, err := t.fprintf(x); done || err != nil {
+			return err
+		}
+	}
 	if callee != nil && callee.String() == "encoding/json.Unmarshal" && len(x.Call.Args) == 2 {
 		if done, err := t.jsonUnmarshal(x); done || err != nil {
 			return err
@@ -3263,11 +3286,17 @@ func (t *fnState) parseFloat(x *ssa.Call) error {
 }
 
 func (t *fnState) sprintf(x *ssa.Call) error {
-	f, err := t.val(x.Call.Args[0])
+	return t.sprintfTo(t.def(x), x.Call.Args[0], x.Call.Args[1], "call fmt.Sprintf")
+}
+
+// sprintfTo binds dst to fmt.Sprintf(format, args...) (args the variadic
+// slice), havoc when the model cannot format them.
+func (t *fnState) sprintfTo(dst ir.Var, format, argSlice ssa.Value, site string) error {
+	f, err := t.val(format)
 	if err != nil {
 		return err
 	}
-	args, err := t.val(x.Call.Args[1])
+	args, err := t.val(argSlice)
 	if err != nil {
 		return err
 	}
@@ -3275,9 +3304,18 @@ func (t *fnState) sprintf(x *ssa.Call) error {
 	// (the tag of []byte as the program spells it: byte, not uint8).
 	bytesTag := t.fresh()
 	t.emit(ir.Instr{Dst: bytesTag, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: fmt.Sprint(typeTag(types.NewSlice(types.Universe.Lookup("byte").Type())))}}})
-	dst := t.def(x)
+	// %d and %v print unsigned for the unsigned integer types the
+	// program boxes (the dialect knows a boxed value by its type tag only).
+	var us []ir.Val
+	for _, bt := range t.prog.boxed {
+		if b, ok := bt.Underlying().(*types.Basic); ok && b.Info()&types.IsUnsigned != 0 {
+			us = append(us, ir.IntVal{Width: 64, Bits: fmt.Sprint(typeTag(bt))})
+		}
+	}
+	unsigned := t.fresh()
+	t.emit(ir.Instr{Dst: unsigned, Op: ir.Const{V: ir.ArrVal{Elems: us}}})
 	ok := t.fresh()
-	t.emit(ir.Instr{Dst: ok, Op: ir.Simple("sprintfOk"), Args: []ir.Var{f, args, bytesTag}})
+	t.emit(ir.Instr{Dst: ok, Op: ir.Simple("sprintfOk"), Args: []ir.Var{f, args, bytesTag, unsigned}})
 	yes := len(t.out.Blocks)
 	no, join := yes+1, yes+2
 	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: ok, T: yes, F: no}
@@ -3287,15 +3325,59 @@ func (t *fnState) sprintf(x *ssa.Call) error {
 		ir.Block{Name: name + ".sprintf-unknown"},
 		ir.Block{Name: name + ".sprintf-join"})
 	t.cur = &t.out.Blocks[yes]
-	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("sprintf"), Args: []ir.Var{f, args, bytesTag}})
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("sprintf"), Args: []ir.Var{f, args, bytesTag, unsigned}})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[no]
-	if err := t.havocInto(dst, x.Type(), t.f.Name()+": call fmt.Sprintf", "unmodeled-call", ""); err != nil {
+	if err := t.havocInto(dst, types.Typ[types.String], t.f.Name()+": "+site, "unmodeled-call", ""); err != nil {
 		return err
 	}
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]
 	return nil
+}
+
+// fprintf lowers fmt.Fprintf into a *strings.Builder or a *bytes.Buffer:
+// the text fmt.Sprintf would make, written with the writer's WriteString
+// (which returns what Fprintf does: the byte count and a nil error). fmt
+// itself is not modelled (it formats through reflect); other writers stay
+// unmodelled calls.
+func (t *fnState) fprintf(x *ssa.Call) (bool, error) {
+	mi, ok := x.Call.Args[0].(*ssa.MakeInterface)
+	if !ok {
+		return false, nil
+	}
+	pt, ok := mi.X.Type().(*types.Pointer)
+	if !ok {
+		return false, nil
+	}
+	var xr contract.XCall
+	builder := isStringsBuilder(pt.Elem())
+	if !builder {
+		n, ok := pt.Elem().(*types.Named)
+		if !ok || n.Obj().Pkg() == nil || n.Obj().Pkg().Path() != "bytes" || n.Obj().Name() != "Buffer" {
+			return false, nil
+		}
+		// The model of bytes.Buffer is its source (-deps).
+		if xr, ok = t.prog.xrefs["(*bytes.Buffer).WriteString"]; !ok || xr.Package == t.prog.prog.Package {
+			return false, nil
+		}
+	}
+	w, err := t.val(mi.X)
+	if err != nil {
+		return true, err
+	}
+	s := t.fresh()
+	if err := t.sprintfTo(s, x.Call.Args[1], x.Call.Args[2], "call fmt.Fprintf"); err != nil {
+		return true, err
+	}
+	if builder {
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("sbWriteString"), Args: []ir.Var{w, s}})
+		return true, nil
+	}
+	if !slices.Contains(t.out.XCalls, xr) {
+		t.out.XCalls = append(t.out.XCalls, xr)
+	}
+	return true, t.emitCallArgs(x, ir.Term{Kind: ir.TermXCall, Callee: xr.ID, CalleePkg: xr.Package}, "(*bytes.Buffer).WriteString", []ir.Var{w, s})
 }
 
 // ifaceAssert lowers x.(I) for an interface I: a value the model boxed
@@ -3378,7 +3460,8 @@ func (t *fnState) invoke(x *ssa.Call) (bool, error) {
 // dialect's matcher, which runs the program regexp/syntax compiles the
 // pattern to (Go's own instructions and leftmost-first semantics).
 func (t *fnState) regexpCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
-	kinds := map[string]int{"MatchString": 0, "FindStringSubmatch": 1, "FindString": 2, "FindStringIndex": 3}
+	kinds := map[string]int{"MatchString": 0, "FindStringSubmatch": 1, "FindString": 2, "FindStringIndex": 3,
+		"FindAllString": 4, "FindAllStringSubmatch": 5, "FindAllStringIndex": 6}
 	var pat string
 	var subject ssa.Value
 	pkgFunc := false
@@ -3389,7 +3472,7 @@ func (t *fnState) regexpCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 			return false, nil
 		}
 		pat, subject, pkgFunc = constant.StringVal(k.Value), x.Call.Args[1], true
-	case strings.HasPrefix(name, "(*regexp.Regexp).") && len(x.Call.Args) == 2:
+	case strings.HasPrefix(name, "(*regexp.Regexp).") && len(x.Call.Args) == 2+boolInt(strings.Contains(callee.Name(), "All")):
 		if _, ok := kinds[callee.Name()]; !ok {
 			return false, nil
 		}
@@ -3424,7 +3507,15 @@ func (t *fnState) regexpCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 	}
 	prog.Kind = kind
 	if !pkgFunc {
-		t.emit(ir.Instr{Dst: t.def(x), Op: prog, Args: []ir.Var{sv}})
+		args := []ir.Var{sv}
+		if len(x.Call.Args) == 3 { // FindAll*: the limit n
+			nv, err := t.val(x.Call.Args[2])
+			if err != nil {
+				return true, err
+			}
+			args = append(args, nv)
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: prog, Args: args})
 		return true, nil
 	}
 	// regexp.MatchString(pattern, s): (matched, nil) for a valid pattern.
@@ -3434,6 +3525,13 @@ func (t *fnState) regexpCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 	t.emit(ir.Instr{Dst: nilErr, Op: ir.Const{V: ir.ErrVal{}}})
 	t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: []ir.Var{m, nilErr}})
 	return true, nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // regexpSamples writes up to two strings the pattern matches: the
@@ -3700,7 +3798,15 @@ func (t *fnState) regexpDynamic(x *ssa.Call, callee *ssa.Function, kind int) (bo
 	name := t.cur.Name
 	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".re-known"}, ir.Block{Name: name + ".re-unknown"}, ir.Block{Name: name + ".re-join"})
 	t.cur = &t.out.Blocks[yes]
-	t.emit(ir.Instr{Dst: dst, Op: op, Args: []ir.Var{re, sv}})
+	args := []ir.Var{re, sv}
+	if len(x.Call.Args) == 3 { // FindAll*: the limit n
+		nv, err := t.val(x.Call.Args[2])
+		if err != nil {
+			return true, err
+		}
+		args = append(args, nv)
+	}
+	t.emit(ir.Instr{Dst: dst, Op: op, Args: args})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[no]
 	t.issue("%s on a regexp that may not be one of the package's constant patterns is havoc", callee.Name())
@@ -4482,6 +4588,11 @@ func (t *fnState) emitCall(x *ssa.Call, term ir.Term, name string) error {
 		}
 		args = append(args, v)
 	}
+	return t.emitCallArgs(x, term, name, args)
+}
+
+// emitCallArgs is emitCall with the argument variables given.
+func (t *fnState) emitCallArgs(x *ssa.Call, term ir.Term, name string, args []ir.Var) error {
 	dst := t.def(x)
 	next := len(t.out.Blocks)
 	fb := next + 1

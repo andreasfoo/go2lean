@@ -12,6 +12,9 @@ exhausted mut=0/4 builder_parse_specparseemptyfails
 exhausted mut=0/4 builder_parse_specparseerrzero
 exhausted builder_tag_nopanic
 exhausted builder_tag_spectaglen
+confirmed builder_third_nopanic
+exhausted builder_version_nopanic
+exhausted mut=1/1 builder_version_specversionshape
 proved checked_double_nopanic
 confirmed checked_double_specdoublehalves
 proved checked_half_nopanic

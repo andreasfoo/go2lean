@@ -175,3 +175,39 @@ func LinesAt(i int) string { return Lines(corpus(i)) }
 func StarAt(i int) string  { return Star(corpus(i)) }
 func NotAt(i int) string   { return Not(corpus(i)) }
 func DotAt(i int) string   { return Dot(corpus(i)) }
+
+// showAll renders the matches of a FindAll method.
+func showAll(ms []string) string {
+	if ms == nil {
+		return "nil"
+	}
+	return strconv.Itoa(len(ms)) + ":" + strings.Join(ms, ",")
+}
+
+func AllStar(s string) string { return showAll(reStar.FindAllString(s, -1)) }
+
+func AllNot(s string) string { return showAll(reNot.FindAllString(s, 2)) }
+
+func AllMail(s string) string {
+	ms := reMail.FindAllStringSubmatch(s, -1)
+	if ms == nil {
+		return "nil"
+	}
+	var parts []string
+	for _, m := range ms {
+		parts = append(parts, strings.Join(m, "/"))
+	}
+	return strconv.Itoa(len(ms)) + ":" + strings.Join(parts, ",")
+}
+
+func AllLines(s string) string {
+	ix := reLines.FindAllStringIndex(s, -1)
+	if ix == nil {
+		return "nil"
+	}
+	var parts []string
+	for _, p := range ix {
+		parts = append(parts, strconv.Itoa(p[0])+"-"+strconv.Itoa(p[1]))
+	}
+	return strings.Join(parts, ",")
+}
