@@ -55,6 +55,10 @@ func term(frontend string, t ir.Term) string {
 		return fmt.Sprintf(".callv %d %s %d %d %s %d", t.FV, vars(t.CArgs), t.Dst, t.Next, vars(t.NArgs), t.Fallback)
 	case ir.TermXCall:
 		return fmt.Sprintf(".xcall %q %d %s %d %d %s %d", RegistryKey(frontend, t.CalleePkg), t.Callee, vars(t.CArgs), t.Dst, t.Next, vars(t.NArgs), t.Fallback)
+	case ir.TermSpawn:
+		return fmt.Sprintf(".spawn %d %s %d", t.FV, vars(t.CArgs), t.Next)
+	case ir.TermSync:
+		return fmt.Sprintf(".sync %s %s %d %d", t.Sync.Lean(), vars(t.CArgs), t.Dst, t.Next)
 	}
 	panic("unknown terminator")
 }
@@ -233,7 +237,11 @@ func Print(p *ir.Prog, module string) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("  ] }\n\n")
+		if f.Sync {
+			b.WriteString("  ],\n  sync := true }\n\n")
+		} else {
+			b.WriteString("  ] }\n\n")
+		}
 	}
 	names := make([]string, len(p.Funcs))
 	for i := range p.Funcs {
@@ -243,8 +251,12 @@ func Print(p *ir.Prog, module string) string {
 	for i, w := range p.HavocWidths {
 		widths[i] = fmt.Sprint(w)
 	}
-	fmt.Fprintf(&b, "def prog : GoSSA.Prog := { funcs := #[%s], havocWidths := #[%s] }\n\n",
-		strings.Join(names, ", "), strings.Join(widths, ", "))
+	sched := ""
+	if p.HasSched {
+		sched = fmt.Sprintf(", schedSite := some %d", p.SchedSite)
+	}
+	fmt.Fprintf(&b, "def prog : GoSSA.Prog := { funcs := #[%s], havocWidths := #[%s]%s }\n\n",
+		strings.Join(names, ", "), strings.Join(widths, ", "), sched)
 	fmt.Fprintf(&b, "end %s\n", module)
 	return b.String()
 }

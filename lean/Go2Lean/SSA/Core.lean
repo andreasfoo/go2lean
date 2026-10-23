@@ -35,6 +35,18 @@ inductive PanicKind where
   /-- Undefined behaviour of a C/LLVM program that is not one of the kinds
   above (signed overflow, a poison branch condition, `unreachable`). -/
   | undefinedBehavior
+  /-- A send on a closed channel, a close of a closed or nil channel. -/
+  | closedChannel
+  /-- A fatal error of the `sync` package: unlock of an unlocked mutex,
+  `RUnlock` without a reader. Not recoverable in Go. -/
+  | syncFatal
+  /-- The function under test is blocked and no goroutine can move: Go's
+  "all goroutines are asleep - deadlock!". Reported by the concurrent
+  machine like a panic. -/
+  | deadlock
+  /-- The function under test returned, and a goroutine it started is
+  blocked with no goroutine left to unblock it. -/
+  | goroutineLeak
   | other
   /-- Not a Go panic: the model got stuck (ill-typed operands, missing block).
   Signals a frontend bug; M3 reports it as inconclusive. -/
@@ -58,6 +70,10 @@ def PanicKind.tag : PanicKind → String
   | .nilMapWrite => "nil_map_write"
   | .explicit => "explicit"
   | .undefinedBehavior => "undefined_behavior"
+  | .closedChannel => "closed_channel"
+  | .syncFatal => "sync_fatal"
+  | .deadlock => "deadlock"
+  | .goroutineLeak => "goroutine_leak"
   | .other => "other"
   | .modelStuck => "model_stuck"
 
@@ -118,6 +134,34 @@ inductive Instr (Op : Type) where
   | assume (note : String)
   deriving Repr
 
+/-- A synchronisation operation: a scheduling point of the concurrent
+machine (`Go2Lean.GoConc`). Its arguments are the term's variables. -/
+inductive SyncOp where
+  /-- `[ch, v]` -/
+  | send
+  /-- `[ch]`: the value, or with `withOk` the pair (value, ok). -/
+  | recv (withOk : Bool)
+  /-- `[ch]` -/
+  | close
+  /-- One case per entry, true for a send; the arguments are each case's
+  channel, then its value for a send. The result is go/ssa's tuple (index,
+  recvOk, the values of the receive cases); index -1 is the default case,
+  present when `blocking` is false. -/
+  | select (sends : List Bool) (blocking : Bool)
+  /-- `[ptr]` to a `sync.Mutex`; `tryLock` yields a bool. -/
+  | lock | unlock | tryLock
+  /-- `[ptr]` to a `sync.RWMutex`: the writer side, then the reader side. -/
+  | wLock | wUnlock | rLock | rUnlock
+  /-- `wgAdd` `[ptr, delta]`, `wgWait` `[ptr]` on a `sync.WaitGroup`. -/
+  | wgAdd | wgWait
+  /-- `[ptr]` to a `sync.Once`: true when this caller runs the function (it
+  then sets the state done with the `onceExit` op); blocks while another
+  caller runs it. -/
+  | onceEnter
+  /-- `time.Sleep`, `runtime.Gosched`: any goroutine may run next. -/
+  | yield
+  deriving Repr, DecidableEq
+
 inductive Term where
   | ret (v : Var)
   | jump (b : BlockId) (args : List Var)
@@ -136,6 +180,10 @@ inductive Term where
   its captured values before `args`; a nil func panics, and a func value
   the model knows nothing about takes the fallback. -/
   | callv (fv : Var) (args : List Var) (dst : Var) (next : BlockId) (nargs : List Var) (fb : BlockId)
+  /-- `go fv(args)`, then `jump next`. Only the concurrent machine runs it. -/
+  | spawn (fv : Var) (args : List Var) (next : BlockId)
+  /-- `dst := op args`, then `jump next`. Only the concurrent machine runs it. -/
+  | sync (op : SyncOp) (args : List Var) (dst : Var) (next : BlockId)
   deriving Repr
 
 structure Block (Op : Type) where
@@ -153,6 +201,10 @@ structure Func (Op : Type) where
   nvals : Nat
   entry : BlockId
   blocks : Array (Block Op)
+  /-- It can reach a synchronisation operation (`spawn`, `sync`): the
+  concurrent machine gives its calls frames of their own; a call of any
+  other function runs to its end in one step. -/
+  sync : Bool := false
   deriving Repr
 
 structure Prog (Op : Type) where
@@ -162,6 +214,10 @@ structure Prog (Op : Type) where
   /-- For a program the driver linked from several models: the model and
   local index each havoc site came from (empty for a single model). -/
   siteOrigin : Array (String × Nat) := #[]
+  /-- The havoc site the concurrent machine reads its schedule from (which
+  goroutine moves next, which ready `select` case fires); none for a
+  program without concurrency. -/
+  schedSite : Option Nat := none
   deriving Repr
 
 /-- Havoc oracle: site → iteration → value. -/
@@ -310,6 +366,9 @@ def runBlock (p : Prog Op) (or : Oracle) (h : Havoc Val) (fn : Func Op) (bid : B
                 runBlock p or h fn fb (enter fn fb env []) (s''.assume (stuckCallNote p f)) fuel
               else (.panic k, s')
             | (.outOfFuel, s') => (.outOfFuel, s')
+        | .spawn .. | .sync .. =>
+          -- Concurrency needs the machine; run alone, the function is stuck.
+          (.panic .modelStuck, { s with stuck := s.stuck <|> some s!"{fn.name}: a goroutine or synchronisation operation outside the concurrent machine" })
         | .xcall _ _ _ _ _ _ fb =>
           -- Not linked (the package was not compiled alongside): unmodelled.
           runBlock p or h fn fb (enter fn fb env []) (s.assume "a call into a package not linked into the model: its effects are not modelled") fuel

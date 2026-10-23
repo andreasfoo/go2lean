@@ -3,6 +3,7 @@ package poc
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,12 +26,22 @@ type result struct {
 	Spec     *bool  `json:"spec"`
 	// Stack is the goroutine's stack where the panic was recovered.
 	Stack string `json:"stack"`
+	// Blocked: the call did not return (a concurrency harness); Leaked: the
+	// stack of a goroutine of the package blocked after it returned; Runs:
+	// how many times the call ran.
+	Blocked bool   `json:"blocked"`
+	Leaked  string `json:"leaked"`
+	Runs    int    `json:"runs"`
 	// probes are the GO2LEAN_PROBE lines the test printed.
 	probes []contract.Probe
 }
 
 // Verify realises and runs one counterexample and writes the verdict and the
 // PoC deliverables to the workspace.
+// goCrash matches Go's report of an uncaught panic or a fatal error (a
+// mutex unlocked twice, a deadlock Go detects) on the test binary's stderr.
+var goCrash = regexp.MustCompile(`(?m)^(panic|fatal error): (.*)$`)
+
 // compileErr matches a Go compile error line of the harness file.
 // The column is missing when the compiler reports a long type mismatch.
 var compileErr = regexp.MustCompile(`zz_go2lean_poc_\d+_test\.go:\d+(:\d+)?: .*`)
@@ -57,6 +68,8 @@ type prepared struct {
 	// guessed lists the calls the model does not model whose results
 	// the counterexample's run read (havoc it chose).
 	guessed []string
+	// test: the target is a test function; its t is the harness's own.
+	test bool
 }
 
 // VerifyAll realises the counterexamples, runs those of each package in a
@@ -145,6 +158,16 @@ func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 		return nil, err
 	}
 	p := &prepared{cx: cx, prop: prop, target: target, state: unknownState(ws, cx), guessed: guessedCalls(ws, cx)}
+	for _, prm := range abi.Params {
+		if prm.GoType == "*testing.T" && prm.Kind == contract.ABIOpaque {
+			// Not an input: the model's opaque t is the harness's own t.
+			p.test = true
+			cx2 := *cx
+			cx2.Objects = maps.Clone(cx.Objects)
+			delete(cx2.Objects, prm.Go)
+			p.cx = &cx2
+		}
+	}
 	p.fn, p.imps, err = HarnessFunc(target, prop, cx, abi)
 	if err != nil {
 		p.v = &contract.Verdict{Counterexample: cx.ID, Status: contract.VerdictInconclusive,
@@ -225,6 +248,13 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 		Evidence:       contract.Evidence{Cmd: cmd, Exit: exit, StdoutTail: tail(stdout), StderrTail: tail(stderr)},
 	}
 	res, ok := results[p.cx.ID]
+	if m := goCrash.FindStringSubmatch(stderr); !ok && exit != 0 && m != nil && compileErr.FindString(stderr) == "" {
+		// No result line, and Go's own report of an uncaught panic or a
+		// fatal error: a goroutine the call started panicked (the harness
+		// recovers only the call's own) and ended the process. This run had
+		// the test binary to itself (VerifyAll reruns such tests alone).
+		res, ok = result{Panicked: true, Panic: strings.TrimSuffix(m[2], " [recovered]"), Stack: stderr}, true
+	}
 	if !ok {
 		v.Status = contract.VerdictInconclusive
 		// Tell a harness that did not compile (ours to fix) from a target
@@ -466,6 +496,10 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 		v.Diagnosis = diag
 		return
 	}
+	if model := modelPanic(cx); model == contract.PanicDeadlock || model == contract.PanicGoroutineLeak {
+		judgeConc(v, prop, model, r, diag)
+		return
+	}
 	switch prop.Kind {
 	case contract.KindNoPanic:
 		switch {
@@ -567,6 +601,12 @@ func ClassifyPanic(msg string) contract.PanicKind {
 		return contract.PanicTypeAssertion
 	case strings.Contains(msg, "assignment to entry in nil map"):
 		return contract.PanicNilMapWrite
+	case strings.Contains(msg, "closed channel") || strings.Contains(msg, "close of nil channel"):
+		return contract.PanicClosedChannel
+	case strings.HasPrefix(msg, "sync: "), strings.Contains(msg, "negative WaitGroup counter"):
+		return contract.PanicSyncFatal
+	case strings.Contains(msg, "all goroutines are asleep"):
+		return contract.PanicDeadlock
 	case strings.HasPrefix(msg, "runtime error:"):
 		return contract.PanicOther
 	}
@@ -646,4 +686,52 @@ func panicSite(stack, root string) string {
 		}
 	}
 	return ""
+}
+
+func modelPanic(cx *contract.Counterexample) contract.PanicKind {
+	if cx.ModelOutput == nil {
+		return ""
+	}
+	return cx.ModelOutput.Panic
+}
+
+// judgeConc judges a deadlock or a goroutine leak the model found, from the
+// concurrency harness's runs: the call blocked (a deadlock), a goroutine of
+// the package stayed blocked after it returned (a leak), or neither in
+// every run, which does not refute a schedule-dependent bug: Go's scheduler
+// may never have taken the model's interleaving.
+func judgeConc(v *contract.Verdict, prop *contract.Property, model contract.PanicKind, r result, diag *contract.Diagnosis) {
+	switch {
+	case r.Panicked && model == contract.PanicDeadlock && ClassifyPanic(r.Panic) == contract.PanicDeadlock:
+		// Go's own detector: every goroutine of the test binary blocked.
+		v.Observed["panic"] = r.Panic
+		v.Status, diag = contract.VerdictConfirmed, nil
+	case r.Panicked:
+		v.Status = contract.VerdictInconclusive
+		diag.Reason = "panic_kind_mismatch"
+		diag.Notes = []string{fmt.Sprintf("the model found %s, the real run panicked: %s", model, r.Panic)}
+	case r.Blocked:
+		v.Observed["blocked"] = fmt.Sprintf("the call did not return within 2s (run %d)", r.Runs)
+		if model == contract.PanicDeadlock {
+			v.Status, diag = contract.VerdictConfirmed, nil
+		} else {
+			v.Status = contract.VerdictInconclusive
+			diag.Reason = "panic_kind_mismatch"
+			diag.Notes = []string{"the model found a goroutine leak; the real call blocked"}
+		}
+	case r.Leaked != "":
+		v.Observed["leaked"] = tail(r.Leaked)
+		if model == contract.PanicGoroutineLeak {
+			v.Status, diag = contract.VerdictConfirmed, nil
+		} else {
+			v.Status = contract.VerdictInconclusive
+			diag.Reason = "panic_kind_mismatch"
+			diag.Notes = []string{"the model found a deadlock; the real call returned and left a goroutine blocked"}
+		}
+	default:
+		v.Status = contract.VerdictInconclusive
+		diag.Reason = "schedule_not_reproduced"
+		diag.Notes = []string{fmt.Sprintf("no %s in %d real runs; Go's scheduler may not have taken the model's interleaving", model, r.Runs)}
+	}
+	v.Diagnosis = diag
 }

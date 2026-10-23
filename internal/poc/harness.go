@@ -37,6 +37,12 @@ type harnessData struct {
 	// (a constructor-built receiver).
 	Setup    []string
 	SpecCall string // e.g. SpecSum(xs, ret) or ""
+	// Conc: the model found a deadlock or a goroutine leak. The call runs
+	// in a goroutine under a watchdog, ConcRuns times, and after each the
+	// test looks for goroutines of package PkgPath blocked for good.
+	Conc     bool
+	ConcRuns int
+	PkgPath  string
 }
 
 func (d harnessData) RetList() string { return strings.Join(d.Rets, ", ") }
@@ -71,7 +77,90 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 {{- range $i, $r := .Rets}}
 	var {{$r}} {{index $.RetTypes $i}}
 {{- end}}
-	go2leanRes := map[string]any{"panicked": false}
+	go2leanRes := map[string]interface{}{"panicked": false}
+{{- if .Conc}}
+	// A deadlock: the call does not return; a leak: after it returns, a
+	// goroutine of the package stays blocked on a channel or a lock.
+	// The goroutines alive before the first run (another test's leftovers)
+	// do not count.
+	go2leanStacks := func() []string {
+		go2leanBuf := make([]byte, 1<<20)
+		go2leanN := runtime.Stack(go2leanBuf, true)
+		return strings.Split(string(go2leanBuf[:go2leanN]), "\n\n")
+	}
+	go2leanOld := map[string]bool{}
+	for _, go2leanG := range go2leanStacks() {
+		go2leanHdr, _, _ := strings.Cut(go2leanG, " [")
+		go2leanOld[go2leanHdr] = true
+	}
+	go2leanLeaked := func() string {
+		go2leanFound := ""
+		for go2leanW := 0; go2leanW < 20; go2leanW++ {
+			go2leanFound = ""
+			for _, go2leanG := range go2leanStacks() {
+				if !strings.Contains(go2leanG, {{printf "%q" .PkgPath}}+".") || strings.Contains(go2leanG, "TestGo2LeanPoC_") {
+					continue
+				}
+				if go2leanID, _, _ := strings.Cut(go2leanG, " ["); go2leanOld[go2leanID] {
+					continue
+				}
+				go2leanHdr, _, _ := strings.Cut(go2leanG, "\n")
+				for _, go2leanSt := range []string{"[chan send", "[chan receive", "[select", "[sync.Mutex.Lock", "[sync.RWMutex.Lock", "[sync.RWMutex.RLock", "[sync.WaitGroup.Wait", "[semacquire", "[sync.Cond.Wait"} {
+					if strings.Contains(go2leanHdr, go2leanSt) {
+						go2leanFound = go2leanG
+					}
+				}
+			}
+			if go2leanFound == "" {
+				return ""
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return go2leanFound
+	}
+	go2leanRes["blocked"] = false
+	go2leanRes["leaked"] = ""
+	go2leanRes["runs"] = 0
+	for go2leanI := 0; go2leanI < {{.ConcRuns}}; go2leanI++ {
+		go2leanRes["runs"] = go2leanI + 1
+		go2leanDone := make(chan struct{})
+		go func() {
+			defer close(go2leanDone)
+			defer func() {
+				if go2leanR := recover(); go2leanR != nil {
+					go2leanRes["panicked"] = true
+					go2leanRes["panic"] = fmt.Sprint(go2leanR)
+					go2leanRes["stack"] = string(go2leanDebug.Stack())
+				}
+			}()
+{{- range .Setup}}
+			{{.}}
+{{- end}}
+{{- if .Rets}}
+			{{.RetList}} = {{.Func}}({{.Args}})
+{{- else}}
+			{{.Func}}({{.Args}})
+{{- end}}
+		}()
+		select {
+		case <-go2leanDone:
+		case <-time.After(2 * time.Second):
+			go2leanRes["blocked"] = true
+		}
+		if go2leanRes["blocked"].(bool) || go2leanRes["panicked"].(bool) {
+			break
+		}
+		if go2leanL := go2leanLeaked(); go2leanL != "" {
+			go2leanRes["leaked"] = go2leanL
+			break
+		}
+	}
+{{- if .Rets}}
+	if !go2leanRes["blocked"].(bool) {
+		go2leanRes["ret"] = fmt.Sprint({{.RetPrintList}})
+	}
+{{- end}}
+{{- else}}
 	func() {
 		defer func() {
 			if go2leanR := recover(); go2leanR != nil {
@@ -90,6 +179,7 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 		{{.Func}}({{.Args}})
 {{- end}}
 	}()
+{{- end}}
 {{- if .Pre}}
 	go2leanRes["pre"] = {{.Pre}}
 {{- end}}
@@ -102,6 +192,11 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 	fmt.Println("GO2LEAN_RESULT " + string(go2leanB))
 }
 `))
+
+// concRuns is how often the harness repeats a call the model found
+// deadlocking or leaking: Go's scheduler cannot be told to take the model's
+// interleaving, so a schedule-dependent one shows up only by repetition.
+const concRuns = 200
 
 // Harness renders the Go test file for one counterexample.
 func Harness(pkgName string, t *contract.Target, p *contract.Property, cx *contract.Counterexample, abi *contract.ABI) (string, error) {
@@ -244,6 +339,10 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		specArgs := append(append([]string{}, specNames...), d.Rets...)
 		d.SpecCall = fmt.Sprintf("%s(%s)", p.Spec.GoFunc, strings.Join(specArgs, ", "))
 	}
+	if cx.ModelOutput != nil && (cx.ModelOutput.Panic == contract.PanicDeadlock || cx.ModelOutput.Panic == contract.PanicGoroutineLeak) {
+		d.Conc, d.ConcRuns, d.PkgPath = true, concRuns, t.Package
+		d.Imports = append(d.Imports, `"runtime"`, `"strings"`, `"time"`)
+	}
 	var b strings.Builder
 	if err := harnessTmpl.Execute(&b, d); err != nil {
 		return "", nil, err
@@ -277,6 +376,9 @@ func paramDecl(abi *contract.ABI, p contract.ABIParam, cx *contract.Counterexamp
 		// context, where nil would panic in callees the model havoc'd.
 		if p.GoType == "context.Context" {
 			return fmt.Sprintf("%s := context.Background()", p.Go), nil
+		}
+		if p.GoType == "*testing.T" {
+			return fmt.Sprintf("%s := go2leanT", p.Go), nil
 		}
 		return fmt.Sprintf("var %s %s", p.Go, p.GoType), nil
 	case contract.ABIString:

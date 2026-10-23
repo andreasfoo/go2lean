@@ -1,9 +1,82 @@
 # Concurrency in the model (C1)
 
-Status: design, 2026-10-23. Nothing below is built yet; this page is the
-plan the code follows, and it is updated as parts land. What other
+Status, 2026-10-23: the machine, the frontend lowering and the M3 checks
+are built (C1a); `context`, timers, `sync.Cond` and deterministic replay
+are next. "Built" below lists what landed and how it differs from the
+plan; the rest of the page is the plan. What other
 projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 [related-work.md](related-work.md).
+
+## Built (C1a)
+
+- `Go2Lean.GoConc`: the small-step machine below; `Term.spawn` and
+  `Term.sync` in the core; `SyncOp` covers channels (send, receive with or
+  without `ok`, close, `select`), `Mutex`, `RWMutex`, `WaitGroup`, `Once`
+  and a yield (`time.Sleep`, `runtime.Gosched`). The search engines run a
+  function in the machine when it can synchronise (`Func.sync`), else as
+  before. Semantics by construct: [semantics.md §6](semantics.md#6-concurrency).
+- Frontend: `go`, channel operations, `select`, `close`, `len`/`cap` of a
+  channel, the `sync` methods (also deferred), `sync/atomic`'s functions,
+  method values (`go x.run()`), direction-only channel conversions.
+  Package variables holding sync state with no initializer (`var mu
+  sync.Mutex`, a struct embedding one) are cells every goroutine shares
+  (`globalAddr`).
+- End of a run: `deadlock`, `goroutine_leak` (not for a goroutine blocked
+  on a channel the function returns), and the panics `closed_channel`,
+  `sync_fatal`; the report names where each goroutine waits.
+- Targets: `-tests` makes `TestXxx(t *testing.T)` targets, as GoKer's
+  kernels are written; `t` is the harness's own in M3.
+- M3: a deadlock or leak runs the call up to 200 times under a 2-second
+  watchdog, a leak is a goroutine of the package blocked on a channel or
+  lock after the call returned (not one alive before); a panic in a
+  goroutine the call started ends the test binary and is judged from Go's
+  report on stderr.
+- Not as planned: there is no separate `no_block` property; `no_panic`
+  covers deadlocks and leaks (they end the run like a panic). Fuel counts
+  goroutine steps, and the schedule is one havoc site.
+- Ground truth: `examples/conc` (6 planted bugs, 12 correct functions);
+  `scripts/goker.sh` runs GoKer.
+
+### GoKer
+
+`scripts/goker.sh <gobench> <out>` on all 103 kernels (GoBench at
+2e91eb1), each kernel's test function as the target, default search
+budget, 2026-10-23. The kernels are the ground truth: each blocking kernel
+has a blocking bug its test can trigger; most non-blocking ones have a
+data race, which C1 does not model.
+
+| | blocking (68) | non-blocking (35) |
+|---|---|---|
+| bug found by the model, confirmed by `go test` | **35** (10 deadlocks, 25 leaks) | 6 (3 leaks, 2 `closed_channel`, 1 nil dereference) |
+| found by the model, not reproduced by `go test` in 200 runs (`schedule_not_reproduced`, one `panic_kind_mismatch`) | 7 | 1 |
+| found by the model, refuted by `go test` (spurious) | 2 | 3 |
+| model stuck, mostly on a channel the model does not know (`ctx.Done()`, `time.After`, a timer's `C`) | 14 | 2 |
+| nothing found | 10 | 23 (holds) |
+
+So the model reports a blocking bug in 44 of the 68 blocking kernels and
+`go test` confirms 35 (a confirmed finding is the real kernel deadlocking,
+leaking or panicking, not the model). What the rest need:
+
+- `context` and timers (16 stuck, 3 not found: cockroach 10790, 13197,
+  13755, 18101, etcd 5509, 7492, grpc 862, 1275, 3017, hugo 5379, istio
+  17860, 18454, kubernetes 5316, 11298, 70277, moby 17176, 33781 and two
+  non-blocking): the next part of C1.
+- `sync.Cond` (cockroach 16167, kubernetes 58107, moby 29733, 30408).
+- `fmt` calling a `String` method that takes a read lock (cockroach 6181);
+  a goroutine started on an interface method (kubernetes 30872); an
+  external test package, `package x_test` (syncthing 5795).
+- Deterministic replay (C1c) for the 7 the model found and Go's scheduler
+  did not reproduce (cockroach 1462, 3710, 7504, istio 16224, kubernetes
+  62464, moby 27782, serving 2137).
+- The spurious findings rest on what the model does not see: `recover`
+  (etcd 7443 recovers its send on a closed channel), a package variable
+  initialised to `&T{...}` and read as a fresh object per load (hugo 3251),
+  stores to an `int` package variable ignored (etcd 8194), `sync.Cond`
+  (serving 6472), and a data race the model's sequentially consistent
+  steps turn into a panic (kubernetes 13058). M3 rejects each of them.
+
+The split between confirmed and not reproduced moves a little between
+runs: Go's scheduler varies from run to run.
 
 ## Why
 

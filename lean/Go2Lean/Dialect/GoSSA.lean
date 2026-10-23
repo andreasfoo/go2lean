@@ -273,6 +273,18 @@ inductive Op where
   | mkStruct
   /-- `make([]T, len, cap)` filled with `zero`; args `[len, cap]`. -/
   | makeSlice (zero : Val)
+  /-- `make(chan T, cap)`; args `[cap]`. The channel is a heap object
+  (`chanObj`); `zero` is what a receive on a closed channel yields. -/
+  | chanMake (zero : Val)
+  /-- The address of a package variable kept in a cell (one holding
+  synchronisation state): allocated holding `zero` on first use; the
+  directory of cells (key, pointer) lives in heap slot 0, which no pointer
+  reads (`ptr 0` is nil). No args. -/
+  | globalAddr (key : Nat) (zero : Val)
+  /-- `len(ch)`, `cap(ch)`; args `[ch]` (a nil channel has 0 of both). -/
+  | chanLen | chanCap
+  /-- Mark a `sync.Once` done (after its function ran); args `[ptr]`. -/
+  | onceExit
   /-- `append(s, t...)`: writes in place while the capacity allows, else
   copies into a fresh backing array; `zero` pads the new capacity. -/
   | appendSlice (zero : Val)
@@ -542,6 +554,30 @@ def setPath : Val → List Nat → Val → Option Val
   | .arr es, i :: rest, nv =>
     es[i]? >>= fun e => (setPath e rest nv).map fun e' => .arr (es.set i e')
   | _, _, _ => none
+
+-- Channels ---------------------------------------------------------------------
+
+/-- A channel's heap object: capacity, buffered values (oldest first),
+closed flag, and the zero value a receive on a closed channel yields. -/
+def chanObj (cap : BitVec 64) (buf : List Val) (closed : Bool) (zero : Val) : Val :=
+  .structv [.int 64 cap, .arr buf, .bool closed, zero]
+
+/-- The channel `ch` points to: its heap ref, capacity, buffer, closed flag
+and zero value; `none` for anything else (a nil channel included). -/
+def chanGet (heap : Heap Val) (ch : Val) : Option (Nat × BitVec 64 × List Val × Bool × Val) :=
+  match ch with
+  | .ptr ref [] =>
+    if ref = 0 then none else
+    match heap[ref]? with
+    | some (.structv [.int 64 c, .arr buf, .bool cl, z]) => some (ref, c, buf, cl, z)
+    | _ => none
+  | _ => none
+
+/-- A nil channel: blocks forever on send and receive. -/
+def chanIsNil : Val → Bool
+  | .ptr 0 _ => true
+  | .opaqueNil => true
+  | _ => false
 
 /-- Read through a pointer. `ref = 0` is nil. -/
 def heapLoad (heap : Heap Val) : Val → Res Val
@@ -2909,6 +2945,33 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
         .ok (.int 64 (BitVec.ofNat 64 n), heap.set! ref (.arr (writeAt es off.toNat (ts.take n))))
       | _ => .panic .modelStuck
     | _, _ => .panic .modelStuck
+  | .globalAddr key zero, [] =>
+    let dir := match heap[0]? with | some (.arr es) => es | _ => []
+    let found := dir.findSome? fun e => match e with
+      | .tuple [.int _ k, p] => if k.toNat == key then some p else none
+      | _ => none
+    match found with
+    | some p => .ok (p, heap)
+    | none =>
+      let (p, heap) := heapAlloc heap zero
+      .ok (p, heap.set! 0 (.arr (dir ++ [.tuple [.int 64 (BitVec.ofNat 64 key), p]])))
+  | .chanMake zero, [cap] =>
+    match asIndex cap with
+    | some c => if c.slt 0 then .panic .makeSliceLen else .ok (heapAlloc heap (chanObj c [] false zero))
+    | none => .panic .modelStuck
+  | .chanLen, [ch] =>
+    match chanGet heap ch with
+    | some (_, _, buf, _, _) => .ok (.int 64 (BitVec.ofNat 64 buf.length), heap)
+    | none => if chanIsNil ch then .ok (.int 64 0, heap) else .panic .modelStuck
+  | .chanCap, [ch] =>
+    match chanGet heap ch with
+    | some (_, c, _, _, _) => .ok (.int 64 c, heap)
+    | none => if chanIsNil ch then .ok (.int 64 0, heap) else .panic .modelStuck
+  | .onceExit, [p] =>
+    match heapStore heap p (.int 64 2) with
+    | .ok heap => .ok (.unit, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
   | .makeSlice zero, [len, cap] =>
     match asIndex len, asIndex cap with
     | some len, some cap =>

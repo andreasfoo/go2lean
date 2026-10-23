@@ -90,7 +90,16 @@ const (
 	// PanicUndefined is undefined behaviour of a C/LLVM program that is not
 	// one of the kinds above (signed overflow, a poison branch condition).
 	PanicUndefined PanicKind = "undefined_behavior"
-	PanicOther     PanicKind = "other"
+	// The concurrent machine's outcomes (docs/concurrency.md): a send on a
+	// closed channel or a close of a closed or nil one; a fatal error of
+	// package sync (unlock of an unlocked mutex); the function under test
+	// blocked with no goroutine able to move (Go's "all goroutines are
+	// asleep"); a goroutine it started blocked forever after it returned.
+	PanicClosedChannel PanicKind = "closed_channel"
+	PanicSyncFatal     PanicKind = "sync_fatal"
+	PanicDeadlock      PanicKind = "deadlock"
+	PanicGoroutineLeak PanicKind = "goroutine_leak"
+	PanicOther         PanicKind = "other"
 )
 
 // HavocValue is the value the counterexample assigns to one havoc site on

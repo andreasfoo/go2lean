@@ -25,7 +25,13 @@ for f in glob.glob(f"{ws}/verdicts/*.json"):
     cx = json.load(open(f"{ws}/counterexamples/{c}.json"))
     out[cx["property"]] = json.load(open(f))["status"]
 muts = load("mutations")
+# A bug only a rare interleaving shows: go test may or may not reproduce it
+# (confirmed or inconclusive), so the gate records either as one outcome.
+sched = set(open("testdata/regress/schedule-dependent.txt").read().split())
 for p in sorted(out):
+    short = p.removeprefix("p_github_com_andreasfoo_go2lean_examples_")
+    if short in sched and out[p] in ("confirmed", "inconclusive"):
+        out[p] = "schedule_dependent"
     m = muts.get(p)
     mut = f" mut={m['killed']}/{m['tried']}" if m else ""
     print(out[p] + mut, p.removeprefix("p_github_com_andreasfoo_go2lean_examples_"))

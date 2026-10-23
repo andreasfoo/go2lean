@@ -81,6 +81,10 @@ type Options struct {
 	// Overlay adds or replaces files of the loaded packages (absolute path
 	// to contents): generated specs that are not in the package directory.
 	Overlay map[string][]byte
+	// Tests makes the package's test functions (TestXxx(t *testing.T)) targets:
+	// t is an opaque value in the model and the test's own t in M3. For
+	// kernels written as tests, such as GoKer's.
+	Tests bool
 }
 
 // Limits of the dependency walk: how deep it follows calls from the
@@ -139,7 +143,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 		if spkg == nil {
 			continue
 		}
-		fns := candidates(spkg)
+		fns := candidates(spkg, opts.Tests)
 		units = append(units, unit{pkgs[i].PkgPath, fns})
 		mainPaths[pkgs[i].PkgPath] = true
 		roots = append(roots, fns...)
@@ -283,7 +287,7 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 					instance := len(callee.TypeArgs()) > 0 && callee.Origin() != nil
 					if seen[callee] || (callee.Synthetic != "" && !instance) ||
 						callee.Parent() != nil || (callee.TypeParams().Len() > 0 && !instance) ||
-						isInit(callee.Name()) || len(callee.Blocks) == 0 {
+						(isInit(callee.Name()) && callee.Signature.Recv() == nil) || len(callee.Blocks) == 0 {
 						continue
 					}
 					pkg := callee.Pkg
@@ -1013,11 +1017,11 @@ func isStdlib(path string) bool {
 // their FuncIds. A generic function is held per instance (Map[int], with
 // concrete types), not as itself: its body has type parameters no input
 // and no harness can stand for.
-func candidates(spkg *ssa.Package) []*ssa.Function {
+func candidates(spkg *ssa.Package, tests bool) []*ssa.Function {
 	var fns []*ssa.Function
 	seen := map[*ssa.Function]bool{}
 	add := func(f *ssa.Function) {
-		if f != nil && !seen[f] && f.Synthetic == "" && !isInit(f.Name()) && !isTestFunc(f.Name()) && f.TypeParams().Len() == 0 {
+		if f != nil && !seen[f] && f.Synthetic == "" && !(isInit(f.Name()) && f.Signature.Recv() == nil) && (!isTestFunc(f.Name()) || tests && isTestEntry(f)) && f.TypeParams().Len() == 0 {
 			seen[f] = true
 			fns = append(fns, f)
 		}
@@ -1057,6 +1061,15 @@ func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]cont
 		t := &fnState{prog: st, f: f, out: out, vars: map[ssa.Value]ir.Var{}, blockID: map[*ssa.BasicBlock]int{}}
 		if err := t.translate(); err != nil {
 			rejectStub(out, err)
+		} else {
+			out.Sync = t.sync
+		}
+	}
+	markSync(p)
+	for _, f := range p.Funcs {
+		if f.Sync {
+			p.SchedSite, p.HasSched = st.newHavoc(64, "schedule", "schedule", ""), true
+			break
 		}
 	}
 	if err := p.Validate(); err != nil {
@@ -1064,6 +1077,39 @@ func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]cont
 	}
 	p.JSONTable = st.json.lean(st.boxed)
 	return p, nil
+}
+
+// markSync marks the functions that can reach a goroutine start or a
+// synchronisation operation: the ones with one in their body, their callers
+// in the package, and, when the package has any, every function that calls
+// through a func value (its target may be one).
+func markSync(p *ir.Prog) {
+	any := false
+	for _, f := range p.Funcs {
+		any = any || f.Sync
+	}
+	if !any {
+		return
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, f := range p.Funcs {
+			if f.Sync {
+				continue
+			}
+			for _, c := range f.Calls {
+				if c >= 0 && c < len(p.Funcs) && p.Funcs[c].Sync {
+					f.Sync = true
+				}
+			}
+			for _, b := range f.Blocks {
+				if b.Term.Kind == ir.TermCallV {
+					f.Sync = true
+				}
+			}
+			changed = changed || f.Sync
+		}
+	}
 }
 
 // goSig renders a signature with its receiver, as the agent should read it.
@@ -1133,6 +1179,13 @@ func selectVariant(loaded []*packages.Package) []*packages.Package {
 // go/ssa synthesises for `func init()` bodies.
 func isInit(name string) bool {
 	return name == "init" || strings.HasPrefix(name, "init#")
+}
+
+// isTestEntry says whether f is a test function, TestXxx(t *testing.T).
+func isTestEntry(f *ssa.Function) bool {
+	sig := f.Signature
+	return strings.HasPrefix(f.Name(), "Test") && f.Parent() == nil && sig.Recv() == nil &&
+		sig.Params().Len() == 1 && sig.Results().Len() == 0 && isTestingType(sig.Params().At(0).Type())
 }
 
 func isTestFunc(name string) bool {
@@ -1547,6 +1600,8 @@ type fnState struct {
 	// defers are the deferred calls to modelled functions, in the order
 	// their defer statements appear (deferCall).
 	defers []deferred
+	// sync: the body starts a goroutine or synchronises (syncTerm).
+	sync bool
 	// pure caches readsOnly.
 	pure *bool
 }
@@ -1617,7 +1672,7 @@ func (t *fnState) translate() error {
 	// A closure receives its captured values before its parameters, as
 	// funcRef stores them.
 	t.out.Closure = f.Parent() != nil
-	t.out.TestFile = inTestFile(f)
+	t.out.TestFile = inTestFile(f) && !isTestEntry(f)
 	for _, fv := range f.FreeVars {
 		v := t.fresh()
 		t.vars[fv] = v
@@ -1698,6 +1753,14 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 		v := t.fresh()
 		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return v, nil
+	case *ssa.Global:
+		if key, zero, ok := cellGlobal(fn); ok {
+			// Not cached: the block that first used it need not dominate
+			// the next use.
+			v := t.fresh()
+			t.emit(ir.Instr{Dst: v, Op: ir.GlobalAddr{Key: key, Zero: zero}})
+			return v, nil
+		}
 	}
 	c, ok := x.(*ssa.Const)
 	if !ok {
@@ -2187,9 +2250,34 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		}
 		return t.funcValue(t.def(x), fn, x.Bindings)
 	case *ssa.MakeChan:
-		t.issue("channel %s is opaque (not modelled)", x.Name())
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.OpaqueNonNil{}}})
+		elem := x.Type().Underlying().(*types.Chan).Elem()
+		zero, ok := zeroVal(elem)
+		if !ok {
+			if zero, ok = assumedValue(elem); !ok {
+				return fmt.Errorf("channel of unsupported type %s", elem)
+			}
+		}
+		n, err := t.val(x.Size)
+		if err != nil {
+			return err
+		}
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.ChanMake{Zero: zero}, Args: []ir.Var{n}})
 		return nil
+	case *ssa.Go:
+		return t.goStmt(x)
+	case *ssa.Send:
+		ch, err := t.val(x.Chan)
+		if err != nil {
+			return err
+		}
+		v, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		t.syncOp(ir.SyncOp{Kind: "send"}, t.fresh(), ch, v)
+		return nil
+	case *ssa.Select:
+		return t.selectStmt(x)
 	case *ssa.MapUpdate:
 		t.mapKey(x.Key)
 		m, err := t.val(x.Map)
@@ -2214,12 +2302,19 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 			return nil
 		})
 	case *ssa.Defer:
-		// A deferred call to a function in the model runs at the function's
-		// returns (deferCall); one the model does not look into (mutex
-		// unlocks, closes, closures) is an effect it does not model anyway.
-		if callee := x.Call.StaticCallee(); callee != nil && callee.Parent() == nil {
+		// A deferred call to a function in the model (a closure included)
+		// or to a modelled sync method (an unlock, wg.Done) runs at the
+		// function's returns (deferCall); one the model does not look into
+		// is an effect it does not model anyway.
+		if b, ok := x.Call.Value.(*ssa.Builtin); ok && b.Name() == "close" {
+			return t.deferCall(x, nil, "close")
+		}
+		if callee := x.Call.StaticCallee(); callee != nil {
+			if op, ok := syncOps[callee.String()]; ok && op != "onceDo" && op != "yield" {
+				return t.deferCall(x, callee, op)
+			}
 			if _, modelled := t.prog.ids[callee]; modelled {
-				return t.deferCall(x, callee)
+				return t.deferCall(x, callee, "")
 			}
 		}
 		t.assume("deferred call %s ignored (effects not modelled)", x.Call.String())
@@ -2408,9 +2503,11 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Extract{I: x.Index}, Args: []ir.Var{tup}})
 		return nil
 	case *ssa.Store:
-		if _, isGlobal := x.Addr.(*ssa.Global); isGlobal {
-			t.assume("store to global %s ignored", x.Addr.Name())
-			return nil
+		if g, isGlobal := x.Addr.(*ssa.Global); isGlobal {
+			if _, _, cell := cellGlobal(g); !cell {
+				t.assume("store to global %s ignored", x.Addr.Name())
+				return nil
+			}
 		}
 		if t.intoHandle(x.Addr) {
 			t.assume("store into handle %s ignored", x.Addr.Name())
@@ -2564,6 +2661,16 @@ func (t *fnState) sliceOf(x ssa.Value, elems []ir.Val) error {
 func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
+		if g, ok := x.X.(*ssa.Global); ok {
+			if _, _, cell := cellGlobal(g); cell {
+				p, err := t.val(g)
+				if err != nil {
+					return err
+				}
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{p}})
+				return nil
+			}
+		}
 		if t.prog.tableRoot(x.X) {
 			v, err := t.tableLoad(x.X)
 			if err != nil {
@@ -2668,6 +2775,13 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 		}
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{p}})
 		return nil
+	case token.ARROW: // receive
+		ch, err := t.val(x.X)
+		if err != nil {
+			return err
+		}
+		t.syncOp(ir.SyncOp{Kind: "recv", WithOk: x.CommaOk}, t.def(x), ch)
+		return nil
 	case token.SUB, token.XOR:
 		if isOpaqueType(x.X.Type()) {
 			return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
@@ -2705,7 +2819,7 @@ func (t *fnState) conv(dst ssa.Value, src ssa.Value) error {
 		t.emit(ir.Instr{Dst: t.def(dst), Op: op, Args: []ir.Var{a}})
 		return nil
 	}
-	if isString(dst.Type()) && isString(src.Type()) || types.Identical(dst.Type().Underlying(), src.Type().Underlying()) {
+	if isString(dst.Type()) && isString(src.Type()) || types.Identical(dst.Type().Underlying(), src.Type().Underlying()) || sameRepr(dst.Type(), src.Type()) {
 		// A named string type, or a change of name only (json.RawMessage
 		// <-> []byte): the value is unchanged.
 		a, err := t.val(src)
@@ -2819,7 +2933,22 @@ func (t *fnState) call(x *ssa.Call) error {
 	hasResult := !isUnitTuple(x.Type())
 	if bi, ok := x.Call.Value.(*ssa.Builtin); ok {
 		switch bi.Name() {
+		case "close":
+			ch, err := t.val(x.Call.Args[0])
+			if err != nil {
+				return err
+			}
+			t.syncOp(ir.SyncOp{Kind: "close"}, t.def(x), ch)
+			return nil
 		case "len", "cap":
+			if _, isChan := x.Call.Args[0].Type().Underlying().(*types.Chan); isChan {
+				ch, err := t.val(x.Call.Args[0])
+				if err != nil {
+					return err
+				}
+				t.emit(ir.Instr{Dst: t.def(x), Op: pick(bi.Name() == "len", "chanLen", "chanCap"), Args: []ir.Var{ch}})
+				return nil
+			}
 			if _, isMap := x.Call.Args[0].Type().Underlying().(*types.Map); isMap && bi.Name() == "len" {
 				m, err := t.val(x.Call.Args[0])
 				if err != nil {
@@ -3037,6 +3166,9 @@ func (t *fnState) call(x *ssa.Call) error {
 		if done, err := t.randBounded(x, callee); done || err != nil {
 			return err
 		}
+		if done, err := t.atomicFuncCall(x, callee); done || err != nil {
+			return err
+		}
 		if done, err := t.atomicCall(x, callee); done || err != nil {
 			return err
 		}
@@ -3077,6 +3209,9 @@ func (t *fnState) call(x *ssa.Call) error {
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple(op), Args: []ir.Var{s, kv}})
 			return nil
 		}
+	}
+	if done, err := t.syncCall(x, callee); done || err != nil {
+		return err
 	}
 	if callee != nil {
 		// Ops without a result (Builder.Reset) return the unit value.
@@ -4182,6 +4317,61 @@ func compiledPattern(v ssa.Value) (*regexp.Regexp, bool) {
 	return re, err == nil
 }
 
+// cellGlobal says whether package variable g is a cell (ir.GlobalAddr): its
+// type holds synchronisation state by value (a mutex, read-write mutex, wait
+// group, once or channel, also in a struct field or array element) and no
+// initializer or init function sets it, so it starts at its zero value. The
+// goroutines of a run share it, so loads and stores go through the cell; any
+// other package variable keeps the rules of docs/semantics.md §4.7.
+func cellGlobal(g *ssa.Global) (uint32, ir.Val, bool) {
+	pt, ok := g.Type().(*types.Pointer)
+	if !ok || g.Pkg == nil || !holdsSync(pt.Elem()) {
+		return 0, nil, false
+	}
+	if initFn := g.Pkg.Func("init"); initFn != nil {
+		for _, f := range initFuncs(initFn) {
+			for _, b := range f.Blocks {
+				for _, in := range b.Instrs {
+					if st, ok := in.(*ssa.Store); ok && st.Addr == g {
+						return 0, nil, false
+					}
+				}
+			}
+		}
+	}
+	zero, ok := zeroVal(pt.Elem())
+	if !ok {
+		return 0, nil, false
+	}
+	h := fnv.New32a()
+	h.Write([]byte(g.Pkg.Pkg.Path() + "." + g.Name()))
+	return h.Sum32(), zero, true
+}
+
+// holdsSync says whether a value of type t holds synchronisation state
+// itself (not through a pointer).
+func holdsSync(t types.Type) bool {
+	if n, ok := t.(*types.Named); ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "sync" {
+		switch n.Obj().Name() {
+		case "Mutex", "RWMutex", "WaitGroup", "Once":
+			return true
+		}
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Chan:
+		return true
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if holdsSync(u.Field(i).Type()) {
+				return true
+			}
+		}
+	case *types.Array:
+		return holdsSync(u.Elem())
+	}
+	return false
+}
+
 // loadedInit is the value a package initializer, or an init function on
 // every path through it, stores in the package variable v loads, when they
 // store one exactly once.
@@ -4516,6 +4706,80 @@ func constArgList(c *ssa.Call) ([]any, bool) {
 	return args, true
 }
 
+// sameRepr: both are channels of the same element type (a change of
+// direction only, chan T -> <-chan T), or pointers to types of the same
+// underlying type ((*uint32)(&status) for a `type Status uint32`).
+func sameRepr(a, b types.Type) bool {
+	if pa, ok := a.Underlying().(*types.Pointer); ok {
+		pb, ok2 := b.Underlying().(*types.Pointer)
+		return ok2 && types.Identical(pa.Elem().Underlying(), pb.Elem().Underlying())
+	}
+	ca, ok := a.Underlying().(*types.Chan)
+	cb, ok2 := b.Underlying().(*types.Chan)
+	return ok && ok2 && types.Identical(ca.Elem(), cb.Elem())
+}
+
+// atomicFuncCall lowers sync/atomic's functions on an integer pointer
+// (LoadInt32(&x), StoreInt32, AddInt32, SwapInt32, CompareAndSwapInt32 and
+// the 64-bit and unsigned ones). The model runs a goroutine's instructions
+// between two synchronisation terms atomically, so these are plain
+// accesses.
+func (t *fnState) atomicFuncCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	if callee.Signature.Recv() != nil || callee.Pkg == nil || callee.Pkg.Pkg.Path() != "sync/atomic" {
+		return false, nil
+	}
+	var op string
+	for _, o := range []string{"CompareAndSwap", "Load", "Store", "Add", "Swap"} {
+		if strings.HasPrefix(callee.Name(), o) {
+			op = o
+			break
+		}
+	}
+	switch strings.TrimPrefix(callee.Name(), op) {
+	case "Int32", "Int64", "Uint32", "Uint64":
+	default:
+		return false, nil
+	}
+	args := make([]ir.Var, len(x.Call.Args))
+	for i, a := range x.Call.Args {
+		v, err := t.val(a)
+		if err != nil {
+			return true, err
+		}
+		args[i] = v
+	}
+	addr := args[0]
+	load := func() ir.Var {
+		v := t.fresh()
+		t.emit(ir.Instr{Dst: v, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		return v
+	}
+	store := func(v ir.Var) {
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, v}})
+	}
+	switch op {
+	case "Load":
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+	case "Store":
+		store(args[1])
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
+	case "Add":
+		r := t.def(x)
+		t.emit(ir.Instr{Dst: r, Op: ir.Simple("add"), Args: []ir.Var{load(), args[1]}})
+		store(r)
+	case "Swap":
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		store(args[1])
+	case "CompareAndSwap":
+		cur, r := load(), t.def(x)
+		t.emit(ir.Instr{Dst: r, Op: ir.Simple("eq"), Args: []ir.Var{cur, args[1]}})
+		nv := t.fresh()
+		t.emit(ir.Instr{Dst: nv, Op: ir.Simple("ite"), Args: []ir.Var{r, args[2], cur}})
+		store(nv)
+	}
+	return true, nil
+}
+
 // atomicCall lowers Load, Store and Add on sync/atomic's Bool, Int32,
 // Int64, Uint32 and Uint64: reads and writes of the integer field v the
 // type wraps (Bool holds 0 or 1). The model is single-threaded, so these
@@ -4595,10 +4859,10 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		old := t.fresh()
+		old, r := t.fresh(), t.def(x)
 		t.emit(ir.Instr{Dst: old, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("add"), Args: []ir.Var{old, d}})
-		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, t.def(x)}})
+		t.emit(ir.Instr{Dst: r, Op: ir.Simple("add"), Args: []ir.Var{old, d}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, r}})
 	}
 	return true, nil
 }
@@ -4892,25 +5156,43 @@ type deferred struct {
 	callee, nargs int
 	name          string
 	flag, args    ir.Var
+	// sync is the synchronisation operation a deferred sync method makes
+	// (syncOps), "" for a call.
+	sync string
 }
 
-// deferCall lowers x, a defer of modelled function callee: the arguments
-// are evaluated now and kept, and runDefers makes the call at each return.
-// A defer statement in a loop could run any number of times: it is
-// rejected.
-func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function) error {
+// deferCall lowers x, a defer of modelled function callee, or of a
+// synchronisation operation syncOp (callee nil for the builtin close): the
+// arguments are evaluated now and kept, and runDefers makes the call at
+// each return. A defer statement in a loop could run any number of times:
+// it is rejected.
+func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) error {
+	name := syncOp
+	if callee != nil {
+		name = callee.String()
+	}
 	if inCycle(x.Block()) {
-		return fmt.Errorf("deferred call to %s in a loop", callee.Name())
+		return fmt.Errorf("deferred call to %s in a loop", name)
 	}
 	var args []ir.Var
-	for _, a := range x.Call.Args {
+	callArgs := x.Call.Args
+	if mc, ok := x.Call.Value.(*ssa.MakeClosure); ok {
+		// A closure: its captured values come first.
+		callArgs = append(append([]ssa.Value(nil), mc.Bindings...), callArgs...)
+	}
+	for _, a := range callArgs {
 		v, err := t.val(a)
 		if err != nil {
 			return err
 		}
 		args = append(args, v)
 	}
-	d := deferred{callee: t.prog.ids[callee], nargs: len(args), name: callee.String(), flag: t.fresh(), args: t.fresh()}
+	if syncOp == "wgDone" {
+		d := t.fresh()
+		t.emit(ir.Instr{Dst: d, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "18446744073709551615"}}})
+		args, syncOp = append(args, d), "wgAdd"
+	}
+	d := deferred{callee: t.prog.ids[callee], nargs: len(args), name: name, flag: t.fresh(), args: t.fresh(), sync: syncOp}
 	// The cells, on entry: a return before the defer statement ran sees
 	// the flag false.
 	f, tr := t.fresh(), t.fresh()
@@ -4926,7 +5208,9 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function) error {
 	tup := t.fresh()
 	t.emit(ir.Instr{Dst: tup, Op: ir.Simple("mkTuple"), Args: args})
 	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{d.args, tup}})
-	if !slices.Contains(t.out.Calls, d.callee) {
+	if syncOp != "" {
+		t.sync = true
+	} else if !slices.Contains(t.out.Calls, d.callee) {
 		t.out.Calls = append(t.out.Calls, d.callee)
 	}
 	t.defers = append(t.defers, d)
@@ -4959,8 +5243,15 @@ func (t *fnState) runDefers() error {
 			args[k] = t.fresh()
 			t.emit(ir.Instr{Dst: args[k], Op: ir.Extract{I: k}, Args: []ir.Var{tup}})
 		}
-		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
 		t.out.Blocks[next].Term = ir.Term{Kind: ir.TermJump, B: join}
+		if d.sync != "" {
+			t.syncOp(ir.SyncOp{Kind: d.sync}, t.fresh(), args...)
+			t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+			t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
+			t.cur = &t.out.Blocks[join]
+			continue
+		}
+		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
 		// A deferred call the model gets stuck in: its effects are dropped.
 		t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
 		t.cur = &t.out.Blocks[join]
@@ -4984,6 +5275,162 @@ func inCycle(b *ssa.BasicBlock) bool {
 		}
 	}
 	return false
+}
+
+// syncTerm ends the current block with a spawn or sync terminator; the
+// code after it goes on in a new block, the terminator's successor.
+func (t *fnState) syncTerm(term ir.Term) {
+	next := len(t.out.Blocks)
+	term.Next = next
+	t.cur.Term = term
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: t.cur.Name + ".after-sync"})
+	t.cur = &t.out.Blocks[next]
+	t.sync = true
+}
+
+func (t *fnState) syncOp(op ir.SyncOp, dst ir.Var, args ...ir.Var) {
+	t.syncTerm(ir.Term{Kind: ir.TermSync, Sync: op, CArgs: args, Dst: dst})
+}
+
+// goStmt lowers `go f(args)`: a goroutine running the func value.
+func (t *fnState) goStmt(x *ssa.Go) error {
+	if x.Call.IsInvoke() {
+		t.assume("go %s: a goroutine running an interface method is not modelled", x.Call.Method.Name())
+		return nil
+	}
+	var fv ir.Var
+	switch v := x.Call.Value.(type) {
+	case *ssa.Builtin:
+		t.assume("go %s: a goroutine running a builtin is not modelled", v.Name())
+		return nil
+	case *ssa.Function:
+		fv = t.fresh()
+		if err := t.funcValue(fv, v, nil); err != nil {
+			return err
+		}
+	default:
+		var err error
+		if fv, err = t.val(v); err != nil {
+			return err
+		}
+	}
+	var args []ir.Var
+	for _, a := range x.Call.Args {
+		v, err := t.val(a)
+		if err != nil {
+			return err
+		}
+		args = append(args, v)
+	}
+	t.syncTerm(ir.Term{Kind: ir.TermSpawn, FV: fv, CArgs: args, Dst: t.fresh()})
+	return nil
+}
+
+// selectStmt lowers a select: each case's channel, then its value for a
+// send; the result is go/ssa's tuple (index, recvOk, received values).
+func (t *fnState) selectStmt(x *ssa.Select) error {
+	var sends []bool
+	var args []ir.Var
+	for _, st := range x.States {
+		ch, err := t.val(st.Chan)
+		if err != nil {
+			return err
+		}
+		args = append(args, ch)
+		if st.Dir == types.SendOnly {
+			v, err := t.val(st.Send)
+			if err != nil {
+				return err
+			}
+			args = append(args, v)
+		}
+		sends = append(sends, st.Dir == types.SendOnly)
+	}
+	t.syncOp(ir.SyncOp{Kind: "select", Sends: sends, Blocking: x.Blocking}, t.def(x), args...)
+	return nil
+}
+
+// syncOps are the methods of package sync (and the yields of time and
+// runtime) the concurrent machine models.
+var syncOps = map[string]string{
+	"(*sync.Mutex).Lock":      "lock",
+	"(*sync.Mutex).Unlock":    "unlock",
+	"(*sync.Mutex).TryLock":   "tryLock",
+	"(*sync.RWMutex).Lock":    "wLock",
+	"(*sync.RWMutex).Unlock":  "wUnlock",
+	"(*sync.RWMutex).RLock":   "rLock",
+	"(*sync.RWMutex).RUnlock": "rUnlock",
+	"(*sync.WaitGroup).Add":   "wgAdd",
+	"(*sync.WaitGroup).Done":  "wgDone",
+	"(*sync.WaitGroup).Wait":  "wgWait",
+	"(*sync.Once).Do":         "onceDo",
+	"time.Sleep":              "yield",
+	"runtime.Gosched":         "yield",
+}
+
+// syncCall lowers a call of one of syncOps.
+func (t *fnState) syncCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	if callee == nil {
+		return false, nil
+	}
+	op, ok := syncOps[callee.String()]
+	if !ok {
+		return false, nil
+	}
+	if op == "yield" {
+		t.syncOp(ir.SyncOp{Kind: "yield"}, t.def(x))
+		return true, nil
+	}
+	p, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	switch op {
+	case "onceDo":
+		return true, t.onceDo(x, p)
+	case "wgAdd":
+		d, err := t.val(x.Call.Args[1])
+		if err != nil {
+			return true, err
+		}
+		t.syncOp(ir.SyncOp{Kind: "wgAdd"}, t.def(x), p, d)
+	case "wgDone":
+		d := t.fresh()
+		t.emit(ir.Instr{Dst: d, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "18446744073709551615"}}})
+		t.syncOp(ir.SyncOp{Kind: "wgAdd"}, t.def(x), p, d)
+	default:
+		t.syncOp(ir.SyncOp{Kind: op}, t.def(x), p)
+	}
+	return true, nil
+}
+
+// onceDo lowers once.Do(f): f runs when this caller enters first; another
+// caller blocks until it is done.
+func (t *fnState) onceDo(x *ssa.Call, p ir.Var) error {
+	f, err := t.val(x.Call.Args[1])
+	if err != nil {
+		return err
+	}
+	run := t.fresh()
+	t.syncOp(ir.SyncOp{Kind: "onceEnter"}, run, p)
+	name := t.cur.Name
+	body := len(t.out.Blocks)
+	after, fb, done := body+1, body+2, body+3
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: run, T: body, F: done}
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".once-do"},
+		ir.Block{Name: name + ".once-after"},
+		ir.Block{Name: name + ".once-fallback"},
+		ir.Block{Name: name + ".once-done"})
+	res := t.fresh()
+	t.out.Blocks[body].Term = ir.Term{Kind: ir.TermCallV, FV: f, Dst: res, Next: after, Fallback: fb}
+	t.out.Blocks[fb].Instrs = []ir.Instr{{Dst: res, Op: ir.Const{V: ir.UnitVal{}}}}
+	t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: after}
+	t.out.Blocks[after].Instrs = []ir.Instr{{Dst: t.fresh(), Op: ir.Simple("onceExit"), Args: []ir.Var{p}}}
+	t.out.Blocks[after].Term = ir.Term{Kind: ir.TermJump, B: done}
+	t.cur = &t.out.Blocks[done]
+	t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
+	return nil
 }
 
 // emitCallArgs is emitCall with the argument variables given.
@@ -5014,6 +5461,14 @@ func (t *fnState) emitCallArgs(x *ssa.Call, term ir.Term, name string, args []ir
 // reference into the model when fn is modelled, here or in a sibling
 // package, else a func value the model knows nothing about (non-nil).
 func (t *fnState) funcValue(dst ir.Var, fn *ssa.Function, bindings []ssa.Value) error {
+	if m, ok := fn.Object().(*types.Func); ok && strings.HasSuffix(fn.Name(), "$bound") && len(bindings) == 1 {
+		// A method value x.M: go/ssa's wrapper calls M with the bound
+		// receiver first, as a closure gets its captured values, so it is
+		// M itself capturing x.
+		if method := fn.Prog.FuncValue(m); method != nil {
+			fn = method
+		}
+	}
 	var args []ir.Var
 	for _, b := range bindings {
 		v, err := t.val(b)
@@ -5471,6 +5926,12 @@ func abiOf(f *ssa.Function, json *jsonTable) (*contract.ABI, error) {
 	pkg := funcPkg(f)
 	ab := &abiBuilder{pkg: pkg, abi: abi, index: map[*types.Named]int{}, fset: f.Prog.Fset, json: json, asserted: assertedTypes(f)}
 	for _, p := range f.Params {
+		if isTestEntry(f) {
+			// The test's t: opaque in the model, the harness's own t in M3.
+			abi.Params = append(abi.Params, contract.ABIParam{Go: p.Name(), GoType: "*testing.T", Kind: contract.ABIOpaque,
+				Model: []string{p.Name()}, Zero: "go2leanT"})
+			continue
+		}
 		if isTestingType(p.Type()) {
 			return nil, fmt.Errorf("test helper: parameter %s has type %s", p.Name(), p.Type())
 		}

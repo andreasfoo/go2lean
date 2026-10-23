@@ -365,6 +365,23 @@ type Field struct{ I int }
 
 func (f Field) Lean() string { return fmt.Sprintf("(.field %d)", f.I) }
 
+// ChanMake is `make(chan T, n)`; Zero is the value a receive on a closed
+// channel yields.
+type ChanMake struct{ Zero Val }
+
+func (o ChanMake) Lean() string { return "(.chanMake " + o.Zero.Lean() + ")" }
+
+// GlobalAddr is the address of a package variable that holds
+// synchronisation state (a cell): the same pointer for every function and
+// goroutine of the run, to a cell holding Zero until the program writes it.
+// Key identifies the variable across packages.
+type GlobalAddr struct {
+	Key  uint32
+	Zero Val
+}
+
+func (o GlobalAddr) Lean() string { return fmt.Sprintf("(.globalAddr %d %s)", o.Key, o.Zero.Lean()) }
+
 // MakeSlice is make([]T, len, cap) with elements Zero.
 type MakeSlice struct{ Zero Val }
 
@@ -495,7 +512,40 @@ const (
 	// its captured values first; a nil func panics, an unknown one takes
 	// the fallback.
 	TermCallV
+	// TermSpawn starts a goroutine running the func value FV on CArgs,
+	// then jumps to Next. Only the concurrent machine runs it.
+	TermSpawn
+	// TermSync is the synchronisation operation Sync on CArgs: Dst gets
+	// its result, then the block jumps to Next. Only the concurrent machine
+	// runs it.
+	TermSync
 )
+
+// SyncOp is a synchronisation operation of the concurrent machine (Lean's
+// `SSA.SyncOp`, docs/concurrency.md).
+type SyncOp struct {
+	// Kind is the Lean constructor: send, recv, close, select, lock,
+	// unlock, tryLock, wLock, wUnlock, rLock, rUnlock, wgAdd, wgWait,
+	// onceEnter, yield.
+	Kind     string
+	WithOk   bool   // recv: the result is (value, ok)
+	Sends    []bool // select: per case, true for a send
+	Blocking bool   // select: no default case
+}
+
+func (o SyncOp) Lean() string {
+	switch o.Kind {
+	case "recv":
+		return fmt.Sprintf("(.recv %t)", o.WithOk)
+	case "select":
+		parts := make([]string, len(o.Sends))
+		for i, s := range o.Sends {
+			parts[i] = fmt.Sprint(s)
+		}
+		return fmt.Sprintf("(.select [%s] %t)", strings.Join(parts, ", "), o.Blocking)
+	}
+	return "." + o.Kind
+}
 
 // Term is a block terminator. Which fields are meaningful depends on Kind.
 type Term struct {
@@ -520,6 +570,8 @@ type Term struct {
 	// Fallback is the block run instead of Next when the callee gets
 	// stuck: it binds Dst to a havoc value, as an unmodelled call would.
 	Fallback int
+	// Sync is the operation of a TermSync.
+	Sync SyncOp
 }
 
 type Block struct {
@@ -544,6 +596,9 @@ type Func struct {
 	WrappedBy string
 	CtorOnly  string
 	TestFile  bool
+	// Sync: the function can reach a goroutine start or a synchronisation
+	// operation; the concurrent machine gives its calls frames.
+	Sync bool
 	// SpecMaxLen is the spec's go2lean:maxlen directive (0: none).
 	SpecMaxLen int
 	// SequenceFor names the function a `go2lean:sequence` spec drives.
@@ -566,8 +621,12 @@ type Prog struct {
 	Frontend string
 	// Dependency marks a package modelled only because the compiled ones
 	// call into it (-deps).
-	Dependency  bool
-	Funcs       []*Func
+	Dependency bool
+	Funcs      []*Func
+	// SchedSite is the havoc site the concurrent machine reads its schedule
+	// from (HasSched false: the package has no concurrency).
+	SchedSite   int
+	HasSched    bool
 	HavocWidths []int
 	Havoc       []contract.ABIHavoc
 	// JSONTable is the Lean term of the module's `jsonTable` (the JSON
@@ -627,6 +686,13 @@ func (p *Prog) Validate() error {
 					return err
 				}
 				if err := checkBlock(t.F, where+" br"); err != nil {
+					return err
+				}
+			case TermSpawn, TermSync:
+				if err := checkBlock(t.Next, where+" continuation"); err != nil {
+					return err
+				}
+				if err := checkVar(t.Dst, where+" result"); err != nil {
 					return err
 				}
 			case TermCall, TermXCall, TermCallV:

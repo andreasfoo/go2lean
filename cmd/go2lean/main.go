@@ -112,6 +112,7 @@ func cmdCompile(args []string) error {
 	fs := flag.NewFlagSet("compile", flag.ExitOnError)
 	ws := workspaceFlag(fs)
 	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
+	tests := fs.Bool("tests", false, "make the packages' test functions (TestXxx(t *testing.T)) targets")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("compile: at least one package pattern expected (e.g. ./...)")
@@ -120,7 +121,7 @@ func cmdCompile(args []string) error {
 	if err != nil {
 		return err
 	}
-	env.Deps = *deps
+	env.Deps, env.Tests = *deps, *tests
 	_, err = pipeline.CompileAll(w, env, os.Stdout, fs.Args()...)
 	return err
 }

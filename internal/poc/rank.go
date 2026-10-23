@@ -43,6 +43,9 @@ func rankOf(p *prepared, callers *callerIndex) *contract.Rank {
 			return &contract.Rank{Tier: 4, Reason: "reads package state the program may initialise before such calls"}
 		}
 	}
+	if p.test {
+		return &contract.Rank{Tier: 1, Reason: "the package's own test fails this way"}
+	}
 	fn := baseFunc(p.target.Func)
 	if nils := nilArguments(p.cx); len(nils) > 0 {
 		what := "nil for " + strings.Join(nils, ", ")
