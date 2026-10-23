@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="title desc">
   <title id="title">go2lean: specs, models, and real Go replay</title>
   <desc id="desc">Humans or an optional agent write Go specs, which compile alongside Go source into a Lean model. Built-in specs, such as no-panic checks, enter search directly. Search produces candidate inputs, which are replayed with go test and classified as confirmed, spurious, or inconclusive. No counterexample found is not a proof of correctness.</desc>
+  <!-- Shared with banner.svg: warm paper, sage, terracotta, slate blue. -->
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m1 1 7 4-7 4" fill="none" stroke="#8a9985" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
     <marker id="spec-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m1 1 7 4-7 4" fill="none" stroke="#bf795c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
@@ -8,15 +9,15 @@
   <rect width="1200" height="490" rx="12" fill="#f8f5ef"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
     <!-- Specs are an input family, not a synonym for no_panic. -->
-    <text x="54" y="48" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#7c8e72">Specs</text>
+    <text x="54" y="48" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#66785e">Specs</text>
     <path d="M128 41H826" stroke="#d7dccc" stroke-width="1"/>
     <g text-anchor="middle">
       <text x="150" y="98" font-size="19" font-weight="600" fill="#ac644a">Human / Agent</text>
-      <text x="150" y="124" font-size="15" fill="#78786c">writes business rules</text>
+      <text x="150" y="124" font-size="15" fill="#6d6f63">writes business rules</text>
       <text x="440" y="98" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#ac644a">Go specs</text>
-      <text x="440" y="124" font-size="15" fill="#78786c">func Spec(...) bool</text>
-      <text x="730" y="98" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#7c8e72">Built-in specs</text>
-      <text x="730" y="124" font-size="15" fill="#78786c">e.g. no_panic</text>
+      <text x="440" y="124" font-size="15" fill="#6d6f63">func Spec(...) bool</text>
+      <text x="730" y="98" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#66785e">Built-in specs</text>
+      <text x="730" y="124" font-size="15" fill="#6d6f63">e.g. no_panic</text>
     </g>
     <g fill="none" stroke-width="1.8" stroke-linecap="round">
       <path d="M246 93H358" stroke="#bf795c" marker-end="url(#spec-arrow)"/>
@@ -72,25 +73,25 @@
       <path d="M507 272H661"/>
       <path d="M807 272H943"/>
     </g>
-    <g text-anchor="middle" font-size="14" fill="#78786c">
+    <g text-anchor="middle" font-size="14" fill="#6d6f63">
       <text x="295" y="257">go/ssa → IR</text>
       <text x="585" y="257">model + specs</text>
       <text x="875" y="246">candidate</text><text x="875" y="264">inputs</text>
     </g>
     <g text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="28">
-      <text x="150" y="374" fill="#b96b4e">Go source</text>
-      <text x="440" y="374" fill="#7c8e72">Lean model</text>
-      <text x="730" y="374" fill="#7c8e72">Search</text>
+      <text x="150" y="374" fill="#ac644a">Go source</text>
+      <text x="440" y="374" fill="#66785e">Lean model</text>
+      <text x="730" y="374" fill="#66785e">Search</text>
       <text x="1020" y="374" fill="#607e8a">Go replay</text>
     </g>
-    <g text-anchor="middle" font-size="16" fill="#78786c">
+    <g text-anchor="middle" font-size="16" fill="#6d6f63">
       <text x="150" y="403">Target functions</text>
       <text x="440" y="403">Compile stage</text>
       <text x="730" y="403">Spec &amp; search stage</text>
       <text x="1020" y="403">Replay stage</text>
     </g>
     <path d="M54 427H1146" stroke="#dedfd3"/>
-    <text x="54" y="458" font-size="14" fill="#78786c">No counterexample found ≠ proved correct</text>
+    <text x="54" y="458" font-size="14" fill="#6d6f63">No counterexample found ≠ proved correct</text>
     <text x="1146" y="458" text-anchor="end" font-size="14" fill="#607e8a">Verdict: confirmed / spurious / inconclusive</text>
   </g>
 </svg>
