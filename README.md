@@ -230,13 +230,16 @@ parameter); `mock:<dir>` replays scripted responses (`round-1.md`,
 
 ```sh
 go run ./cmd/go2lean agent -model MiniMax-M3 -base-url https://api.minimaxi.com/anthropic ./examples/oob
-``` Every prompt and response is
+```
+
+Every prompt and response is
 written to `out/agent/<package>/`, and the report lands in `out/agent/<package>/report.md`. A
 revised spec file in the report round triggers one more pass.
 
+
 ## Commands
 
-```
+```sh
 go2lean compile [-workspace out] <package>        Go -> Lean model, ABI, targets
 go2lean props   [-workspace out] -package <path>  template properties from the model report
 go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all] [-jobs n] [-budget s]
