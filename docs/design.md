@@ -545,6 +545,30 @@ Design choices:
   exhaustive engine issues no certificate when any input was moot. The
   `no_panic` property carries that finding instead.
 
+**Spec mutation check** (since 2026-10-23, after the semver blind run,
+`docs/eval/semver.md`, where four agent specs had checked nothing). A spec
+that held is only as good as the bugs it would catch. For every
+postcondition and sequence spec without a counterexample, the mutation
+engine (`Search.mutate`, engine `mutate` of `go2lean-search`) builds
+mutants of the code under test: the target (for a sequence spec, the
+function it drives) and the functions of its package it calls, each with
+one branch negated (its targets swapped) or one operator replaced (`==`
+and `!=`, `<` and `>=`, `<=` and `>`, `+` and `-`). The mutants are data
+transformations of the linked program, so one build serves them all and
+neither the interpreter nor the proofs change. For each mutant (at most
+24, spread over the sites) a random search looks for a distinguishing
+input: the spec fails on the mutant and not on the original. The result
+goes to `mutations/<property>.json` and the summary ("k of n mutants fail
+the spec"); a spec no mutant fails is flagged as checking nothing a
+one-line change breaks, and the agent's report round is told so (and now
+gets the spec file, so it can restate it). On the agent's semver specs
+the flagged ones are exactly the four found vacuous by hand; on the
+examples, the deliberately weak `SpecReverse` and four other weak specs
+score 0, the rest 1 to 6 kills. The regression gate records each score.
+This follows the "distinguishing mutant" rule of Theorem's OSS Verify
+fuzz-target guidelines (a property no change can make fail checks
+nothing). Not mutated yet: constants, stores, calls.
+
 Not yet: ranking properties by expected yield, `ModelGap` records from
 spurious verdicts, generalising a confirmed bug to neighbouring functions, and
 proof attempts.

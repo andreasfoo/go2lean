@@ -803,6 +803,108 @@ where
     | some n => (site, n + 1) :: sites.filter (·.1 != site)
     | none => (site, 1) :: sites
 
+-- Mutation engine -----------------------------------------------------------
+
+/-- The operator a test would swap in for `o`: the negated comparison, the
+other additive operator. -/
+def mutOp : GoSSA.Op → Option GoSSA.Op
+  | .eq => some .ne | .ne => some .eq
+  | .slt => some .sge | .sge => some .slt | .sle => some .sgt | .sgt => some .sle
+  | .ult => some .uge | .uge => some .ult | .ule => some .ugt | .ugt => some .ule
+  | .add => some .sub | .sub => some .add
+  | _ => none
+
+/-- One mutant of the code under test: a branch with its targets swapped
+(the condition negated), or one operator replaced (`mutOp`). -/
+structure Mutant where
+  fid : Nat
+  blk : Nat
+  instr : Option (Nat × GoSSA.Op)
+  desc : String
+
+/-- Every mutant of the functions `fids`, in program order. -/
+def mutants (p : GoSSA.Prog) (fids : List Nat) : List Mutant :=
+  fids.flatMap fun fid =>
+    match p.funcs[fid]? with
+    | none => []
+    | some fn =>
+      (List.range fn.blocks.size).flatMap fun bi =>
+        match (fn.blocks[bi]? : Option (SSA.Block GoSSA.Op)) with
+        | none => []
+        | some blk =>
+          let brs : List Mutant := match blk.term with
+            | .br .. => [{ fid, blk := bi, instr := none, desc := s!"{fn.name} block {bi}: branch negated" }]
+            | _ => []
+          let ops : List Mutant := (List.range blk.instrs.size).filterMap fun ii =>
+            match (blk.instrs[ii]? : Option GoSSA.Instr) with
+            | some (SSA.Instr.op _ o _) => (mutOp o).map fun o' =>
+                { fid, blk := bi, instr := some (ii, o'),
+                  desc := s!"{fn.name} block {bi}: {opName o} → {opName o'}" }
+            | _ => none
+          brs ++ ops
+where
+  opName (o : GoSSA.Op) : String := ((toString (repr o)).replace "Go2Lean.GoSSA.Op." "")
+
+def Mutant.apply (m : Mutant) (p : GoSSA.Prog) : GoSSA.Prog :=
+  { p with funcs := p.funcs.modify m.fid fun fn =>
+    { fn with blocks := fn.blocks.modify m.blk fun blk =>
+      match m.instr with
+      | none => match blk.term with
+        | .br c t ta f fa => { blk with term := .br c f fa t ta }
+        | _ => blk
+      | some (ii, o') => { blk with instrs := blk.instrs.modify ii fun
+          | SSA.Instr.op d _ a => SSA.Instr.op d o' a
+          | i => i } } }
+
+/-- At most `n` of `xs`, spread evenly over it. -/
+def spread (xs : List α) (n : Nat) : List α :=
+  if xs.length ≤ n || n == 0 then xs
+  else (List.range n).filterMap fun i => xs[i * xs.length / n]?
+
+/-- Does the property tell the code under test from its mutants? For each
+mutant (at most `maxMutants`), a random search like `run`'s looks for a
+distinguishing input: one on which the mutant violates the property and
+the original program does not. A property no mutant violates checks
+nothing a one-line change could break (it may be vacuous, or too weak). -/
+def mutate (p : GoSSA.Prog) (prop : Property) (fids : List Nat) (gens : List Gen) (extra : List Nat)
+    (seed trials fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
+    (allowNil : Bool := true) (budgetMs : Nat := 0) (maxMutants : Nat := 24) : IO Unit := do
+  let pool := strs.map fun s => s.toUTF8.toList.map (·.toNat)
+  let all := mutants p fids
+  let chosen := spread all maxMutants
+  let per := if chosen.isEmpty then 0 else budgetMs / chosen.length
+  let mut killed : List Json := []
+  let mut survived : List String := []
+  for m in chosen do
+    let pm := m.apply p
+    let mstart ← IO.monoMsNow
+    let mut g := mkStdGen seed
+    let mut hit : Option Nat := none
+    for trial in [0:trials] do
+      if per > 0 && (← IO.monoMsNow) - mstart > per then break
+      let (pfn, g') := randNat g 0 2
+      g := g'
+      let pf := Profile.ofNat pfn
+      let tseed := (mixHash (UInt64.ofNat seed) (UInt64.ofNat trial)).toNat
+      let or := oracleOf pf extra tseed
+      let h := havocOf tseed p.havocWidths
+      let (args, g', heap) := genArgs pf extra g gens pool table allowNil
+      g := g'
+      let (o, _, _) := check pm or h prop args fuel heap
+      if o.refutes prop then
+        -- The original need not pass on that input: a target that panics
+        -- there (moot for a postcondition) still told the mutant apart.
+        let (o0, _, _) := check p or h prop args fuel heap
+        if !(o0.refutes prop) then
+          hit := some trial
+          break
+    match hit with
+    | some t => killed := Json.mkObj [("mutant", m.desc), ("trial", t)] :: killed
+    | none => survived := m.desc :: survived
+  IO.println (Json.mkObj [("mutation", true), ("mutants_total", all.length), ("tried", chosen.length),
+    ("killed", killed.length), ("killed_by", Json.arr killed.reverse.toArray),
+    ("survived", Json.arr (survived.reverse.map Json.str).toArray)]).compress
+
 -- Exhaustive engine ---------------------------------------------------------
 
 /-- In `extra`, asks the exhaustive engine for the narrow integer domain:

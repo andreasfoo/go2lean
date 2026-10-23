@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,11 @@ type SearchOptions struct {
 	Prove bool
 	// ProveSeconds bounds each proof attempt (0: 120).
 	ProveSeconds int
+	// Mutate checks, for a spec that held, that it tells the code under
+	// test from its mutants (see mutationCheck).
+	Mutate bool
+	// MaxMutants bounds the mutants tried per property (0: 24).
+	MaxMutants int
 }
 
 func (o SearchOptions) withDefaults() SearchOptions {
@@ -85,6 +91,9 @@ func (o SearchOptions) withDefaults() SearchOptions {
 	}
 	if o.ExhaustLimit == 0 {
 		o.ExhaustLimit = 300000
+	}
+	if o.MaxMutants == 0 {
+		o.MaxMutants = 24
 	}
 	return o
 }
@@ -115,6 +124,13 @@ type searchResult struct {
 	Probes      []contract.Probe           `json:"probes"`
 	PanicAt     string                     `json:"panic_at"`
 	Assumptions []string                   `json:"assumptions"`
+	// The mutation engine's report (Mutation set).
+	Mutation     bool                  `json:"mutation"`
+	MutantsTotal int                   `json:"mutants_total"`
+	Tried        int                   `json:"tried"`
+	Killed       int                   `json:"killed"`
+	KilledBy     []contract.MutantKill `json:"killed_by"`
+	Survived     []string              `json:"survived"`
 }
 
 // gens renders the Search.Gen list for a function's parameters.
@@ -688,7 +704,71 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d inputs ran out of fuel", res.OutOfFuel))
 		}
 	}
+	if opts.Mutate && (prop.Kind == contract.KindPostcondition || prop.Kind == contract.KindSequence) {
+		note, err := mutationCheck(ws, leanDir, report, prop, spec, fid, sid, opts)
+		if err != nil {
+			return nil, "", err
+		}
+		if note != "" {
+			summary = append(summary, note)
+		}
+	}
 	return nil, strings.Join(summary, "; "), nil
+}
+
+// mutationCheck asks whether a spec that held tells the code under test
+// from its mutants (a branch negated, a comparison or + / - swapped, in the
+// target and the functions of its package it calls): the mutation engine
+// searches each for an input on which the mutant fails the spec and the
+// original passes it. A spec no mutant fails checks nothing a one-line
+// change breaks: it is vacuous, or too weak to have found a bug there.
+// Records the result and returns the summary note ("" when there is
+// nothing to mutate).
+func mutationCheck(ws contract.Workspace, leanDir string, report *contract.ModelReport, prop *contract.Property,
+	spec map[string]any, fid, sid int, opts SearchOptions) (string, error) {
+	root := fid
+	if prop.Kind == contract.KindSequence {
+		// A sequence spec drives its target; mutate the target.
+		root = -1
+		for _, f := range report.Funcs {
+			if f.ID == fid {
+				for _, g := range report.Funcs {
+					if g.Name == f.SequenceFor {
+						root = g.ID
+					}
+				}
+			}
+		}
+		if root < 0 {
+			return "", nil
+		}
+	}
+	// The code under test: the root and what it calls, never the spec.
+	var fids []int
+	for _, id := range prover.Closure(report, root) {
+		if id != sid && (id != fid || id == root) {
+			fids = append(fids, id)
+		}
+	}
+	ms := maps.Clone(spec)
+	ms["mutate"] = fids
+	ms["maxMutants"] = opts.MaxMutants
+	ms["trials"] = min(opts.Trials, 500)
+	res, err := runSearch(leanDir, prop.ID+"_mutate", ms, "mutate")
+	if err != nil {
+		return "", err
+	}
+	if !res.Mutation || res.Tried == 0 {
+		return "", nil
+	}
+	if err := ws.WriteMutation(&contract.MutationResult{Property: prop.ID, Total: res.MutantsTotal, Tried: res.Tried,
+		Killed: res.Killed, KilledBy: res.KilledBy, Survived: res.Survived}); err != nil {
+		return "", err
+	}
+	if res.Killed == 0 {
+		return fmt.Sprintf("mutation: no mutant of the code under test fails the spec (%d tried): it checks nothing a one-line change breaks", res.Tried), nil
+	}
+	return fmt.Sprintf("mutation: %d of %d mutants fail the spec", res.Killed, res.Tried), nil
 }
 
 // narrowMark is Search.lean's narrowMark (2^64 + 1): in the literal pool,

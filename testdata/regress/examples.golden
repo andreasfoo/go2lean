@@ -8,8 +8,8 @@ confirmed alias_fill_specfilllast
 exhausted alias_swap_nopanic
 confirmed builder_join_nopanic
 exhausted builder_parse_nopanic
-exhausted builder_parse_specparseemptyfails
-exhausted builder_parse_specparseerrzero
+exhausted mut=0/4 builder_parse_specparseemptyfails
+exhausted mut=0/4 builder_parse_specparseerrzero
 exhausted builder_tag_nopanic
 exhausted builder_tag_spectaglen
 proved checked_double_nopanic
@@ -18,13 +18,13 @@ proved checked_half_nopanic
 exhausted checked_half_spechalfnoerror
 confirmed closures_anyof_nopanic
 exhausted closures_hasabove_nopanic
-exhausted closures_hasabove_spechasabove
+exhausted mut=1/1 closures_hasabove_spechasabove
 exhausted closures_hasneg_nopanic
-exhausted closures_hasneg_spechasneg
+exhausted mut=4/5 closures_hasneg_spechasneg
 confirmed closures_last_nopanic
 proved closures_negative_nopanic
 exhausted closures_total_nopanic
-exhausted closures_total_spectotal
+exhausted mut=3/4 closures_total_spectotal
 confirmed divzero_avg_nopanic
 proved divzero_ratio_nopanic
 exhausted errs_apierror_error_nopanic
@@ -38,16 +38,16 @@ exhausted globals_same_specsamefieldwise
 exhausted_assuming globals_setgenfortest_nopanic
 confirmed globals_slot_nopanic
 exhausted iface_area_nopanic
-exhausted iface_area_specareadispatch
+exhausted mut=2/2 iface_area_specareadispatch
 exhausted iface_count_nopanic
-exhausted iface_count_speccountone
+exhausted mut=5/8 iface_count_speccountone
 confirmed iface_mixed_nopanic
 exhausted iface_name_nopanic
-exhausted iface_name_specnameomitted
+exhausted mut=4/5 iface_name_specnameomitted
 exhausted iface_omitted_nopanic
 exhausted iface_opt_iszero_nopanic
 exhausted iface_pipe_keep_nopanic
-exhausted iface_pipe_keep_specpipekeepunfiltered
+exhausted mut=0/5 iface_pipe_keep_specpipekeepunfiltered
 exhausted iface_queue_ints_nopanic
 exhausted iface_queue_push_nopanic
 exhausted iface_queue_push_specqueuepushlast
@@ -56,7 +56,7 @@ confirmed iface_queue_sum_nopanic
 confirmed iface_ratio_nopanic
 exhausted iface_rect_area_nopanic
 exhausted iface_set_nopanic
-exhausted iface_set_specsetnonnil
+exhausted mut=1/4 iface_set_specsetnonnil
 exhausted iface_sq_area_nopanic
 confirmed iface_unwrap_nopanic
 proved initvars_add_nopanic
@@ -68,18 +68,18 @@ exhausted initvars_range_contains_newrange_nopanic
 confirmed initvars_slot_nopanic
 proved initvars_sub_nopanic
 exhausted inputs_count_nopanic
-exhausted inputs_count_speccountbounded
+exhausted mut=1/6 inputs_count_speccountbounded
 confirmed inputs_label_nopanic
 confirmed inputs_role_nopanic
 exhausted inputs_text_nopanic
-exhausted inputs_text_spectextshorter
+exhausted mut=2/2 inputs_text_spectextshorter
 confirmed inputs_weight_nopanic
 exhausted jsonc_quote_nopanic
 confirmed jsonc_quote_specquoteplain
 exhausted jsonc_reload_nopanic
 confirmed jsonc_reload_specreloadkeeps
 none jsonc_roundtrip_nopanic
-none jsonc_roundtrip_specroundtripkeeps
+none mut=4/4 jsonc_roundtrip_specroundtripkeeps
 exhausted list_len_nopanic
 exhausted list_sum_nopanic
 confirmed list_sum_specsumsingleton
@@ -87,20 +87,20 @@ confirmed magic_decode_nopanic
 exhausted maps_counter_add_newcounter_nopanic
 confirmed maps_counter_share_newcounter_nopanic
 exhausted maps_distinct_nopanic
-exhausted maps_distinct_specdistinctbounded
+exhausted mut=4/5 maps_distinct_specdistinctbounded
 exhausted maps_newcounter_nopanic
 exhausted maps_newregistry_nopanic
 confirmed maps_pick_nopanic
 exhausted maps_registry_put_newregistry_nopanic
 exhausted maps_sum_nopanic
-exhausted maps_sum_specsumnonnegative
+exhausted mut=2/8 maps_sum_specsumnonnegative
 proved oob_clamp_nopanic
-exhausted oob_clamp_specclamp
-exhausted oob_clamp_specclampidempotent
-exhausted oob_clamp_specclampidentity
+exhausted mut=4/4 oob_clamp_specclamp
+exhausted mut=2/4 oob_clamp_specclampidempotent
+exhausted mut=4/4 oob_clamp_specclampidentity
 confirmed oob_last_nopanic
-none oob_last_speclastempty
-none oob_last_speclastislast
+none mut=0/7 oob_last_speclastempty
+none mut=6/7 oob_last_speclastislast
 confirmed opaque_cache_share_nopanic
 exhausted opaque_describe_nopanic
 confirmed opaque_lookup_nopanic
@@ -139,26 +139,26 @@ confirmed recs_dedup_nopanic
 confirmed recs_first_nopanic
 confirmed recs_longest_nopanic
 none recs_names_nopanic
-none recs_names_specnames
+none mut=2/3 recs_names_specnames
 exhausted recs_push_nopanic
 exhausted recs_push_specpush
 none recs_total_nopanic
-none recs_total_spectotal
+none mut=3/4 recs_total_spectotal
 confirmed runes_counter_bump_nopanic
 confirmed runes_head_nopanic
 exhausted runes_initials_nopanic
 exhausted runes_reverse_nopanic
-exhausted runes_reverse_specreverse
+exhausted mut=0/5 runes_reverse_specreverse
 none stream_converter_finish_nopanic
 none stream_converter_process_nopanic
-exhausted stream_seqbounded_sequence
+exhausted mut=4/14 stream_seqbounded_sequence
 confirmed stream_seqcomplete_sequence
 exhausted strs_before_nopanic
-exhausted strs_before_specbeforebytewise
+exhausted mut=1/1 strs_before_specbeforebytewise
 confirmed strs_hextag_nopanic
 exhausted strs_isadmin_nopanic
 exhausted strs_label_nopanic
-exhausted strs_label_speclabelformat
+exhausted mut=1/1 strs_label_speclabelformat
 exhausted strs_parseport_nopanic
 confirmed strs_parseport_specparseportrange
 confirmed strs_scheme_nopanic

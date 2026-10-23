@@ -125,6 +125,38 @@ func (w Workspace) HuntRecord(propID string) *HuntRecord {
 	return &r
 }
 
+// MutationResult is what the mutation engine found for a property that
+// held: of the mutants of the code under test it tried (a branch negated,
+// a comparison or + / - swapped), which ones some input told apart from
+// the original (the property failed on the mutant only).
+type MutationResult struct {
+	Property string       `json:"property"`
+	Total    int          `json:"mutants_total"`
+	Tried    int          `json:"tried"`
+	Killed   int          `json:"killed"`
+	KilledBy []MutantKill `json:"killed_by,omitempty"`
+	Survived []string     `json:"survived,omitempty"`
+}
+
+// MutantKill names a mutant and the trial that told it apart.
+type MutantKill struct {
+	Mutant string `json:"mutant"`
+	Trial  int    `json:"trial"`
+}
+
+func (w Workspace) WriteMutation(r *MutationResult) error {
+	return writeJSON(w.path("mutations", r.Property), r)
+}
+
+// Mutation returns the mutation result of a property, or nil.
+func (w Workspace) Mutation(propID string) *MutationResult {
+	var r MutationResult
+	if readJSON(w.path("mutations", propID), &r) != nil {
+		return nil
+	}
+	return &r
+}
+
 // Verdict returns the verdict of a counterexample, or nil.
 func (w Workspace) Verdict(cxID string) *Verdict {
 	var v Verdict

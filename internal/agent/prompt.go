@@ -151,7 +151,11 @@ concise Markdown report for the package's maintainers, grounded in the source
 2. Spurious counterexamples: which properties were wrong or too strong, and how
    you would restate them.
 3. Properties that held: what the exhaustive engine certified and over what domain,
-   and which ones are still only "no counterexample found".
+   and which ones are still only "no counterexample found". A spec that held
+   was also run against mutants of the code under test (a branch negated, a
+   comparison or + / - swapped): a spec no mutant fails checks nothing a
+   one-line bug would break (its guards skip every input, or it is too weak).
+   Say so, and restate such specs so that they constrain the result.
 
 Suggested fixes to the package belong in prose or in a Go block that contains
 no "go2lean:spec" or "go2lean:sequence" comment.
@@ -318,12 +322,15 @@ func guidanceSection(g string) string {
 	return "\n\nGuidance from the maintainers (bug classes and invariants to target first):\n" + g
 }
 
-func reportUserPrompt(pkgPath, pkgName, source, verdicts string) string {
+func reportUserPrompt(pkgPath, pkgName, source, spec, verdicts string) string {
 	return fmt.Sprintf(`Package %s (package clause: "package %s").
 
 Source:
 %s
-%s`, pkgPath, pkgName, fence(source), verdicts)
+The spec file that was checked (go2lean_specs_test.go; a revision replaces it
+whole, so keep the specs that should stay):
+%s
+%s`, pkgPath, pkgName, fence(source), fence(spec), verdicts)
 }
 
 var packageClause = regexp.MustCompile(`(?m)^package\s+\S+`)

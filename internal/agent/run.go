@@ -147,7 +147,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 
 	// Report round: source and verdicts back to the agent; a revised spec
 	// file triggers one more pass.
-	resp, err = ask(reportPrompt, reportUserPrompt(pkgPath, pkgName, source, verdictSummary(ws, res)))
+	resp, err = ask(reportPrompt, reportUserPrompt(pkgPath, pkgName, source, spec, verdictSummary(ws, res)))
 	if err != nil {
 		return err
 	}
@@ -271,10 +271,20 @@ func verdictSummary(ws contract.Workspace, res *pipeline.Result) string {
 		if pr, err := readProof(ws, p.ID); err == nil {
 			status = fmt.Sprintf("%s: %s", pr.Status, pr.Domain)
 		}
+		if m := ws.Mutation(p.ID); m != nil {
+			if m.Killed == 0 {
+				status += fmt.Sprintf("; mutation: none of %d mutants of the code under test fails it, so it checks nothing a one-line bug would break (survivors: %s)",
+					m.Tried, strings.Join(first(m.Survived, 3), "; "))
+			} else {
+				status += fmt.Sprintf("; mutation: %d of %d mutants fail it", m.Killed, m.Tried)
+			}
+		}
 		fmt.Fprintf(&b, "- %s: %s\n", p.ID, status)
 	}
 	return b.String()
 }
+
+func first(xs []string, n int) []string { return xs[:min(n, len(xs))] }
 
 func readProof(ws contract.Workspace, propID string) (*contract.ProofResult, error) {
 	var pr contract.ProofResult

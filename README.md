@@ -298,7 +298,7 @@ docs/semantics.md      the Go semantics modelled, by construct, with status
 
 Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 
-**Go line (go/ssa → GoSSA)**: 14 / 17
+**Go line (go/ssa → GoSSA)**: 15 / 18
 - ✅ SSA core with an executable, fuel-bounded semantics; GoSSA dialect
 - ✅ Heap model: pointers, slices, arrays, structs, writes through aliases
 - ✅ Maps, interfaces, closures, function values, methods
@@ -313,8 +313,9 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))
 - ✅ Proofs over all inputs in the pipeline for `no_panic` on integer and bool functions, each with its trust base (7 of 13 eligible on the examples, all kernel-checked)
 - ✅ Sequence specs (`go2lean:sequence`): properties of a sequence of calls, bounded model checking over short sequences
+- ✅ Spec mutation check: each spec that held is run against mutants of the code under test; a spec no mutant fails is flagged as checking nothing
 - 🚧 Proofs of postconditions and of functions over slices and strings
-- ⬜ Floats; `init` functions and package state
+- 🚧 `init` functions and package state (stores an `init` makes on every path, since 2026-10-23); floats ⬜
 - ⬜ Goroutines, `select`, channels, `defer` of modelled functions
 
 **LLVM line (C, LLVM IR, TinyGo → VeIR semantics)**: 7 / 11

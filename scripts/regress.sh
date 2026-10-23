@@ -24,8 +24,11 @@ for f in glob.glob(f"{ws}/verdicts/*.json"):
     c = os.path.basename(f)[:-5]
     cx = json.load(open(f"{ws}/counterexamples/{c}.json"))
     out[cx["property"]] = json.load(open(f))["status"]
+muts = load("mutations")
 for p in sorted(out):
-    print(out[p], p.removeprefix("p_github_com_andreasfoo_go2lean_examples_"))
+    m = muts.get(p)
+    mut = f" mut={m['killed']}/{m['tried']}" if m else ""
+    print(out[p] + mut, p.removeprefix("p_github_com_andreasfoo_go2lean_examples_"))
 EOF
 GOLDEN=testdata/regress/examples.golden
 if [ "$2" = "-update" ]; then cp "$WS/outcomes.txt" "$GOLDEN"; echo "regress: updated $GOLDEN"; exit 0; fi
