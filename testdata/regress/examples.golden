@@ -153,6 +153,8 @@ none stream_converter_finish_nopanic
 none stream_converter_process_nopanic
 exhausted stream_seqbounded_sequence
 confirmed stream_seqcomplete_sequence
+exhausted strs_before_nopanic
+exhausted strs_before_specbeforebytewise
 confirmed strs_hextag_nopanic
 exhausted strs_isadmin_nopanic
 exhausted strs_label_nopanic

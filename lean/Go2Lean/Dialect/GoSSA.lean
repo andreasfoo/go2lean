@@ -565,6 +565,13 @@ def heapAlloc (heap : Heap Val) (obj : Val) : Val × Heap Val :=
 
 -- Strings --------------------------------------------------------------------
 
+/-- Go's string order: byte-wise lexicographic, a proper prefix first. -/
+def bytesLt : List Nat → List Nat → Bool
+  | [], [] => false
+  | [], _ :: _ => true
+  | _ :: _, [] => false
+  | x :: xs, y :: ys => if x < y then true else if y < x then false else bytesLt xs ys
+
 /-- The bytes of a string value, read from the heap. -/
 def strBytes (heap : Heap Val) : Val → Option (List Nat)
   | .str _ _ 0#64 => some []
@@ -574,6 +581,12 @@ def strBytes (heap : Heap Val) : Val → Option (List Nat)
       some (((es.drop off.toNat).take len.toNat).map fun | .int _ v => v.toNat | _ => 0)
     | _ => none
   | _ => none
+
+/-- A comparison of two strings by their bytes. -/
+def strCmp (heap : Heap Val) (a b : Val) (f : List Nat → List Nat → Bool) : Res Val :=
+  match strBytes heap a, strBytes heap b with
+  | some x, some y => .ok (.bool (f x y))
+  | _, _ => .panic .modelStuck
 
 /-- The longest string concatenation, a Builder or Join/ReplaceAll may
 build (bytes): longer ones get the model stuck. Strings are lists of
@@ -1013,6 +1026,10 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .sle, args => cmpInt BitVec.sle args
   | .sgt, args => cmpInt (fun a b => BitVec.slt b a) args
   | .sge, args => cmpInt (fun a b => BitVec.sle b a) args
+  | .ult, [a@(.str ..), b@(.str ..)] => strCmp heap a b fun x y => bytesLt x y
+  | .ule, [a@(.str ..), b@(.str ..)] => strCmp heap a b fun x y => !bytesLt y x
+  | .ugt, [a@(.str ..), b@(.str ..)] => strCmp heap a b fun x y => bytesLt y x
+  | .uge, [a@(.str ..), b@(.str ..)] => strCmp heap a b fun x y => !bytesLt x y
   | .ult, args => cmpInt BitVec.ult args
   | .ule, args => cmpInt BitVec.ule args
   | .ugt, args => cmpInt (fun a b => BitVec.ult b a) args

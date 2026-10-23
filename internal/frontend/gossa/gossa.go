@@ -607,7 +607,7 @@ func constMapEntries(mm *ssa.MakeMap) []*ssa.MapUpdate {
 		case *ssa.MapUpdate:
 			_, kc := r.Key.(*ssa.Const)
 			_, vc := r.Value.(*ssa.Const)
-			if fn, ok := r.Value.(*ssa.Function); ok && len(fn.FreeVars) == 0 {
+			if fn, ok := tableFunc(r.Value); ok && len(fn.FreeVars) == 0 {
 				vc = true // a table of functions (an operator table)
 			}
 			if !kc || !vc {
@@ -623,6 +623,16 @@ func constMapEntries(mm *ssa.MakeMap) []*ssa.MapUpdate {
 		return []*ssa.MapUpdate{}
 	}
 	return ups
+}
+
+// tableFunc is the package function a table entry holds: the function
+// itself, or converted to a named func type (map[string]cfunc{"": f}).
+func tableFunc(v ssa.Value) (*ssa.Function, bool) {
+	if ct, ok := v.(*ssa.ChangeType); ok {
+		v = ct.X
+	}
+	fn, ok := v.(*ssa.Function)
+	return fn, ok
 }
 
 // testHelper says whether f exists for tests only: named ...ForTest or
@@ -1620,6 +1630,10 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 		case token.ADD:
 			op = ir.Simple("strConcat")
 		case token.EQL, token.NEQ:
+		case token.LSS, token.LEQ, token.GTR, token.GEQ:
+			// Byte-wise lexicographic order: the unsigned comparisons on
+			// two strings (the dialect's string cases).
+			op = ir.Simple(map[token.Token]string{token.LSS: "ult", token.LEQ: "ule", token.GTR: "ugt", token.GEQ: "uge"}[x.Op])
 		default:
 			return fmt.Errorf("string operator %s not supported", x.Op)
 		}
@@ -2312,7 +2326,11 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 						if err != nil {
 							return err
 						}
-						v, err := t.val(up.Value)
+						val := up.Value
+						if fn, ok := tableFunc(val); ok {
+							val = fn // the entry is in the initializer, not here
+						}
+						v, err := t.val(val)
 						if err != nil {
 							return err
 						}

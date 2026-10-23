@@ -71,3 +71,6 @@ func HexTag(key string) string { return fmt.Sprintf("%x", []byte(key))[:4] }
 func SpecLabelFormat(kind string, n int, ret string) bool {
 	return ret == kind+"-"+strconv.Itoa(n)
 }
+
+// Before reports whether a sorts before b (Go's byte-wise order).
+func Before(a, b string) bool { return a < b }
