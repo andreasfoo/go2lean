@@ -13,8 +13,9 @@ Go source ─► go/ssa ─► Lean SSA model ─► counterexample ─► go te
 Status: research prototype, not a production tool. What it is: a
 bounded, search-based bug finder (random search steered by the program's
 constants, exhaustive search of small domains), not a symbolic executor;
-proofs over all inputs exist only for `no_panic` of integer and bool
-functions. 26 ground-truth packages run in CI (195 properties, each outcome
+the pipeline proves over all inputs only `no_panic` of integer and bool
+functions; functional properties of loops over slices are proved by hand
+so far (`lean/Proofs/Functional.lean`). 27 ground-truth packages run in CI (199 properties, each outcome
 pinned, including every spec's mutation score). The design is in
 [docs/design.md](docs/design.md); the Go semantics modelled, and how
 faithfully, in [docs/semantics.md](docs/semantics.md); what it does not
@@ -319,7 +320,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
 - ✅ Spec-in-Go properties and probes (model value vs real value)
 - ✅ LLM agent: proposes specs, runs them, reports
-- ✅ Regression gate in CI (195 properties); benchmark of hand-found bugs (34/34)
+- ✅ Regression gate in CI (199 properties); benchmark of hand-found bugs (34/34)
 - ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
 - ✅ Proof prototype: a postcondition proved for all 64-bit inputs by hand (`lean/Proofs`)
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))

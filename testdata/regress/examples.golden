@@ -150,6 +150,10 @@ confirmed portable_sumfirst_nopanic
 confirmed portable_tokens_nopanic
 confirmed portable_unit_nopanic
 confirmed portable_url_nopanic
+none proofs_countup_nopanic
+exhausted proofs_insertionsort_nopanic
+proved proofs_max2_nopanic
+exhausted proofs_max_nopanic
 confirmed recs_dedup_nopanic
 confirmed recs_first_nopanic
 confirmed recs_longest_nopanic

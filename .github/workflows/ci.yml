@@ -75,6 +75,12 @@ jobs:
       - name: reflect Kind/IsNil and utf16.Encode against Go
         run: PKG=testdata/miscdiff scripts/json-diff.sh "$RUNNER_TEMP/misc-diff" 6 | tail -5
 
+      - name: strings, strconv and utf8 models against Go
+        run: DEPS=1 PKG=testdata/stdaudit scripts/json-diff.sh "$RUNNER_TEMP/std-audit" 6 | tail -5
+
+      - name: Functional proofs (lean/Proofs/Functional.lean)
+        run: scripts/proofs.sh "$RUNNER_TEMP/proofs"
+
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4

@@ -38,6 +38,16 @@ pointers or interfaces, and the LLVM line get bounded searches only, and
 the model; how faithfully the model follows Go is §5's question, which no
 proof answers.
 
+Since 2026-10-23 functional properties are proved by hand for a first set
+of functions, loops and slice reads included (`lean/Proofs/Functional.lean`,
+checked in CI by `scripts/proofs.sh`): `Max2`, `CountUp` and `Max` of
+`examples/proofs`, each for every input, kernel only. They rest on
+`Go2Lean.Proof.WP`, a partial-correctness weakest precondition read off the
+interpreter with a cut-point rule for loops. Still missing: calls (callee
+contracts), heap writes, the automation that would let the pipeline write
+these proofs (block walking is mechanical; loop invariants are the agent's
+part), and termination (the theorems are about runs that end).
+
 ## 2. Under-approximations are not tracked mechanically
 
 P1 says the model may over-approximate, never under-approximate.

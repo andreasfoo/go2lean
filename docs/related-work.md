@@ -84,6 +84,17 @@ translation sound).
    prove with `vcgen`, loop invariants and `grind`. Invariants and the
    remaining obligations are an agent's job, under the kernel. Loom is the
    fallback if `Std.WP` does not fit.
+   *Result of the spike (issue #1):* `Std.WP`'s `WP` class takes the
+   interpreter's semantics without trouble, but `vcgen` advances through a
+   program by its structured constructors (`seq`, `ite`, `while`), and
+   go/ssa's control-flow graph has none: with one spec per block, `vcgen`
+   applies it once and hands back the rest as a single condition. What
+   worked is smaller: a weakest precondition over blocks, an unfolding
+   lemma per block, and a cut-point rule for loop headers proved once by
+   induction on fuel (`lean/Go2Lean/Proof/WP.lean`), with the existing
+   `simp` lemmas and `grind`/`omega` for the conditions. `vcgen` would pay
+   off only with a structured form of the program (the frontend could emit
+   one: Go source is structured).
 3. **The existing prover** (`no_panic` by `simp` and `bv_decide`): move the
    closing step to `grind` where it applies, keeping `bv_decide` for
    bit-level goals; a `grind` proof needs only the kernel.
