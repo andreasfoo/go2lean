@@ -603,7 +603,9 @@ func ClassifyPanic(msg string) contract.PanicKind {
 		return contract.PanicNilMapWrite
 	case strings.Contains(msg, "closed channel") || strings.Contains(msg, "close of nil channel"):
 		return contract.PanicClosedChannel
-	case strings.HasPrefix(msg, "sync: "), strings.Contains(msg, "negative WaitGroup counter"):
+	case strings.HasPrefix(msg, "sync: ") && !strings.Contains(msg, "negative WaitGroup counter"):
+		// A fatal error (an unlock of an unlocked mutex); a negative
+		// WaitGroup counter is a plain panic.
 		return contract.PanicSyncFatal
 	case strings.Contains(msg, "all goroutines are asleep"):
 		return contract.PanicDeadlock

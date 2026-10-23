@@ -45,6 +45,8 @@ structure Gor where
   frames : List Frame
   done : Bool := false
   result : Val := .unit
+  /-- Runs a `Func.daemon` function (a ticker). -/
+  daemon : Bool := false
 
 instance : Inhabited Gor := ⟨{ frames := [] }⟩
 
@@ -288,6 +290,12 @@ def writerWaiting (gs : Array Gor) (i : Nat) (ptr : Val) : Bool :=
     | some (.wLock, [q]) => if samePtr q ptr then some () else none
     | _ => none).isSome
 
+/-- What a `sync.Locker` holds: 1 for a `*RWMutex` (boxed with `rwTag`), 2
+for its `RLocker()` (`rTag`), 0 for a `*Mutex`; and the pointer. -/
+def lockerTarget (rwTag rTag : Nat) : Val → Nat × Val
+  | .boxed t p => (if t == rwTag then 1 else if t == rTag then 2 else 0, p)
+  | p => (0, p)
+
 /-- Try goroutine `i`'s pending operation; `choice` picks among ready
 `select` cases. -/
 def fire (heap : Heap Val) (gs : Array Gor) (i : Nat) (choice : Nat) : Fire :=
@@ -330,8 +338,10 @@ def fire (heap : Heap Val) (gs : Array Gor) (i : Nat) (choice : Nat) : Fire :=
       if w then withWord (setRW heap ptr r false) .unit else .panic .syncFatal
     | .rLock, [ptr] =>
       let (r, w) := rwAt heap ptr
-      -- Writer preference: a waiting writer stops new readers, as in Go.
-      if !w && !writerWaiting gs i ptr then withWord (setRW heap ptr (r + 1) false) .unit else .blocked
+      -- Writer preference: a writer waiting for the readers to leave stops
+      -- new readers, as in Go. With no reader in, a writer at its `Lock` is
+      -- not waiting yet (it could take the lock): either may go first.
+      if !w && (r = 0 || !writerWaiting gs i ptr) then withWord (setRW heap ptr (r + 1) false) .unit else .blocked
     | .rUnlock, [ptr] =>
       let (r, w) := rwAt heap ptr
       if r > 0 then withWord (setRW heap ptr (r - 1) w) .unit else .panic .syncFatal
@@ -345,6 +355,26 @@ def fire (heap : Heap Val) (gs : Array Gor) (i : Nat) (choice : Nat) : Fire :=
       | 1 => .blocked
       | _ => done1 (.bool false) heap
     | .yield, _ => done1 .unit heap
+    | .condWait, [c, .int _ t] =>
+      if (condState heap c).2.contains t.toNat then .blocked else done1 .unit heap
+    | .lockL tag rtag, [l] =>
+      match lockerTarget tag rtag l with
+      | (1, ptr) =>
+        let (r, w) := rwAt heap ptr
+        if r = 0 && !w then withWord (setRW heap ptr 0 true) .unit else .blocked
+      | (2, ptr) =>
+        let (r, w) := rwAt heap ptr
+        if !w && (r = 0 || !writerWaiting gs i ptr) then withWord (setRW heap ptr (r + 1) false) .unit else .blocked
+      | (_, ptr) => if wordAt heap ptr = 1 then .blocked else withWord (setWord heap ptr 1) .unit
+    | .unlockL tag rtag, [l] =>
+      match lockerTarget tag rtag l with
+      | (1, ptr) =>
+        let (r, w) := rwAt heap ptr
+        if w then withWord (setRW heap ptr r false) .unit else .panic .syncFatal
+      | (2, ptr) =>
+        let (r, w) := rwAt heap ptr
+        if r > 0 then withWord (setRW heap ptr (r - 1) w) .unit else .panic .syncFatal
+      | (_, ptr) => if wordAt heap ptr = 1 then withWord (setWord heap ptr 0) .unit else .panic .syncFatal
     | _, _ => .panic .modelStuck
 
 /-! ## The scheduler -/
@@ -385,7 +415,7 @@ def waitsOnResult (res : Val) (g : Gor) : Bool :=
 /-- Where the goroutines that cannot move wait, for a deadlock or leak report. -/
 def describeBlocked (gs : Array Gor) : String :=
   let parts := (gs.toList.zipIdx).filterMap fun (g, i) =>
-    if g.done then none else
+    if g.done || g.daemon then none else
     match g.frames with
     | f :: _ =>
       let op := match pendingSync g with
@@ -421,7 +451,8 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
             | .unknown => .ok (gs, s.assume "a goroutine running a function value the model does not know is not modelled")
             | .known fid bound =>
               match p.funcs[fid]? with
-              | some callee => .ok (gs.push { frames := [entryFrame callee (bound ++ args.map (f.env[·]!))] }, s)
+              | some callee =>
+                .ok (gs.push { frames := [entryFrame callee (bound ++ args.map (f.env[·]!))], daemon := callee.daemon }, s)
               | none => .error .modelStuck
           | .sync .. =>
             let (c, s) := schedChoice p h s
@@ -451,26 +482,30 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
       | (.outOfFuel, s) => (.error .other, { s with stuck := s.stuck <|> some "out of fuel in a goroutine" })
 
 /-- Schedule until no goroutine can move. `outOfFuel` when the steps run out
-(an unfair schedule spinning one goroutine ends here, not as a finding). -/
+(an unfair schedule spinning one goroutine ends here, not as a finding).
+Daemon goroutines (tickers) always can: when only they can, `idle` counts
+their steps, and once each had two without waking another goroutine the run
+ends as if they were done. -/
 def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
-    Array Gor → HState Val → Nat → Res Val × HState Val
-  | _, s, 0 => (.outOfFuel, s)
-  | gs, s, n + 1 =>
+    Array Gor → HState Val → Nat → Nat → Res Val × HState Val
+  | _, s, 0, _ => (.outOfFuel, s)
+  | gs, s, n + 1, idle =>
     let cands := (List.range gs.size).filter (ready s.heap gs)
-    match cands with
-    | [] =>
+    let live := cands.filter fun i => !(gs[i]!.daemon)
+    let daemons := cands.length - live.length
+    if live.isEmpty && (daemons = 0 || idle ≥ 2 * daemons) then
       match gs[0]? with
       | some g0 =>
         if g0.done then
-          if gs.all (fun g => g.done || waitsOnResult g0.result g) then (.ok g0.result, s)
+          if gs.all (fun g => g.done || g.daemon || waitsOnResult g0.result g) then (.ok g0.result, s)
           else (.panic .goroutineLeak, { s with panicAt := some (describeBlocked gs) })
         else (.panic .deadlock, { s with panicAt := some (describeBlocked gs) })
       | none => (.panic .modelStuck, s)
-    | _ =>
+    else
       let (c, s) := schedChoice p h s
       let i := cands[c % cands.length]!
       match stepGor p or h gs i s stepFuel with
-      | (.ok (gs, s), _) => schedule p or h stepFuel gs s n
+      | (.ok (gs, s), _) => schedule p or h stepFuel gs s n (if live.isEmpty then idle + 1 else 0)
       | (.error .other, s) => (.outOfFuel, s)
       | (.error k, s) => (.panic k, s)
 
@@ -480,7 +515,7 @@ def runConc (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List
     (heap : Heap Val := #[]) : Res Val × HState Val :=
   match p.funcs[fid]? with
   | none => (.panic .modelStuck, { heap })
-  | some fn => schedule p or h fuel #[{ frames := [entryFrame fn args] }] { heap } fuel
+  | some fn => schedule p or h fuel #[{ frames := [entryFrame fn args] }] { heap } fuel 0
 
 /-- Run `fid`: in the concurrent machine when it can synchronise, else with
 the big-step interpreter. -/

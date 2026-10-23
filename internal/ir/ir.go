@@ -213,6 +213,12 @@ type Simple string
 
 func (s Simple) Lean() string { return "." + string(s) }
 
+// Raw is an op with arguments, written out as its Lean term
+// ("(.ctxCancel 1)").
+type Raw string
+
+func (r Raw) Lean() string { return string(r) }
+
 // Shl is `x << n`; CountSigned says whether n has a signed type.
 type Shl struct{ CountSigned bool }
 
@@ -380,7 +386,15 @@ type GlobalAddr struct {
 	Zero Val
 }
 
-func (o GlobalAddr) Lean() string { return fmt.Sprintf("(.globalAddr %d %s)", o.Key, o.Zero.Lean()) }
+func (o GlobalAddr) Lean() string {
+	return fmt.Sprintf("(.conc (.globalAddr %d %s))", o.Key, o.Zero.Lean())
+}
+
+// Conc is one of the concurrent model's heap ops (GoSSA's ConcOp) without
+// arguments of its own: ctxBackground, ctxNew, ctxDone, ctxErr, condEnter.
+type Conc string
+
+func (c Conc) Lean() string { return "(.conc ." + string(c) + ")" }
 
 // MakeSlice is make([]T, len, cap) with elements Zero.
 type MakeSlice struct{ Zero Val }
@@ -526,11 +540,13 @@ const (
 type SyncOp struct {
 	// Kind is the Lean constructor: send, recv, close, select, lock,
 	// unlock, tryLock, wLock, wUnlock, rLock, rUnlock, wgAdd, wgWait,
-	// onceEnter, yield.
+	// onceEnter, yield, condWait, lockL, unlockL.
 	Kind     string
 	WithOk   bool   // recv: the result is (value, ok)
 	Sends    []bool // select: per case, true for a send
 	Blocking bool   // select: no default case
+	Tag      uint32 // lockL, unlockL: the type tag of *sync.RWMutex
+	RTag     uint32 // lockL, unlockL: the type tag of RWMutex.RLocker()'s locker
 }
 
 func (o SyncOp) Lean() string {
@@ -543,6 +559,8 @@ func (o SyncOp) Lean() string {
 			parts[i] = fmt.Sprint(s)
 		}
 		return fmt.Sprintf("(.select [%s] %t)", strings.Join(parts, ", "), o.Blocking)
+	case "lockL", "unlockL":
+		return fmt.Sprintf("(.%s %d %d)", o.Kind, o.Tag, o.RTag)
 	}
 	return "." + o.Kind
 }
@@ -599,6 +617,8 @@ type Func struct {
 	// Sync: the function can reach a goroutine start or a synchronisation
 	// operation; the concurrent machine gives its calls frames.
 	Sync bool
+	// Daemon: a goroutine running it does not keep a run alive (a ticker).
+	Daemon bool
 	// SpecMaxLen is the spec's go2lean:maxlen directive (0: none).
 	SpecMaxLen int
 	// SequenceFor names the function a `go2lean:sequence` spec drives.
