@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="title desc">
+  <title id="title">go2lean: specs, models, and real Go replay</title>
+  <desc id="desc">Humans or an optional agent write Go specs, which compile alongside Go source into a Lean model. Built-in specs, such as no-panic checks, enter search directly. Search produces candidate inputs, which are replayed with go test and classified as confirmed, spurious, or inconclusive. No counterexample found is not a proof of correctness.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m1 1 7 4-7 4" fill="none" stroke="#8a9985" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="spec-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m1 1 7 4-7 4" fill="none" stroke="#bf795c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="1200" height="490" rx="12" fill="#f8f5ef"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <!-- Specs are an input family, not a synonym for no_panic. -->
+    <text x="54" y="48" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#7c8e72">Specs</text>
+    <path d="M128 41H826" stroke="#d7dccc" stroke-width="1"/>
+    <g text-anchor="middle">
+      <text x="150" y="98" font-size="19" font-weight="600" fill="#ac644a">Human / Agent</text>
+      <text x="150" y="124" font-size="15" fill="#78786c">writes business rules</text>
+      <text x="440" y="98" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#ac644a">Go specs</text>
+      <text x="440" y="124" font-size="15" fill="#78786c">func Spec(...) bool</text>
+      <text x="730" y="98" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#7c8e72">Built-in specs</text>
+      <text x="730" y="124" font-size="15" fill="#78786c">e.g. no_panic</text>
+    </g>
+    <g fill="none" stroke-width="1.8" stroke-linecap="round">
+      <path d="M246 93H358" stroke="#bf795c" marker-end="url(#spec-arrow)"/>
+      <path d="M440 140V207" stroke="#bf795c" marker-end="url(#spec-arrow)"/>
+      <path d="M730 140V207" stroke="#8a9985" marker-end="url(#arrow)"/>
+    </g>
+    <!-- Code: offset paper sheets with a small highlighted expression. -->
+    <g stroke="#9aa68d" stroke-width="1.5" stroke-linejoin="round">
+      <rect x="97" y="223" width="89" height="106" rx="4" fill="#e3e7d9" transform="rotate(-5 142 276)"/>
+      <rect x="109" y="215" width="89" height="108" rx="4" fill="#fcfaf4" transform="rotate(3 154 269)"/>
+    </g>
+    <g stroke="#b4bea8" stroke-width="5" stroke-linecap="round">
+      <path d="M126 236H150M126 249H178M126 289H177M126 303H161"/>
+    </g>
+    <rect x="122" y="260" width="62" height="17" rx="3" fill="#f0dbcd"/>
+    <text x="153" y="273" font-family="Consolas, monospace" font-size="15" fill="#b36d50" text-anchor="middle">{ ... }</text>
+    <!-- Lean: a chip on a compiled program sheet. -->
+    <g stroke="#9aa68d" stroke-width="1.5" stroke-linejoin="round">
+      <rect x="390" y="224" width="94" height="106" rx="4" fill="#e3e7d9"/>
+      <rect x="396" y="217" width="94" height="106" rx="4" fill="#fcfaf4"/>
+    </g>
+    <g stroke="#647760" stroke-width="2" stroke-linecap="round">
+      <path d="M425 238V230M437 238V230M449 238V230M461 238V230M425 279V287M437 279V287M449 279V287M461 279V287M416 247H408M416 259H408M416 271H408M470 247H478M470 259H478M470 271H478"/>
+      <rect x="416" y="238" width="54" height="41" rx="4" fill="#43594c"/>
+      <rect x="424" y="245" width="38" height="27" rx="2" fill="none" stroke="#b7c4a8" stroke-width="1.2"/>
+    </g>
+    <path d="M413 304H473" stroke="#b4bea8" stroke-width="5" stroke-linecap="round"/>
+    <!-- Search: inspect a model, not an assertion of a proven bug. -->
+    <g stroke="#9aa68d" stroke-width="1.5" stroke-linejoin="round">
+      <rect x="678" y="224" width="88" height="106" rx="4" fill="#e3e7d9"/>
+      <rect x="684" y="217" width="88" height="106" rx="4" fill="#fcfaf4"/>
+    </g>
+    <g stroke="#b4bea8" stroke-width="5" stroke-linecap="round"><path d="M700 236H731M700 251H750M700 298H746M700 311H727"/></g>
+    <circle cx="751" cy="270" r="30" fill="#f8f5ef" stroke="#43594c" stroke-width="2.5"/>
+    <path d="m773 293 18 20" stroke="#43594c" stroke-width="7" stroke-linecap="round"/>
+    <path d="M733 262H765" stroke="#d7a575" stroke-width="5" stroke-linecap="round"/>
+    <path d="M733 276H756" stroke="#a3b191" stroke-width="5" stroke-linecap="round"/>
+    <!-- Replay: real execution plus a verdict sheet. -->
+    <g stroke-linejoin="round">
+      <path d="M974 231 1064 240V301L974 292Z" fill="#dfe5d9" stroke="#8e9e89" stroke-width="1.5"/>
+      <path d="M980 238 1058 246V292L980 285Z" fill="#43594c" stroke="#8e9e89"/>
+      <path d="m989 253 8 6-8 4m15 3 12 1" fill="none" stroke="#dce4d0" stroke-width="2" stroke-linecap="round"/>
+      <path d="m974 292 90 9-22 23-91-13Z" fill="#fcfaf4" stroke="#8e9e89" stroke-width="1.5"/>
+      <path d="m980 299 66 7-8 8-67-7Z" fill="#bcc6b2"/>
+      <rect x="1050" y="275" width="44" height="57" rx="3" fill="#fcfaf4" stroke="#9aa68d" stroke-width="1.5"/>
+      <circle cx="1072" cy="293" r="10" fill="none" stroke="#7c8e72" stroke-width="1.5"/>
+      <path d="m1067 293 4 4 6-8" fill="none" stroke="#7c8e72" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M1060 312H1083M1060 319H1076" stroke="#b4bea8" stroke-width="2.5" stroke-linecap="round"/>
+    </g>
+    <!-- Main flow: one uninterrupted left-to-right line, no crossing edges. -->
+    <g fill="none" stroke="#8a9985" stroke-width="1.8" stroke-linecap="round" marker-end="url(#arrow)">
+      <path d="M215 272H374"/>
+      <path d="M507 272H661"/>
+      <path d="M807 272H943"/>
+    </g>
+    <g text-anchor="middle" font-size="14" fill="#78786c">
+      <text x="295" y="257">go/ssa → IR</text>
+      <text x="585" y="257">model + specs</text>
+      <text x="875" y="246">candidate</text><text x="875" y="264">inputs</text>
+    </g>
+    <g text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="28">
+      <text x="150" y="374" fill="#b96b4e">Go source</text>
+      <text x="440" y="374" fill="#7c8e72">Lean model</text>
+      <text x="730" y="374" fill="#7c8e72">Search</text>
+      <text x="1020" y="374" fill="#607e8a">Go replay</text>
+    </g>
+    <g text-anchor="middle" font-size="16" fill="#78786c">
+      <text x="150" y="403">Target functions</text>
+      <text x="440" y="403">M1 · compile</text>
+      <text x="730" y="403">M2 · hunt</text>
+      <text x="1020" y="403">M3 · go test</text>
+    </g>
+    <path d="M54 427H1146" stroke="#dedfd3"/>
+    <text x="54" y="458" font-size="14" fill="#78786c">No counterexample found ≠ proved correct</text>
+    <text x="1146" y="458" text-anchor="end" font-size="14" fill="#607e8a">Verdict: confirmed / spurious / inconclusive</text>
+  </g>
+</svg>

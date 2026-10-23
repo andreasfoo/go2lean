@@ -1,14 +1,46 @@
-# go2lean
+![go2lean — Go in. Evidence out.](docs/images/banner.svg)
+
+<h1 align="center">go2lean</h1>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#how-it-works">How It Works</a> ·
+  <a href="#writing-a-spec">Writing a Spec</a> ·
+  <a href="docs/design.md">Documentation</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go" alt="Go 1.26" />
+  <img src="https://img.shields.io/badge/Lean-4-315E78" alt="Lean 4" />
+  <img src="https://img.shields.io/badge/status-research_prototype-D9A066" alt="Status: research prototype" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-52876C" alt="License: MIT" /></a>
+</p>
 
 Find bugs in Go functions by translating them into an executable semantic
 model in Lean 4, searching that model for counterexamples, and verifying every
-counterexample with the real Go toolchain. An LLM agent proposes the
-properties; Lean finds the inputs; `go test` is the judge.
+counterexample with the real Go toolchain. Built-in templates provide safety
+properties; humans or an optional LLM agent write business specs in Go.
+Lean finds the inputs; `go test` is the judge.
 
-```
-Go source ─► go/ssa ─► Lean SSA model ─► counterexample ─► go test ─► verdict + PoC
-            M1 programmatic        M2 constraint engines / agent        M3 poc
-```
+## Features
+
+- **Executable Go models in Lean 4** — translate Go through SSA into a
+  fuel-bounded semantic model, with unsupported behavior made explicit.
+- **Safety checks without handwritten specs** — automatically generate
+  `no_panic` properties for eligible target functions.
+- **Business rules written in Go** — express postconditions as ordinary
+  `bool`-returning Go functions; compile them alongside the target and reuse
+  them as oracles in real Go tests.
+- **Counterexample search** — combine seeded random search guided by program
+  constants with exhaustive enumeration of small domains; check sequence
+  properties over bounded streams of calls.
+- **Real Go replay** — turn candidate counterexamples into runnable tests and
+  distinguish confirmed findings from spurious or inconclusive results.
+- **Optional spec-writing agent** — read source, propose and repair Go specs,
+  run the pipeline, and report the verdicts. The basic pipeline needs no API key.
+
+### Scope and evidence
 
 Status: research prototype, not a production tool. What it is: a
 bounded, search-based bug finder (random search steered by the program's
@@ -34,15 +66,29 @@ were triaged by hand ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean
 
 ## Quick start
 
-Requirements: Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
+### 1. Prerequisites
+
+Requirements: Git, Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
 toolchain pinned in `lean/lean-toolchain` is fetched on the first build.
-Recommended: [bubblewrap](https://github.com/containers/bubblewrap)
+Recommended on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
 (`apt install bubblewrap`), which isolates the replayed tests (M3); without
 it they run with resource limits only.
 
+### 2. Clone and run the included example
+
 ```sh
+git clone https://github.com/andreasfoo/go2lean.git
+cd go2lean
 go run ./cmd/go2lean run ./examples/overflow
 ```
+
+No LLM API key is needed. This example includes a Go spec: when all inputs
+are non-negative, the sum should be non-negative. Integer overflow can
+violate that rule without panicking.
+
+### 3. Inspect the result
+
+Example output (search details may vary):
 
 ```
 == M1 compile
@@ -66,6 +112,14 @@ reproduction command. Everything the modules exchange is a JSON record under
 `out/` (types in `internal/contract`).
 
 ## How it works
+
+![The go2lean pipeline: human- or agent-written Go specs compile with the source; built-in specs also guide Lean search; candidate inputs are replayed with go test.](docs/images/how-it-works.svg)
+
+**Specs enter in two ways:** built-in properties such as `no_panic` are
+generated for eligible targets; business specs are Go functions written by
+a human or the optional agent. Go specs pass through M1 alongside the target
+source, then both kinds of properties guide the M2 search. A model
+counterexample is only a candidate until M3 replays it with the real Go toolchain.
 
 **M1 — programmatic.** `golang.org/x/tools/go/ssa` lowers the package; the
 frontend turns it into a frontend-independent IR (blocks with parameters,
@@ -119,6 +173,45 @@ judges: `confirmed` (the real run violates the oracle the way the property
 says), `spurious` (it does not — with a diagnosis of what the model got
 wrong), or `inconclusive`. This is the only source of trust: a bug is
 reported only with a verdict from here.
+
+## Writing a spec
+
+You do not need to write Lean. There are two different ways to state a claim:
+
+| Claim | How it is represented | What violates it |
+|---|---|---|
+| The function must not panic | Auto-generated `no_panic` property; no spec function required | A panic during the target call, confirmed by real Go replay |
+| The result must satisfy a business rule | A Go function marked `// go2lean:spec Target` | The spec returns `false`, confirmed by real Go replay |
+
+For example, the included [`Sum` spec](examples/overflow/overflow.go) says
+that adding non-negative integers should produce a non-negative result:
+
+```go
+// go2lean:spec Sum
+func SpecSum(xs []int, ret int) bool {
+    for _, x := range xs {
+        if x < 0 {
+            return true // This rule does not constrain inputs with negative elements.
+        }
+    }
+    return ret >= 0
+}
+```
+
+The annotation associates the spec with `Sum`. Its arguments are the target's
+inputs followed by its result; `true` means the rule holds for that execution.
+Place the spec in the target package; the agent writes its specs to
+`go2lean_specs_test.go`. M1 compiles the spec alongside the target, M2 searches
+for inputs that make it return `false`, and M3 checks the same oracle in Go.
+
+**Why not just use `no_panic`?** Go integer overflow wraps without panicking.
+The business spec detects a wrong result that a panic check cannot catch.
+Conversely, a target panic is checked by `no_panic`, not by pretending the
+postcondition returned `false`.
+
+**A claim is not a proof.** Finding no counterexample in a bounded search
+is not a guarantee for all inputs. See [limitations](docs/limitations.md)
+for model boundaries and the restricted cases supporting all-input proofs.
 
 ## The agent
 
