@@ -47,7 +47,7 @@ on the inputs and Clamp's result; true when the spec returns true. -/
 def specHolds (v lo hi : BitVec 64) : Bool :=
   match run prog or0 h0 0 [.int 64 v, .int 64 lo, .int 64 hi] 64 with
   | (.ok r, s) =>
-    match runFunc prog or0 h0 4 [.int 64 v, .int 64 lo, .int 64 hi, r] s 64 with
+    match runFunc prog or0 h0 false 4 [.int 64 v, .int 64 lo, .int 64 hi, r] s 64 with
     | (.ok (.bool b), _) => b
     | _ => false
   | _ => false

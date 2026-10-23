@@ -1049,6 +1049,7 @@ func candidates(spkg *ssa.Package, tests bool) []*ssa.Function {
 func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]contract.XCall, zeros map[*ssa.Global]ssa.Value, sprog *ssa.Program, boxed []types.Type) (*ir.Prog, error) {
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros, sprog: sprog, boxed: boxed, json: newJSONTable(sprog)}
+	st.sharedGlobals = sharedGlobals(fns)
 
 	// Pass 1: assign FuncIds so calls can be resolved.
 	byName := map[string]*ssa.Function{}
@@ -1212,6 +1213,9 @@ type progState struct {
 	json *jsonTable
 	// helpers are the synthetic functions of the program (conc.go), by name.
 	helpers map[string]int
+	// sharedGlobals: the package variables of a package that starts
+	// goroutines that its functions (not its init) write (cellGlobal).
+	sharedGlobals map[*ssa.Global]bool
 	// regexps caches packageRegexps.
 	regexps map[*ssa.Package][]string
 	// tables caches arrayTable; nil until first used.
@@ -1759,7 +1763,7 @@ func (t *fnState) val(x ssa.Value) (ir.Var, error) {
 		t.emit(ir.Instr{Dst: v, Op: ir.Const{V: ir.OpaqueNonNil{}}})
 		return v, nil
 	case *ssa.Global:
-		if key, zero, ok := cellGlobal(fn); ok {
+		if key, zero, ok := t.prog.cellGlobal(fn); ok {
 			// Not cached: the block that first used it need not dominate
 			// the next use.
 			v := t.fresh()
@@ -2523,7 +2527,7 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 		return nil
 	case *ssa.Store:
 		if g, isGlobal := x.Addr.(*ssa.Global); isGlobal {
-			if _, _, cell := cellGlobal(g); !cell {
+			if _, _, cell := t.prog.cellGlobal(g); !cell {
 				t.assume("store to global %s ignored", x.Addr.Name())
 				return nil
 			}
@@ -2681,7 +2685,7 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 	switch x.Op {
 	case token.MUL: // load through a pointer
 		if g, ok := x.X.(*ssa.Global); ok {
-			if _, _, cell := cellGlobal(g); cell {
+			if _, _, cell := t.prog.cellGlobal(g); cell {
 				p, err := t.val(g)
 				if err != nil {
 					return err
@@ -4353,32 +4357,88 @@ func compiledPattern(v ssa.Value) (*regexp.Regexp, bool) {
 // cellGlobal says whether package variable g is a cell (ir.GlobalAddr): its
 // type holds synchronisation state by value (a mutex, read-write mutex, wait
 // group, once or channel, also in a struct field or array element) and no
-// initializer or init function sets it, so it starts at its zero value. The
+// initializer or init function sets it, so it starts at its zero value (or
+// at the one constant its initializer stores). The
 // goroutines of a run share it, so loads and stores go through the cell; any
 // other package variable keeps the rules of docs/semantics.md §4.7.
-func cellGlobal(g *ssa.Global) (uint32, ir.Val, bool) {
+//
+// In a package that starts goroutines, a package variable the package's
+// functions write is a cell too: the goroutines share it, and its races
+// are the race detector's (C2).
+func (s *progState) cellGlobal(g *ssa.Global) (uint32, ir.Val, bool) {
 	pt, ok := g.Type().(*types.Pointer)
-	if !ok || g.Pkg == nil || !holdsSync(pt.Elem()) {
+	if !ok || g.Pkg == nil || !(holdsSync(pt.Elem()) || s.sharedGlobals[g]) {
 		return 0, nil, false
 	}
+	var start ir.Val
 	if initFn := g.Pkg.Func("init"); initFn != nil {
 		for _, f := range initFuncs(initFn) {
 			for _, b := range f.Blocks {
 				for _, in := range b.Instrs {
-					if st, ok := in.(*ssa.Store); ok && st.Addr == g {
+					st, ok := in.(*ssa.Store)
+					if !ok || st.Addr != g {
+						continue
+					}
+					// One constant initializer (var d = 10 * time.Second):
+					// the cell starts at it.
+					c, ok := st.Val.(*ssa.Const)
+					if !ok || start != nil {
 						return 0, nil, false
 					}
+					v, err := constVal(c)
+					if _, str := v.(ir.StrConst); err != nil || str {
+						return 0, nil, false
+					}
+					start = v
 				}
 			}
 		}
 	}
-	zero, ok := zeroVal(pt.Elem())
-	if !ok {
-		return 0, nil, false
+	if start == nil {
+		zero, ok := zeroVal(pt.Elem())
+		if !ok {
+			return 0, nil, false
+		}
+		start = zero
 	}
 	h := fnv.New32a()
 	h.Write([]byte(g.Pkg.Pkg.Path() + "." + g.Name()))
-	return h.Sum32(), zero, true
+	return h.Sum32(), start, true
+}
+
+// sharedGlobals are the package variables written by fns (and the
+// closures in them) when one of them starts a goroutine; none otherwise.
+func sharedGlobals(fns []*ssa.Function) map[*ssa.Global]bool {
+	written := map[*ssa.Global]bool{}
+	spawns := false
+	var visit func(f *ssa.Function)
+	visit = func(f *ssa.Function) {
+		if isInit(f.Name()) && f.Signature.Recv() == nil {
+			return
+		}
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				switch x := in.(type) {
+				case *ssa.Go:
+					spawns = true
+				case *ssa.Store:
+					if g, ok := x.Addr.(*ssa.Global); ok {
+						written[g] = true
+					}
+				}
+			}
+		}
+		for _, a := range f.AnonFuncs {
+			visit(a)
+		}
+	}
+	for _, f := range fns {
+		visit(f)
+	}
+	if !spawns {
+		return nil
+	}
+	return written
 }
 
 // holdsSync says whether a value of type t holds synchronisation state
@@ -4784,15 +4844,15 @@ func (t *fnState) atomicFuncCall(x *ssa.Call, callee *ssa.Function) (bool, error
 	addr := args[0]
 	load := func() ir.Var {
 		v := t.fresh()
-		t.emit(ir.Instr{Dst: v, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		t.emit(ir.Instr{Dst: v, Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 		return v
 	}
 	store := func(v ir.Var) {
-		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, v}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Conc("atomicStore"), Args: []ir.Var{addr, v}})
 	}
 	switch op {
 	case "Load":
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 	case "Store":
 		store(args[1])
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
@@ -4801,7 +4861,7 @@ func (t *fnState) atomicFuncCall(x *ssa.Call, callee *ssa.Function) (bool, error
 		t.emit(ir.Instr{Dst: r, Op: ir.Simple("add"), Args: []ir.Var{load(), args[1]}})
 		store(r)
 	case "Swap":
-		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 		store(args[1])
 	case "CompareAndSwap":
 		cur, r := load(), t.def(x)
@@ -4870,10 +4930,10 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 	case "Load":
 		if isBool {
 			raw := t.fresh()
-			t.emit(ir.Instr{Dst: raw, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+			t.emit(ir.Instr{Dst: raw, Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("ne"), Args: []ir.Var{raw, konst("0")}})
 		} else {
-			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 		}
 	case "Store":
 		v, err := t.val(x.Call.Args[1])
@@ -4885,7 +4945,7 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 			t.emit(ir.Instr{Dst: b, Op: ir.Simple("ite"), Args: []ir.Var{v, konst("1"), konst("0")}})
 			v = b
 		}
-		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, v}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Conc("atomicStore"), Args: []ir.Var{addr, v}})
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
 	case "Add": // Bool has no Add
 		d, err := t.val(x.Call.Args[1])
@@ -4893,9 +4953,9 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 			return true, err
 		}
 		old, r := t.fresh(), t.def(x)
-		t.emit(ir.Instr{Dst: old, Op: ir.Simple("loadPath"), Args: []ir.Var{addr}})
+		t.emit(ir.Instr{Dst: old, Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 		t.emit(ir.Instr{Dst: r, Op: ir.Simple("add"), Args: []ir.Var{old, d}})
-		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{addr, r}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Conc("atomicStore"), Args: []ir.Var{addr, r}})
 	}
 	return true, nil
 }

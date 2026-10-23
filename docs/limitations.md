@@ -201,9 +201,10 @@ generated Lean model.
   end-to-end regression and differential scripts, which are slow.
 - Concurrency (C1, [concurrency.md](concurrency.md)): goroutines, channels,
   `select`, mutexes, wait groups and `Once` are modelled, and the search
-  finds deadlocks, leaks and misuse panics, as do `context`, timers and
-  `sync.Cond`; but data races are not modelled (the machine is
-  sequentially consistent between scheduling points), time is not (a
+  finds deadlocks, leaks, misuse panics and data races (C2), with
+  `context`, timers and `sync.Cond`; but happens-before is
+  over-approximated (some races are missed), the machine is sequentially
+  consistent (no weak-memory reorderings), time is not modelled (a
   timeout may fire at any point, so a finding may need a deadline to
   pass early), a certificate
   for a concurrent function covers sampled schedules only

@@ -39,9 +39,12 @@ func TestRewriteCompiles(t *testing.T) {
 	ov, _ := json.Marshal(overlay)
 	ovPath := filepath.Join(dir, "overlay.json")
 	os.WriteFile(ovPath, ov, 0o644)
-	cmd := exec.Command("go", "test", "-c", "-overlay", ovPath, "-o", filepath.Join(dir, "conc.test"), pkg)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("rewritten package does not build: %v\n%s", err, out)
+	for _, flags := range [][]string{nil, {"-race"}} {
+		args := append(append([]string{"test", "-c"}, flags...), "-overlay", ovPath, "-o", filepath.Join(dir, "conc.test"), pkg)
+		cmd := exec.Command("go", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("rewritten package does not build (%v): %v\n%s", flags, err, out)
+		}
 	}
 }

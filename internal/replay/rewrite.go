@@ -61,7 +61,10 @@ func Rewrite(root, pkg string) (map[string][]byte, error) {
 		}
 		out[name] = src
 	}
-	out[ControllerFile] = []byte(strings.Replace(controllerSrc, "package PKG", "package "+p.Types.Name(), 1))
+	pkgLine := "package " + p.Types.Name()
+	out[ControllerFile] = []byte(strings.Replace(controllerSrc, "package PKG", pkgLine, 1))
+	out["zz_go2lean_replay_race.go"] = []byte(strings.Replace(raceOnSrc, "package PKG", pkgLine, 1))
+	out["zz_go2lean_replay_norace.go"] = []byte(strings.Replace(raceOffSrc, "package PKG", pkgLine, 1))
 	return out, nil
 }
 

@@ -31,7 +31,7 @@ Construct-by-construct detail: [docs/semantics.md](../docs/semantics.md).
 - 🟡 Other package variables (havoc), `init` functions (not run), stores to globals (ignored)
 - 🟡 `defer` of an unmodelled call (ignored); `recover` (havoc)
 - ✅ `defer` of a modelled function (not in a loop)
-- 🟡 Goroutines, channels, `select`, `sync.Mutex` `RWMutex` `WaitGroup` `Once`: deadlocks, goroutine leaks and misuse panics under schedules the search picks ([concurrency.md](../docs/concurrency.md)); `context`, timers (`time.After`, `NewTimer`, `NewTicker`, `AfterFunc`) and `sync.Cond` too; data races not modelled
+- 🟡 Goroutines, channels, `select`, `sync.Mutex` `RWMutex` `WaitGroup` `Once`: deadlocks, goroutine leaks and misuse panics under schedules the search picks ([concurrency.md](../docs/concurrency.md)); `context`, timers (`time.After`, `NewTimer`, `NewTicker`, `AfterFunc`) and `sync.Cond` too; data races (vector clocks), confirmed under `go test -race`
 
 **Standard library and SDKs** (✅ unless noted)
 - `strings`: `HasPrefix` `HasSuffix` `Contains` `Index*` `LastIndex*` `Count` `Cut` `Trim*` `ReplaceAll` `Split` `Fields` `Join` `Repeat` `Builder` `Replacer` (literal pairs); `TrimSpace` `ToLower` `ToUpper` `EqualFold` ASCII only 🟡
@@ -92,7 +92,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ Go fuzz targets (`FuzzXxx`) read as specs (`go2lean run`, `-fuzz-specs`): a project with fuzz targets needs no spec writing
 - 🚧 Proofs of postconditions and of functions over slices and strings
 - 🚧 `init` functions and package state (stores an `init` makes on every path, since 2026-10-23); floats ⬜
-- 🚧 Concurrency (C1, [concurrency.md](../docs/concurrency.md)): goroutines, channels, `select`, `sync`; deadlocks and leaks found and confirmed in 59 of GoKer's 68 blocking kernels (`context`, timers, `sync.Cond` included), with the model's schedule replayed in Go when its scheduler does not take it; data races next
+- 🚧 Concurrency (C1, C2, [concurrency.md](../docs/concurrency.md)): goroutines, channels, `select`, `sync`; deadlocks and leaks found and confirmed in 58 of GoKer's 68 blocking kernels (`context`, timers, `sync.Cond` included), with the model's schedule replayed in Go when its scheduler does not take it; data races found and confirmed under `-race` in 22 of its 35 non-blocking kernels; all-schedule enumeration (C3) next
 
 **LLVM line (C, LLVM IR, TinyGo → VeIR semantics)**: 7 / 11
 - ✅ `lean-llvm/`: LLVM dialect over the same core with [VeIR](https://github.com/opencompl/veir)'s integer and memory semantics
