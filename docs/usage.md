@@ -28,7 +28,7 @@ violate that rule without panicking.
 
 ### 3. Inspect the result
 
-Illustrative output (stage labels expanded for clarity; search details may vary):
+Illustrative output (search details may vary):
 
 ```
 == Compile stage

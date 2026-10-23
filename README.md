@@ -13,7 +13,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go" alt="Go 1.26" />
   <img src="https://img.shields.io/badge/Lean-4-315E78" alt="Lean 4" />
-  <img src="https://img.shields.io/badge/status-research_prototype-D9A066" alt="Status: research prototype" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-52876C" alt="License: MIT" /></a>
 </p>
 
@@ -24,8 +23,8 @@ properties; humans or an optional LLM agent write business specs in Go.
 Lean finds the inputs; `go test` is the judge.
 
 
-> **Research prototype.** A bounded, search-based bug finder—not a guarantee of
-> correctness. See [limitations](docs/limitations.md) and
+> **Scope.** A bounded, search-based bug finder—not a guarantee of
+> correctness. No releases yet. See [limitations](docs/limitations.md) and
 > [validation](docs/validation.md) for scope and evidence.
 
 ## Features

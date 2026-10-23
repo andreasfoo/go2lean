@@ -74,6 +74,13 @@ says), `spurious` (it does not — with a diagnosis of what the model got
 wrong), or `inconclusive`. This is the only source of trust: a bug is
 reported only with a verdict from here.
 
+For a deadlock or goroutine leak the call runs up to 200 times under a
+watchdog; when Go's scheduler never takes the model's interleaving, the
+replay stage replays the model's schedule: the package is rewritten
+through an overlay so that each channel, lock and `select` operation waits
+for its turn, and the real runtime then shows the deadlock or leak. The
+PoC carries the overlay ([concurrency.md](concurrency.md)).
+
 ## Writing a spec
 
 You do not need to write Lean. There are two different ways to state a claim:

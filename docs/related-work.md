@@ -75,7 +75,7 @@ translation sound).
 ## What this changes for go2lean
 
 1. **Keep**: the Go frontend, the deep embedding and its interpreter, the
-   search engines, the mutation check and M3. Nothing else turns Go into
+   search engines, the mutation check and the replay stage. Nothing else turns Go into
    Lean, and nothing else hunts bugs in a model with real-run
    confirmation.
 2. **Functional proofs (the sort example, task 55): do not write a program

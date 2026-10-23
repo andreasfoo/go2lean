@@ -3,6 +3,7 @@ package poc
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/andreasfoo/go2lean/internal/replay"
 	"maps"
 	"os"
 	"os/exec"
@@ -32,6 +33,10 @@ type result struct {
 	Blocked bool   `json:"blocked"`
 	Leaked  string `json:"leaked"`
 	Runs    int    `json:"runs"`
+	// Replay: the steps of the model's schedule the last run followed ("k
+	// of n"), ReplayDiverged why it left the schedule (a replay harness).
+	Replay         string `json:"replay"`
+	ReplayDiverged string `json:"replay_diverged"`
 	// probes are the GO2LEAN_PROBE lines the test printed.
 	probes []contract.Probe
 }
@@ -70,6 +75,10 @@ type prepared struct {
 	guessed []string
 	// test: the target is a test function; its t is the harness's own.
 	test bool
+	abi  *contract.ABI
+	// replayed: the package files of a confirmed replay (base name ->
+	// rewritten source), which the PoC is built with.
+	replayed map[string][]byte
 }
 
 // VerifyAll realises the counterexamples, runs those of each package in a
@@ -121,6 +130,16 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 			}
 			p.v = verdictOf(p, r, c, e, o, eo, root)
 		}
+		// A deadlock or leak Go's scheduler did not reproduce: replay the
+		// model's schedule in the package rewritten to follow it.
+		for _, p := range batch {
+			if !replayable(p) {
+				continue
+			}
+			if err := replayOne(root, pkgDir, pkgName, pkg, p, overlay); err != nil {
+				return nil, err
+			}
+		}
 	}
 	var vs []*contract.Verdict
 	callers := newCallerIndex(root)
@@ -140,6 +159,72 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 	return vs, nil
 }
 
+// replayable: an inconclusive deadlock or leak with a schedule to replay.
+func replayable(p *prepared) bool {
+	if p.v == nil || p.v.Status != contract.VerdictInconclusive || p.v.Diagnosis == nil || len(p.cx.Schedule) == 0 {
+		return false
+	}
+	switch p.v.Diagnosis.Reason {
+	case "schedule_not_reproduced", "panic_kind_mismatch":
+	default:
+		return false
+	}
+	m := modelPanic(p.cx)
+	return m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak
+}
+
+// replayOne runs p's replay harness: the package rewritten by
+// internal/replay, the run following p's schedule. A confirmed replay
+// replaces p's verdict and harness; otherwise the first verdict stands,
+// with a note.
+func replayOne(root, pkgDir, pkgName, pkg string, p *prepared, overlay map[string][]byte) error {
+	note := func(s string) error {
+		p.v.Diagnosis.Notes = append(p.v.Diagnosis.Notes, "replay of the model's schedule: "+s)
+		return nil
+	}
+	files, err := replay.Rewrite(root, pkg)
+	if err != nil {
+		return note("the package could not be rewritten: " + err.Error())
+	}
+	ov := maps.Clone(overlay)
+	if ov == nil {
+		ov = map[string][]byte{}
+	}
+	for name, src := range files {
+		ov[filepath.Join(pkgDir, name)] = src
+	}
+	fn, imps, err := ReplayHarnessFunc(p.target, p.prop, p.cx, p.abi)
+	if err != nil {
+		return note(err.Error())
+	}
+	q := *p
+	q.fn, q.imps, q.v = fn, imps, nil
+	r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{&q}, ov)
+	if err != nil {
+		return err
+	}
+	v := verdictOf(&q, r, c, e, o, eo, root)
+	res, ok := r[p.cx.ID]
+	switch {
+	case !ok:
+		return note(fmt.Sprintf("%s (%s)", v.Status, reasonOf(v)))
+	case res.ReplayDiverged != "":
+		return note(fmt.Sprintf("the real run left the schedule after %s steps: %s", res.Replay, res.ReplayDiverged))
+	case v.Status != contract.VerdictConfirmed:
+		return note(fmt.Sprintf("followed (%s steps), still %s", res.Replay, reasonOf(v)))
+	}
+	v.Observed["replay"] = "the model's schedule replayed (" + res.Replay + " steps); Go's own scheduler did not take it in " + strconv.Itoa(concRuns) + " runs"
+	p.v, p.fn, p.imps, p.replayed = v, fn, imps, files
+	return nil
+}
+
+func reasonOf(v *contract.Verdict) string {
+	if v.Diagnosis != nil {
+		return v.Diagnosis.Reason
+	}
+	return string(v.Status)
+}
+
 func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 	cx, err := ws.Counterexample(cxID)
 	if err != nil {
@@ -157,7 +242,7 @@ func prepare(ws contract.Workspace, cxID string) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &prepared{cx: cx, prop: prop, target: target, state: unknownState(ws, cx), guessed: guessedCalls(ws, cx)}
+	p := &prepared{cx: cx, prop: prop, target: target, state: unknownState(ws, cx), guessed: guessedCalls(ws, cx), abi: abi}
 	for _, prm := range abi.Params {
 		if prm.GoType == "*testing.T" && prm.Kind == contract.ABIOpaque {
 			// Not an input: the model's opaque t is the harness's own t.
@@ -437,8 +522,31 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 			return err
 		}
 		cmd := "go test -count=1 -v -run '^TestGo2LeanPoC_" + p.cx.ID + "$' " + p.target.Package
+		if p.replayed != nil {
+			// The package rewritten to follow the model's schedule: built
+			// through an overlay, the package itself unchanged.
+			odir := filepath.Join(pocDir, "replay")
+			if err := os.MkdirAll(odir, 0o755); err != nil {
+				return err
+			}
+			ov := map[string]map[string]string{"Replace": {}}
+			for name, src := range p.replayed {
+				if err := os.WriteFile(filepath.Join(odir, name), src, 0o644); err != nil {
+					return err
+				}
+				ov["Replace"][filepath.Join(pkgDir, name)] = filepath.Join(odir, name)
+			}
+			b, _ := json.MarshalIndent(ov, "", "  ")
+			if err := os.WriteFile(filepath.Join(odir, "overlay.json"), b, 0o644); err != nil {
+				return err
+			}
+			cmd = "go test -count=1 -v -overlay " + filepath.Join(odir, "overlay.json") + strings.TrimPrefix(cmd, "go test -count=1 -v")
+		}
 		readme := fmt.Sprintf("# PoC %s\n\nProperty: %s (%s)\n\n%s\n\nVerdict: **%s**\n\nReproduce: copy `%s` into `%s` and run\n\n    %s\n",
 			p.cx.ID, p.prop.ID, p.prop.Kind, p.prop.NL, v.Status, testName, pkgDir, cmd)
+		if p.replayed != nil {
+			readme += "\nThe run replays the model's schedule: `replay/` holds the package's files rewritten so that every synchronisation operation waits for its turn (go2lean's replay controller), built through the overlay; the package itself is not changed.\n"
+		}
 		if err := os.WriteFile(filepath.Join(pocDir, "README.md"), []byte(readme), 0o644); err != nil {
 			return err
 		}

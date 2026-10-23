@@ -177,6 +177,19 @@ type Counterexample struct {
 	PanicAt string `json:"panic_at,omitempty"`
 	// Assumptions are the under-approximations the model run took.
 	Assumptions []string `json:"assumptions,omitempty"`
+	// Schedule is the concurrent machine's run, step by step, for M3's
+	// deterministic replay (docs/concurrency.md).
+	Schedule []SchedStep `json:"schedule,omitempty"`
+}
+
+// SchedStep is one step of a concurrent run: goroutine G (0 is the call
+// itself, the others in the order they started) moved; Op is the operation
+// it fired ("" when it only ran code), Partners the goroutines whose
+// operation it completed (the other side of a rendezvous).
+type SchedStep struct {
+	G        int    `json:"g"`
+	Op       string `json:"op"`
+	Partners []int  `json:"partners,omitempty"`
 }
 
 // Probe is one go2leanProbe value: its label and the value (JSON as the

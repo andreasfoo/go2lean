@@ -55,16 +55,16 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   common flags: -workspace out   -module <dir of the Go module to analyse>
-  go2lean compile [-workspace out] <packages...>  M1: Go -> Lean model, ABI, targets (./... allowed)
-  go2lean props   [-workspace out]                M2: template properties from the model report
-  go2lean hunt    [-workspace out] [-property id] M2: search for counterexamples
-  go2lean poc     [-workspace out] -counterexample id   M3: realise and verify
+  go2lean compile [-workspace out] <packages...>  compile stage: Go -> Lean model, ABI, targets (./... allowed)
+  go2lean props   [-workspace out]                spec & search stage: template properties from the model report
+  go2lean hunt    [-workspace out] [-property id] spec & search stage: search for counterexamples
+  go2lean poc     [-workspace out] -counterexample id   replay stage: realise and verify in Go
   go2lean run     [-workspace out] <package>      all of the above
   go2lean fuzz    [-workspace out] [-fuzztime 30s] [-spec-file f] <package>   the package's specs as go test -fuzz targets
   go2lean rank    [-workspace out]                 order confirmed verdicts by how plausible their input is (tiers 1-4)
   go2lean summary [-workspace out]                 all verdicts and proofs of a workspace as Markdown
   go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>
-                                                  M2 agent: propose spec-in-Go properties, run, report
+                                                  agent: propose spec-in-Go properties, run, report
   go2lean llvm    [-workspace out] <file.c|.ll|.bc> C / LLVM IR: model every function, search for UB,
                                                   replay counterexamples under ASan/UBSan (build with -tags llvm18)
   go2lean tinygo  [-workspace out] [-compare] <package>  Go through TinyGo's LLVM IR (-tags llvm22);

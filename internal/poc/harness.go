@@ -43,6 +43,9 @@ type harnessData struct {
 	Conc     bool
 	ConcRuns int
 	PkgPath  string
+	// Replay: the model's schedule as a Go literal ([]go2leanStep{...}):
+	// the package is rewritten (internal/replay) and each run follows it.
+	Replay string
 }
 
 func (d harnessData) RetList() string { return strings.Join(d.Rets, ", ") }
@@ -108,6 +111,9 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 				if go2leanID, _, _ := strings.Cut(go2leanG, " ["); go2leanOld[go2leanID] {
 					continue
 				}
+				if strings.Contains(go2leanG, ".go2leanGate(") || strings.Contains(go2leanG, ".go2leanDrive(") {
+					continue // held by the replay controller, not by the program
+				}
 				go2leanHdr, _, _ := strings.Cut(go2leanG, "\n")
 				go2leanBlocked := false
 				for _, go2leanSt := range []string{"[chan send", "[chan receive", "[select", "[sync.Mutex.Lock", "[sync.RWMutex.Lock", "[sync.RWMutex.RLock", "[sync.WaitGroup.Wait", "[semacquire", "[sync.Cond.Wait"} {
@@ -139,6 +145,10 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 					go2leanRes["stack"] = string(go2leanDebug.Stack())
 				}
 			}()
+{{- if .Replay}}
+			go2leanReplayBegin({{.Replay}})
+			defer go2leanReplayEnd()
+{{- end}}
 {{- range .Setup}}
 			{{.}}
 {{- end}}
@@ -153,11 +163,19 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 		case <-time.After(2 * time.Second):
 			go2leanRes["blocked"] = true
 		}
-		if go2leanRes["blocked"].(bool) || go2leanRes["panicked"].(bool) {
-			break
+		go2leanStop := go2leanRes["blocked"].(bool) || go2leanRes["panicked"].(bool)
+		if !go2leanStop {
+			if go2leanL := go2leanLeaked(); go2leanL != "" {
+				go2leanRes["leaked"] = go2leanL
+				go2leanStop = true
+			}
 		}
-		if go2leanL := go2leanLeaked(); go2leanL != "" {
-			go2leanRes["leaked"] = go2leanL
+{{- if .Replay}}
+		go2leanF, go2leanN, go2leanDv := go2leanReplayStats()
+		go2leanRes["replay"] = fmt.Sprintf("%d of %d", go2leanF, go2leanN)
+		go2leanRes["replay_diverged"] = go2leanDv
+{{- end}}
+		if go2leanStop {
 			break
 		}
 	}
@@ -227,6 +245,39 @@ func File(pkgName string, imports []string, funcs []string) string {
 // HarnessFunc renders the test function for a counterexample and the import
 // paths it needs beyond encoding/json, fmt and testing.
 func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Counterexample, abi *contract.ABI) (string, []string, error) {
+	return harnessFunc(t, p, cx, abi, false)
+}
+
+// ReplayHarnessFunc is HarnessFunc for a deadlock or leak the model found,
+// replaying the model's schedule (cx.Schedule) in a package rewritten by
+// internal/replay.
+func ReplayHarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Counterexample, abi *contract.ABI) (string, []string, error) {
+	return harnessFunc(t, p, cx, abi, true)
+}
+
+// replayRuns: a replay is close to deterministic; the runs cover a select
+// among ready cases the model did not force and the release at the end.
+const replayRuns = 20
+
+// scheduleLit is the schedule as a Go literal of the controller's type.
+func scheduleLit(sched []contract.SchedStep) string {
+	var b strings.Builder
+	b.WriteString("[]go2leanStep{")
+	for i, st := range sched {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		ps := make([]string, len(st.Partners))
+		for k, p := range st.Partners {
+			ps[k] = strconv.Itoa(p)
+		}
+		fmt.Fprintf(&b, "{%d, %q, []int{%s}}", st.G, st.Op, strings.Join(ps, ", "))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func harnessFunc(t *contract.Target, p *contract.Property, cx *contract.Counterexample, abi *contract.ABI, replay bool) (string, []string, error) {
 	pkgName := ""
 	d := harnessData{Package: pkgName, ID: cx.ID, Func: t.Func}
 	imports := map[string]bool{}
@@ -347,6 +398,9 @@ func HarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 	}
 	if cx.ModelOutput != nil && (cx.ModelOutput.Panic == contract.PanicDeadlock || cx.ModelOutput.Panic == contract.PanicGoroutineLeak) {
 		d.Conc, d.ConcRuns, d.PkgPath = true, concRuns, t.Package
+		if replay {
+			d.Replay, d.ConcRuns = scheduleLit(cx.Schedule), replayRuns
+		}
 		d.Imports = append(d.Imports, `"runtime"`, `"strings"`, `"time"`)
 	}
 	var b strings.Builder

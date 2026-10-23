@@ -481,6 +481,46 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
       | (.panicked k, s) => (.error k, s)
       | (.outOfFuel, s) => (.error .other, { s with stuck := s.stuck <|> some "out of fuel in a goroutine" })
 
+/-- The operation goroutine `g` waits at, named for the schedule trace
+("" when it is not at one). -/
+def pendingName (g : Gor) : String :=
+  match g.frames with
+  | f :: _ =>
+    if !f.atTerm then "" else
+    match f.fn.blocks[f.bid]? with
+    | some blk =>
+      match blk.term with
+      | .spawn .. => "spawn"
+      | .sync op _ _ _ => (s!"{repr op}".replace "Go2Lean.SSA.SyncOp." "").takeWhile (· != ' ') |>.toString
+      | _ => ""
+    | none => ""
+  | [] => ""
+
+/-- For a `select` goroutine `i` fires with `choice`: the case taken (-1
+for the default), as "select:k" for the schedule trace. -/
+def selectTaken (heap : Heap Val) (gs : Array Gor) (i choice : Nat) : Option String :=
+  match gs[i]? with
+  | some { frames := f :: _, .. } =>
+    match f.fn.blocks[f.bid]? with
+    | some { term := .sync (.select ..) _ dst _, .. } =>
+      match fire heap gs i choice with
+      | .done gs' _ =>
+        match gs'[i]? with
+        | some { frames := f' :: _, .. } =>
+          match f'.env[dst]? with
+          | some (.tuple (.int _ k :: _)) => some s!"select:{k.toInt}"
+          | _ => none
+        | _ => none
+      | _ => none
+    | _ => none
+  | _ => none
+
+/-- The goroutines other than `i` that waited at an operation in `before`
+and no longer do in `after`: the partners of a rendezvous. -/
+def completedBy (before after : Array Gor) (i : Nat) : List Nat :=
+  (List.range before.size).filter fun j =>
+    j != i && pendingName before[j]! != "" && (after[j]?.map pendingName) == some ""
+
 /-- Schedule until no goroutine can move. `outOfFuel` when the steps run out
 (an unfair schedule spinning one goroutine ends here, not as a finding).
 Daemon goroutines (tickers) always can: when only they can, `idle` counts
@@ -504,8 +544,12 @@ def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
     else
       let (c, s) := schedChoice p h s
       let i := cands[c % cands.length]!
+      -- The case a select takes: stepGor draws the same choice from `s`.
+      let name := (selectTaken s.heap gs i (schedChoice p h s).1).getD (pendingName gs[i]!)
       match stepGor p or h gs i s stepFuel with
-      | (.ok (gs, s), _) => schedule p or h stepFuel gs s n (if live.isEmpty then idle + 1 else 0)
+      | (.ok (gs', s), _) =>
+        let s := { s with sched := s.sched.push (i, name, completedBy gs gs' i) }
+        schedule p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0)
       | (.error .other, s) => (.outOfFuel, s)
       | (.error k, s) => (.panic k, s)
 

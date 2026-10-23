@@ -81,7 +81,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 		return resp, nil
 	}
 
-	fmt.Fprintln(out, "== M1 compile (before specs)")
+	fmt.Fprintln(out, "== Compile stage (before specs)")
 	report, err := pipeline.Compile(ws, env, pattern, out)
 	if err != nil {
 		return err
@@ -100,7 +100,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 			if err := os.WriteFile(filepath.Join(pkgDir, specFile), []byte(spec), 0o644); err != nil {
 				return "", nil, err
 			}
-			fmt.Fprintf(out, "== M1 compile (specs, attempt %d)\n", repair+1)
+			fmt.Fprintf(out, "== Compile stage (specs, attempt %d)\n", repair+1)
 			report, err := pipeline.Compile(ws, env, pattern, out)
 			var issues []string
 			if err != nil {
@@ -184,7 +184,7 @@ func Run(ctx context.Context, ws contract.Workspace, env pipeline.Env, pattern s
 }
 
 func runRest(ws contract.Workspace, env pipeline.Env, report *contract.ModelReport, spec string, so constraint.SearchOptions, out io.Writer) (*pipeline.Result, error) {
-	fmt.Fprintln(out, "== M2 properties")
+	fmt.Fprintln(out, "== Spec & search stage: properties")
 	props, err := pipeline.Propose(ws, report, out)
 	if err != nil {
 		return nil, err
@@ -209,7 +209,7 @@ func runRest(ws contract.Workspace, env pipeline.Env, report *contract.ModelRepo
 			}
 		}
 	}
-	fmt.Fprintln(out, "== M2 hunt")
+	fmt.Fprintln(out, "== Spec & search stage: hunt")
 	res := &pipeline.Result{Report: report, Properties: props}
 	var cxs []*contract.Counterexample
 	for _, p := range props {
@@ -221,7 +221,7 @@ func runRest(ws contract.Workspace, env pipeline.Env, report *contract.ModelRepo
 			cxs = append(cxs, cx)
 		}
 	}
-	fmt.Fprintln(out, "== M3 poc")
+	fmt.Fprintln(out, "== Replay stage: generate PoC and verify")
 	if len(cxs) == 0 {
 		fmt.Fprintln(out, "  nothing to verify")
 	}

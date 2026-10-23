@@ -19,17 +19,17 @@ used for **proof**.
 ### 1.1 Goals
 
 1. **Three modules forming a closed loop.**
-   - M1 `programmatic`: deterministic translation. Two frontends feed one Lean
+   - Compile stage (`programmatic`): deterministic translation. Two frontends feed one Lean
      SSA core:
      - **F-GoSSA**: Go → `golang.org/x/tools/go/ssa` → Lean `GoSSA` dialect (first).
      - **F-LLVM**: Go → TinyGo → LLVM IR → Lean `LLVM` dialect (later; also the
        entry point for other languages).
-   - M2 `agentic`: an LLM agent states properties over the model and drives
+   - Spec & search stage (`agentic`): an LLM agent states properties over the model and drives
      Lean to produce counterexamples or proofs. Its non-agentic core (property
      templates and engines) is the `constraint` package.
-   - M3 `poc`: realises counterexamples as real Go tests, runs them with the
+   - Replay stage (`poc`): realises counterexamples as real Go tests, runs them with the
      Go toolchain and judges them.
-2. **Trust comes from M3, not from the model.** The model may be imprecise;
+2. **Trust comes from the replay stage, not from the model.** The model may be imprecise;
    every bug reported to a human carries a PoC that reproduces under `go test`.
 3. **One core, several dialects.** The Lean SSA core is frontend-independent.
    A dialect defines only types, instructions and the semantics of a single
@@ -42,8 +42,8 @@ used for **proof**.
 
 ### 1.2 Non-goals (first phase)
 
-- Goroutines, channels, `sync`, data races: not modelled. M3's `-race` is
-  extra evidence only.
+- Data races: not modelled (goroutines, channels and `sync` are: see
+  [concurrency.md](concurrency.md)).
 - GC, finalizers, `unsafe`, cgo, reflection, the fine semantics of
   `defer`/`recover`.
 - Floating point: a function using it is marked unmodellable.
@@ -59,8 +59,8 @@ non-deterministic input. It is never guessed and never aborts the whole function
 
 - Under over-approximation, **no counterexample ⇒ none in the real program**
   (the proof direction is sound).
-- Counterexamples found under over-approximation **may be spurious**; M3
-  filters them. M3 is the oracle, so M1 need not be perfect.
+- Counterexamples found under over-approximation **may be spurious**; the replay stage
+  filters them. The replay stage is the oracle, so the compile stage need not be perfect.
 - The one permitted under-approximation is loop fuel; such results are
   labelled `bounded_proved(fuel = N)`, never `proved`.
 
@@ -68,17 +68,17 @@ non-deterministic input. It is never guessed and never aborts the whole function
 
 Havoc values are extra **inputs** of the model function, not `sorry` or
 axioms. `bv_decide`/random search can choose them, counterexamples carry their
-values, and when M3 says `spurious` the diagnosis can name the havoc site the
+values, and when the replay stage says `spurious` the diagnosis can name the havoc site the
 counterexample depended on.
 
 ### P3. Every property has two forms: a Lean proposition and an executable Go oracle
 
 Disagreement between the two is the most dangerous failure mode. The
-mitigation is **spec-in-Go** (§5.2): the agent writes only the Go form; M1
+mitigation is **spec-in-Go** (§5.2): the agent writes only the Go form; the compile stage
 derives the Lean form mechanically through the same translation pipeline, so
 they agree by construction.
 
-### P4. A counterexample is re-validated inside the model before it reaches M3
+### P4. A counterexample is re-validated inside the model before it reaches the replay stage
 
 Whatever Lean output a counterexample is parsed from, it is re-executed in
 the model (or reported from the executing run itself) before being written as
@@ -104,11 +104,11 @@ rewriting framework and general regions are out of scope.
      └─► F-LLVM  ──► LLVM dialect terms ──┘    (Go2Lean.SSA)          │
                                    ▲                                 ▼
                       crosscheck ◄─┘               ┌──────────────────┐ Counterexample ┌──────────┐
-                                                   │ M2 agentic       │ ─────────────► │ M3 poc   │
+                                                   │ spec & search    │ ─────────────► │ replay   │
                                                    │ constraint core  │ ◄───────────── │ go test  │
                                                    └──────────────────┘    Verdict     └──────────┘
                                                             ▲
-                      M1 ◄──────── ModelGap ────────────────┘
+                 compile ◄──────── ModelGap ────────────────┘
 ```
 
 Modules communicate **only through JSON records in a workspace directory**
@@ -296,7 +296,7 @@ enumeration (integers from {0, 1, -1, 2, INT_MAX, INT_MIN}, buffers of up to
 3 elements from {0, 1, -1}); an exhaustive run without UB, stuck or
 out-of-fuel trials is a certificate for that domain.
 
-**M3** (`internal/llvmhunt`): the counterexample becomes a C program that
+**Replay stage** (`internal/llvmhunt`): the counterexample becomes a C program that
 `#include`s the source (its `main` renamed) and calls the function with
 buffers from `malloc` of exactly their size, built with
 `-fsanitize=address,undefined -fno-sanitize-recover=all`. A sanitizer report
@@ -391,7 +391,7 @@ shaped by GoSSA (its ops, heap and JSON tables).
 
 ### 4.6 ABI bridge
 
-M3 needs to turn model values back into Go values. The GoSSA ABI is nearly
+The replay stage needs to turn model values back into Go values. The GoSSA ABI is nearly
 the identity; the LLVM ABI follows TinyGo's expansion rules (slice →
 `ptr,len,cap`, string → `ptr,len`, structs flattened, multiple results → an
 LLVM struct). Both produce the same record:
@@ -408,9 +408,9 @@ LLVM struct). Both produce the same record:
 ```
 
 Counterexamples carry slice contents under `memory` (per parameter), read
-from the oracle, so M3 materialises exactly the slice the model saw.
+from the oracle, so the replay stage materialises exactly the slice the model saw.
 
-### 4.7 M1 outputs
+### 4.7 Compile stage outputs
 
 - `<workspace>/lean/Go2Lean/Generated/<frontend>/<pkg>.lean`, in the
   workspace's own lake project (see §8)
@@ -419,7 +419,7 @@ from the oracle, so M3 materialises exactly the slice the model saw.
 - `<workspace>/targets/<id>.json`
 - (later) `crosscheck.json`
 
-## 5. M2: properties and counterexamples
+## 5. Spec & search stage: properties and counterexamples
 
 ### 5.1 Inputs
 
@@ -439,7 +439,7 @@ cross-check results, and optionally a natural-language focus from the user.
 
 **Spec-in-Go** (built): the agent — or a human — writes a Go function with a
 `// go2lean:spec Target` doc comment, e.g. `func SpecSum(xs []int, ret int)
-bool`. M1 compiles it into the model with the same pipeline, and the property
+bool`. The compile stage compiles it into the model with the same pipeline, and the property
 is `run Sum args = .ok r → run SpecSum (args ++ [r]) = .ok true`. The Lean
 form and the Go oracle agree by construction; nobody has to write Lean.
 `custom` is the only place the agent writes Lean, and its counterexamples are
@@ -457,7 +457,7 @@ panicking. Random search draws sequences up to `-maxlen` (or the spec's
 `go2lean:maxlen`); the exhaustive engine enumerates every sequence up to the
 exhaustive length over a narrow alphabet (the program's own integer
 constants with their neighbours, 0 and 1; up to 2,000,000 sequences), which
-makes it bounded model checking of the spec; M3 replays the failing
+makes it bounded model checking of the spec; the replay stage replays the failing
 sequence. `examples/stream`: a converter that drops an open block's text
 on a second `Start` is caught (random search, trial 25, confirmed), and the
 invariant `SeqBounded` holds on all 538,084 sequences of up to 3 events.
@@ -485,7 +485,7 @@ concurrency (one goroutine, `sync` ignored); docs/limitations.md §7.
    the record says so.
 3. **Proof over all inputs** (built, 2026-10-22, `internal/prover`, `-prove`,
    on by default): when the exhaustive engine passed on a `no_panic`
-   property of a function whose parameters are all integers or bools, M2
+   property of a function whose parameters are all integers or bools, the spec & search stage
    writes a theorem over every value of every parameter: the model returns
    without panicking, reads no havoc and takes no assumption, within fuel
    64. The proof is generic: `simp` with the interpreter, `rfl` lemmas that
@@ -509,7 +509,7 @@ concurrency (one goroutine, `sync` ignored); docs/limitations.md §7.
 4. **`bv_decide`** is the last step of rung 3; on its own it is not used.
 5. **SMT export** (Z3/cvc5) when complete bug-finding on loops is needed:
    external, asynchronous, better `mul`/`div` heuristics; no Lean certificate,
-   which bug-finding does not need because M3 is the certificate.
+   which bug-finding does not need because the replay stage is the certificate.
 6. **Proof**: `simp`/`omega`/`decide`, then agent-written Lean.
 
 Counterexamples are re-validated per P4. The random engine reports the values
@@ -520,12 +520,12 @@ it actually executed, so revalidation is implicit.
 `internal/agent` drives one package:
 
 ```
-1. compile the package (M1) to learn which functions are modelled
+1. compile the package (compile stage) to learn which functions are modelled
 2. ask the LLM for go2lean_specs_test.go: spec-in-Go functions for the modelled
    functions, inside the supported subset (system prompt states the rules)
 3. write the file into the package, compile again; specs the frontend rejects
    go back to the LLM with the frontend's issues (up to -repairs rounds)
-4. propose (templates: no_panic + one postcondition per spec), hunt, verify (M2/M3)
+4. propose (templates: no_panic + one postcondition per spec), hunt, verify (search and replay stages)
 5. report round: verdicts, counterexamples and proof results go back to the LLM,
    which writes out/agent/report.md and may return a revised spec file; a
    revision triggers one more pass through 3–4
@@ -601,7 +601,7 @@ the model needs nothing new: the body is kept inside a closure, and its
 `t.Helper`: their arguments evaluated). A target that uses `t` otherwise
 (hands it to a helper, `t.Run`, inside a nested function) or reads a
 variable of `FuzzXxx` is left out with the reason. The generated file
-reaches the model and the M3 build through an overlay
+reaches the model and the replay stage build through an overlay
 (`gossa.Options.Overlay`, `pipeline.Env.Overlay`, `poc.VerifyAll`):
 nothing is written into the package. `examples/fuzzed` holds a round trip
 whose planted bug the model finds and `go test` confirms, a target that
@@ -611,14 +611,14 @@ Not yet: ranking properties by expected yield, `ModelGap` records from
 spurious verdicts, generalising a confirmed bug to neighbouring functions, and
 proof attempts.
 
-M3 executes the target with generated inputs inside the target package:
+The replay stage executes the target with generated inputs inside the target package:
 a function that writes files writes them. Run on a scratch clone.
 
-## 6. M3: counterexample → real verification (built)
+## 6. Replay stage: counterexample → real verification (built)
 
 ### 6.1 Harness generation
 
-Into the target package, M3 writes `zz_go2lean_poc_<id>_test.go`:
+Into the target package, the replay stage writes `zz_go2lean_poc_<id>_test.go`:
 
 ```go
 func TestGo2LeanPoC_cx_sum_specsum_s42(t *testing.T) {
@@ -660,7 +660,7 @@ later.)
 | `inconclusive` | compile failure, timeout, missing result line, a panic where the oracle could not be evaluated, or a panic category mismatch |
 
 `spurious` carries a diagnosis (model output vs real output, havoc sites used,
-whether the property was `custom`); this is the only feedback channel into M1/M2.
+whether the property was `custom`); this is the only feedback channel into the compile and spec & search stages.
 `confirmed` produces `<workspace>/poc/<id>/` with the test file, a README with
 the reproduction command, and the verdict, and carries a `rank` (tier 1 to 4)
 by how plausible its input is for real callers (docs/limitations.md §3).
@@ -722,18 +722,18 @@ go2lean/
   internal/frontend/gossa/  F-GoSSA
   internal/frontend/llvm/   F-LLVM (later)
   internal/ssaout/          Lean printer, ABI, model report, targets
-  internal/constraint/      M2 core: property templates, engine runners
-  internal/agent/           M2 agent loop, LLM interface (later)
-  internal/poc/             M3
+  internal/constraint/      spec & search stage core: property templates, engine runners
+  internal/agent/           agent loop, LLM interface (later)
+  internal/poc/             replay stage
   lean/                     lake project `go2lean`, the core (Lean 4 core only; no Mathlib, no plausible)
     Go2Lean/SSA/Core.lean        the core
     Go2Lean/Dialect/GoSSA.lean   the GoSSA dialect
     Go2Lean/Search.lean          the engines
     Go2Lean/Driver.lean          the search driver (JSON in, JSON out)
     Proofs/                      proof prototypes (checked from a workspace)
-  <workspace>/lean/         lake project `go2lean-models`, written by M1
+  <workspace>/lean/         lake project `go2lean-models`, written by the compile stage
     lakefile.toml                requires the core by path
-    Go2Lean/Generated/           M1 output (do not edit) and its Registry
+    Go2Lean/Generated/           compile-stage output (do not edit) and its Registry
     Main.lean                    the `go2lean-search` executable
     Search/                      per-property search files (scratch)
   examples/                 ground-truth packages
@@ -756,10 +756,10 @@ library's default root claims every module under its prefix, and `Go2Lean`
 would claim the workspaces' `Go2Lean.Generated.*`.
 
 ```
-go2lean compile [-workspace out] <package>        M1: Go → Lean model, ABI, targets
-go2lean props   [-workspace out]                  M2: template properties from the model report
-go2lean hunt    [-workspace out] [-property id]   M2: random search for counterexamples
-go2lean poc     [-workspace out] -counterexample id   M3: realise and verify
+go2lean compile [-workspace out] <package>        compile stage: Go → Lean model, ABI, targets
+go2lean props   [-workspace out]                  spec & search stage: template properties from the model report
+go2lean hunt    [-workspace out] [-property id]   spec & search stage: random search for counterexamples
+go2lean poc     [-workspace out] -counterexample id   replay stage: realise and verify
 go2lean run     [-workspace out] <package>        all of the above
 ```
 
@@ -784,7 +784,7 @@ driving `make`/slicing), `alias` (writes through aliased slices; GoSSA stage B o
 
 Metrics: counterexample recall, spurious rate, unknown rate, proof rate,
 crosscheck agreement, end-to-end time. All of `examples/` runs on every
-change to M1's modelling rules.
+change to the compile stage's modelling rules.
 
 ## 9b. Runs on real code
 
@@ -799,7 +799,7 @@ numbers are in the README; what they do not show is in
 - **Done — end-to-end PoC slice.** Contract and workspace; Lean SSA core;
   GoSSA stage A; random engine with mined literals and value profiles;
   exhaustive small-domain engine; go/ssa frontend (package test variants);
-  property templates (`no_panic`, spec-in-Go `postcondition`); M3 harness,
+  property templates (`no_panic`, spec-in-Go `postcondition`); the replay stage harness,
   runner and verdicts; agent loop (propose → repair → run → report) behind a
   mockable LLM interface; four ground-truth packages confirmed end to end
   (~2–5 s per package).
@@ -817,11 +817,11 @@ numbers are in the README; what they do not show is in
 | risk | effect | mitigation |
 |---|---|---|
 | `simp`-unfolded `run` blows up for `bv_decide` | loop properties limited to random search | small fuel; loop invariants go to the proof agent; keep `denote` branch-free so unfolding stays linear |
-| go/ssa semantic details (shifts, conversions, string indexing) | model ≠ Go | ground truth + M3 + cross-check |
+| go/ssa semantic details (shifts, conversions, string indexing) | model ≠ Go | ground truth + replay stage + cross-check |
 | TinyGo IR structure destroyed by optimisation | LLVM route unreadable | low `-opt`, compare pipeline stages; it is the secondary route |
 | spec functions outside the subset | property cannot be compiled | the model report flags the spec's status; the agent rewrites it |
 | counterexample parsing tied to Lean output formats | breaks on upgrade | our own JSON-printing driver + P4 |
-| `custom` properties with inconsistent forms | false positives/negatives | flagged, tried last, every `confirmed` still goes through M3 |
+| `custom` properties with inconsistent forms | false positives/negatives | flagged, tried last, every `confirmed` still goes through the replay stage |
 | rejected callee | callers hit `modelStuck` | the call's fallback block havocs the result and the caller goes on; the model report lists the rejection reason |
 
 ## 12. Decisions

@@ -254,6 +254,11 @@ structure HState (Val : Type) where
   /-- Where the run panicked: the function, block and op (or terminator),
   set by the first panic, for diagnosing a counterexample. -/
   panicAt : Option String := none
+  /-- The concurrent machine's schedule, one entry per step: the goroutine
+  that moved, the operation it fired ("" when it only ran code: a goroutine
+  that just started, or whose operation a partner completed) and the
+  goroutines whose operations it completed (a rendezvous). M3 replays it. -/
+  sched : Array (Nat × String × List Nat) := #[]
 
 namespace HState
 
