@@ -1,8 +1,8 @@
 # Concurrency in the model (C1)
 
-Status, 2026-10-23: the machine, the frontend lowering and the M3 checks
-are built (C1a), and `context`, timers and `sync.Cond` (C1b);
-deterministic replay is next. "Built" below lists what landed and how it differs from the
+Status, 2026-10-23: the machine, the frontend lowering and the replay stage checks
+are built (C1a), `context`, timers and `sync.Cond` (C1b), and the
+deterministic replay of the model's schedule (C1c). "Built" below lists what landed and how it differs from the
 plan; the rest of the page is the plan. What other
 projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 [related-work.md](related-work.md).
@@ -25,8 +25,8 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   on a channel the function returns), and the panics `closed_channel`,
   `sync_fatal`; the report names where each goroutine waits.
 - Targets: `-tests` makes `TestXxx(t *testing.T)` targets, as GoKer's
-  kernels are written; `t` is the harness's own in M3.
-- M3: a deadlock or leak runs the call up to 200 times under a 2-second
+  kernels are written; `t` is the harness's own in the replay stage.
+- Replay stage: a deadlock or leak runs the call up to 200 times under a 2-second
   watchdog, a leak is a goroutine of the package blocked on a channel or
   lock after the call returned (not one alive before); a panic in a
   goroutine the call started ends the test binary and is judged from Go's
@@ -57,49 +57,50 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   interface method, `go close(ch)`; wrappers around synchronising methods
   (`T.M~NewT`) now get frames; the writer-preference rule blocks new
   readers only while a writer waits for readers to leave (a writer that
-  could take the lock is not waiting yet); the M3 leak scan waits while a
+  could take the lock is not waiting yet); the replay stage leak scan waits while a
   goroutine of the package is still running or sleeping.
 
 ### GoKer
 
 `scripts/goker.sh <gobench> <out>` on all 103 kernels (GoBench at
 2e91eb1), each kernel's test function as the target, default search
-budget, 2026-10-23, with C1b. The kernels are the ground truth: each
-blocking kernel has a blocking bug its test can trigger; most non-blocking
-ones have a data race, which C1 does not model.
+budget, 2026-10-23, with C1c (the replay of the model's schedule). The
+kernels are the ground truth: each blocking kernel has a blocking bug its
+test can trigger; most non-blocking ones have a data race, which C1 does
+not model.
 
 | | blocking (68) | non-blocking (35) |
 |---|---|---|
-| bug found by the model, confirmed by `go test` | **53** (16 deadlocks, 36 leaks, 1 double unlock) | 6 (3 leaks, 2 `closed_channel`, 1 nil dereference) |
-| found by the model, not reproduced by `go test` in 200 runs (`schedule_not_reproduced`, one `panic_kind_mismatch`) | 6 | 1 |
+| bug found by the model, confirmed by `go test` | **59** (20 deadlocks, 38 leaks, 1 double unlock) | 6 (3 leaks, 2 `closed_channel`, 1 nil dereference) |
+| found by the model, not reproduced by `go test`, even with its schedule replayed | 0 | 1 |
 | found by the model, refuted by `go test` (spurious) | 1 | 4 |
 | nothing found | 8 | 24 (holds) |
 
-With C1a alone (no `context`, timers or `Cond`) the first row was 35 and
-16 blocking kernels got stuck on a channel the model did not know. The
-model now reports a blocking bug in 60 of the 68 blocking kernels; `go
-test` confirms 53 (a confirmed finding is the real kernel deadlocking,
-leaking or panicking, not the model).
+The first row was 35 with C1a alone (no `context`, timers or `Cond`; 16
+blocking kernels got stuck on a channel the model did not know), and 53
+with C1b, when 6 findings stayed unreproduced by Go's scheduler. Now the
+model reports a blocking bug in 60 of the 68 blocking kernels and `go
+test` confirms 59 (a confirmed finding is the real kernel deadlocking,
+leaking or panicking, not the model). About 6 of them (cockroach 7504,
+10214, 16167, istio 16224, serving 2137, and, depending on the run,
+cockroach 1462, etcd 5509 or kubernetes 1321, 62464) only show up with the
+model's schedule replayed; which ones moves a little between runs, as Go's
+scheduler varies, but the confirmed total does not.
 
-- Not reproduced (cockroach 1462, 7504, 10214, 16167, istio 16224,
-  serving 2137; in an earlier run of the same model also etcd 5509 and
-  kubernetes 1321, 62464, which this run confirmed): the model's schedule
-  is one Go's scheduler rarely takes; deterministic replay (C1c) is for
-  these.
+- Not reproduced, schedule replayed: etcd 3077 (non-blocking). The real
+  run follows all 8 steps of the model's schedule and does not deadlock:
+  likely a model false positive, left `inconclusive`.
 - Not found: `fmt` calling a `String` method that takes a read lock
   (cockroach 6181), `io.ReadFull` (grpc 1275), `cond.Wait` passed as a
   func value (kubernetes 11298), a sync-holding package variable set by
   `init` (moby 29733), an external test package `package x_test`
   (syncthing 5795), and three whose trials all run out of fuel (grpc 862,
   istio 18454, kubernetes 58107: polling loops).
-- Spurious, each rejected by M3: `recover` (etcd 7443 recovers its send on
-  a closed channel), a store to an `int` package variable ignored (etcd
-  8194), unmodelled `os/exec` and a callback (moby 18412, serving 6472),
-  and a data race the model's sequentially consistent steps turn into a
-  panic (kubernetes 13058).
-
-The split between confirmed and not reproduced moves a little between
-runs: Go's scheduler varies from run to run.
+- Spurious, each rejected by the replay stage: `recover` (etcd 7443
+  recovers its send on a closed channel), a store to an `int` package
+  variable ignored (etcd 8194), unmodelled `os/exec` and a callback (moby
+  18412, serving 6472), and a data race the model's sequentially
+  consistent steps turn into a panic (kubernetes 13058).
 
 ## Why
 
@@ -212,21 +213,30 @@ as a finding).
 - `no_panic` on such functions now covers the panics of misusing a
   channel, a mutex or a wait group.
 
-## Checking against Go (M3)
+## Checking against Go (replay stage)
 
-Go's scheduler cannot be told what to run next, so a model schedule
-cannot be replayed directly. Two steps:
+Built as planned, in two steps:
 
-1. First: run the target under `go test` many times (with `-race`, and
-   with `GOMAXPROCS` varied) and report how often the deadlock, leak or
-   panic shows up; a leak is detected with a goroutine dump at the end of
-   the test. A finding that never shows up stays "model only", reported
-   with its schedule.
-2. Then: deterministic replay. The overlay mechanism the fuzz-target
-   import uses rewrites the target's source so that every
-   synchronisation operation first waits for a token from a replay
-   controller that follows the model's schedule. The real program then
-   takes the model's interleaving.
+1. The target runs under `go test` up to 200 times (a 2-second watchdog
+   per run, a goroutine dump for leaks); most findings show up here.
+2. When none does: deterministic replay (C1c, `internal/replay`). The
+   model records its schedule, one entry per step: the goroutine that
+   moved, the operation it fired (`select:k` with the case taken) and the
+   rendezvous partners it completed. The package is rewritten through an
+   overlay so that every synchronisation operation first passes a gate of
+   a replay controller: a receive `<-ch` becomes `<-gate("recv", ch)`, a
+   `mu.Lock()` passes its gate with the receiver bound, a `select`
+   evaluates its channels, passes its gate and nils every channel but the
+   model's case, `go f(x)` evaluates `f` and `x`, passes the spawn gate and
+   registers the goroutine with the next model id, and timers, deadlines
+   and `sync.Cond` are the controller's own. The controller lets each
+   goroutine through in the schedule's order, waits until it reaches its
+   next gate, and checks that the operation there is the one the model
+   fires. When the schedule ends, the goroutines it left blocked are
+   released in the order they arrived and Go's runtime decides: a
+   deadlock or leak that shows up then is the real program's, under the
+   model's interleaving. The PoC carries the rewritten files and the
+   overlay, so `go test -overlay ...` reproduces it.
 
 ## Measures
 

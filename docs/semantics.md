@@ -14,7 +14,7 @@ gives the design, [history.md](history.md) §9b–9c the history of each change.
 | status | meaning | effect on results |
 |---|---|---|
 | **exact** | the model computes what Go computes | counterexamples and certificates are sound for it |
-| **havoc** | the result is an unconstrained value of the right type, drawn by the engines (over-approximation) | can produce counterexamples Go does not have; M3 (`go test`) rejects them as spurious |
+| **havoc** | the result is an unconstrained value of the right type, drawn by the engines (over-approximation) | can produce counterexamples Go does not have; the replay stage (`go test`) rejects them as spurious |
 | **assumption** | the model fixes one behaviour among Go's possible ones and records it in the run (`assume`; under-approximation) | can hide a bug; a spec verdict that read an assumed value is not counted as decided, and an exhaustive pass through one is `exhausted_assuming` with the list |
 | **stuck** | the model has no value to give (`modelStuck`); the trial is moot | lowers coverage, never produces a wrong verdict |
 | **rejected** | the function is not modelled (listed in the model report with the reason) | no properties for it; callers see an unmodelled call (havoc) |
@@ -266,15 +266,22 @@ enumerates inputs, and the schedule is a havoc site, so its certificate is
 interleaving. Data races are not modelled: the machine is sequentially
 consistent at scheduling points.
 
-M3 for `deadlock` and `goroutine_leak` runs the call up to 200 times with a
+The replay stage for `deadlock` and `goroutine_leak` runs the call up to 200 times with a
 2-second watchdog per run, and for a leak scans the goroutine dump for a
 goroutine of the package blocked on a channel or a lock that was not there
-before the first run. Go's scheduler cannot be steered, so a bug that needs
-a rare schedule may not show up: `inconclusive (schedule_not_reproduced)`.
+before the first run. When none of the runs shows it, the replay stage
+replays the model's schedule: the package is rewritten (an overlay, the
+package itself untouched) so that every synchronisation operation waits
+for its turn in the schedule, the model's synthetic goroutines (timers,
+deadlines) are played by the replay controller, and once the schedule is
+done the goroutines still held are released in the order they arrived:
+Go's own runtime then decides whether they block. A run that leaves the
+schedule (an operation the model does not have, a goroutine that does not
+arrive) proves nothing: `inconclusive`, with the step it left at.
 
 ## 7. Inputs (what the engines generate)
 
-The search engines build each parameter from its Go type; the M3 harness
+The search engines build each parameter from its Go type; the replay stage harness
 writes the same value as a Go literal.
 
 | Go type | generated |

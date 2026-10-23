@@ -28,7 +28,7 @@ theorem; that path is not walked yet.
 
 Since 2026-10-22 the pipeline proves part of it (design §5.3, rung 3): for
 a `no_panic` property of a function whose parameters are integers and
-bools, M2 writes a theorem over every input and records `proved` with its
+bools, the spec & search stage writes a theorem over every input and records `proved` with its
 trust base read from `#print axioms` (`kernel`, or `compiler` when
 `Lean.ofReduceBool` appears). On the example packages 7 of the 13 eligible
 properties that held are proved, all `kernel`. Everything else is still
@@ -87,7 +87,7 @@ at any scheduling point; `time.Now` is havoc), and `context.WithValue`,
 
 ## 3. Confirmed is not the same as actionable
 
-M3 shows that the model's counterexample reproduces in Go, not that a real
+The replay stage shows that the model's counterexample reproduces in Go, not that a real
 caller can build that input. In the sixth full pass, 741 of 912 confirmed
 results involved a nil input; in the seventh, 231 came from constructors
 handed forged third-party structs (a `*gorm.DB` whose internal maps are
@@ -171,7 +171,7 @@ were written for the Go line, so this says little about the hand-written
 models on real code; running the comparison on tingly-box packages, and
 comparing return values, are next.
 
-## 6. M3 runs generated code without a sandbox
+## 6. The replay stage runs generated code without a sandbox
 
 The history records `log.Fatal`/`os.Exit` killing a test batch (four
 rounds), functions writing files, a 14 GB build cache filling the disk and a
@@ -192,7 +192,7 @@ stderr; `GO2LEAN_SANDBOX=off` disables the sandbox. The C and TinyGo
 replays use the same runner (ASan runs without the address-space limit).
 The build step itself (`go test -c`) still runs cgo and the toolchain
 outside the sandbox, as any build does. Not covered: the `agent`
-subcommand's own LLM calls, and the M2 search, which runs only the
+subcommand's own LLM calls, and the search, which runs only the
 generated Lean model.
 
 ## 7. Smaller items
@@ -207,8 +207,9 @@ generated Lean model.
   timeout may fire at any point, so a finding may need a deadline to
   pass early), a certificate
   for a concurrent function covers sampled schedules only
-  (`exhausted_havoc`), and M3 cannot steer Go's scheduler, so a bug that
-  needs a rare interleaving stays `inconclusive`. Properties are about one run of a function;
+  (`exhausted_havoc`), and the replay of the model's schedule needs the
+  package rewritten (an overlay), so a bug Go's own scheduler never shows
+  is confirmed under that rewrite, which the PoC carries. Properties are about one run of a function;
   properties of a sequence of calls over a finite input are written as
   `go2lean:sequence` specs (design §5.2) and checked by bounded model
   checking, which covers "always" after each step and "eventually" at the

@@ -124,6 +124,7 @@ type searchResult struct {
 	Probes      []contract.Probe           `json:"probes"`
 	PanicAt     string                     `json:"panic_at"`
 	Assumptions []string                   `json:"assumptions"`
+	Schedule    []contract.SchedStep       `json:"schedule"`
 	// The mutation engine's report (Mutation set).
 	Mutation     bool                  `json:"mutation"`
 	MutantsTotal int                   `json:"mutants_total"`
@@ -946,6 +947,7 @@ func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, 
 		Probes:            res.Probes,
 		PanicAt:           res.PanicAt,
 		Assumptions:       res.Assumptions,
+		Schedule:          res.Schedule,
 	}
 	return cx, ws.WriteCounterexample(cx)
 }

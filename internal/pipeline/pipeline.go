@@ -309,7 +309,7 @@ func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io
 		}
 		maps.Copy(env.Overlay, overlay)
 	}
-	fmt.Fprintln(out, "== M1 compile")
+	fmt.Fprintln(out, "== Compile stage")
 	reports, err := CompileAll(w, env, out, patterns...)
 	if err != nil {
 		return nil, err
@@ -343,17 +343,17 @@ func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io
 }
 
 func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts constraint.SearchOptions, out io.Writer) (*Result, error) {
-	fmt.Fprintln(out, "== M2 properties")
+	fmt.Fprintln(out, "== Spec & search stage: properties")
 	props, err := Propose(w, report, out)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintln(out, "== M2 hunt")
+	fmt.Fprintln(out, "== Spec & search stage: hunt")
 	cxs, err := HuntAll(w, env, props, opts, out)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintln(out, "== M3 poc")
+	fmt.Fprintln(out, "== Replay stage: generate PoC and verify")
 	res := &Result{Report: report, Properties: props}
 	if len(cxs) == 0 {
 		fmt.Fprintln(out, "  nothing to verify")
