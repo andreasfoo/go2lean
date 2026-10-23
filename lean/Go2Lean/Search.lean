@@ -1,6 +1,7 @@
 import Lean.Data.Json
 import Std.Data.HashSet
 import Go2Lean.Dialect.GoSSA
+import Go2Lean.Dialect.GoConc
 
 /-!
 # Counterexample search driver
@@ -500,12 +501,12 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
     (fuel : Nat) (heap : Heap Val := #[]) (alts : List (Havoc Val) := []) : Outcome × HState Val × Option Val :=
   match prop with
   | .noPanic f =>
-    match run p or h f args fuel heap with
+    match GoConc.runAny p or h f args fuel heap with
     | (.ok v, s) => (.holds, s, some v)
     | (.panic k, s) => (.panicked k, s, none)
     | (.outOfFuel, s) => (.outOfFuel, s, none)
   | .postcondition f spec =>
-    match run p or h f args fuel heap with
+    match GoConc.runAny p or h f args fuel heap with
     | (.ok v, s) =>
       -- A spec takes every result of the target after its parameters.
       let results := match v with | .tuple vs => vs | v => [v]
@@ -543,13 +544,13 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
     | (.panic k, s) => (.panicked k, s, none)
     | (.outOfFuel, s) => (.outOfFuel, s, none)
   | .sequence f =>
-    match run p or h f args fuel heap with
+    match GoConc.runAny p or h f args fuel heap with
     | (.ok (.bool true), s) => (.holds, s, some (.bool true))
     | (.ok (.bool false), s) =>
       -- A false verdict that read havoc stands only if every other havoc
       -- assignment gives it too.
       let decided := s.log.isEmpty || (!alts.isEmpty && alts.all fun h' =>
-        match run p or h' f args fuel heap with
+        match GoConc.runAny p or h' f args fuel heap with
         | (.ok (.bool false), _) => true
         | _ => false)
       if decided then (.violated, s, some (.bool false)) else (.specUnknown, s, some (.bool false))

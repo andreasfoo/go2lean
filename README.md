@@ -15,7 +15,7 @@ bounded, search-based bug finder (random search steered by the program's
 constants, exhaustive search of small domains), not a symbolic executor;
 the pipeline proves over all inputs only `no_panic` of integer and bool
 functions; functional properties of loops over slices are proved by hand
-so far (`lean/Proofs/Functional.lean`). 27 ground-truth packages run in CI (199 properties, each outcome
+so far (`lean/Proofs/Functional.lean`). 28 ground-truth packages run in CI (217 properties, each outcome
 pinned, including every spec's mutation score). The design is in
 [docs/design.md](docs/design.md); the Go semantics modelled, and how
 faithfully, in [docs/semantics.md](docs/semantics.md); what it does not
@@ -185,6 +185,7 @@ outcome (confirmed, certified, none) with
 | `examples/globals` | `At` indexes a package-level slice nothing fills; `Slot` indexes four slots with a generator the package initializer sets to one that yields 7 (only a `...ForTest` helper replaces it) | both confirmed (`index out of range`): a package-level variable nothing writes loads as its zero value, one only the initializer sets to a constant or function loads as that; `Blank` (`==` on `[4]byte` against such a variable) certified |
 | `examples/closures` | `Last` returns the last element a closure appended, and indexes `-1` when it never ran | confirmed (`index out of range [-1]`); `HasNeg` (a function passed as a value), `HasAbove` (a closure through `slices.ContainsFunc`) and `Total` (a closure updating a captured variable) certified; `anyOf` with a nil func confirmed as `nil_opaque_input` |
 | `examples/stream` | a converter that assembles content-block events into one message drops the open block's text when a second `Start` arrives; properties of the event sequence, written as `go2lean:sequence` specs | `SeqComplete` (every byte received is in the message at the end of the stream) confirmed on a 7-event sequence found by random search; `SeqBounded` (an invariant after every event) holds on all 538,084 sequences of up to 3 events |
+| `examples/conc` | goroutines, channels and locks: `Notify` sends on an unbuffered channel nobody reads when `n > 10`; `First` returns before reading a second result; `AddMore` locks a held mutex; `Drain` closes a channel twice; `ReadWhileWriting` takes a read lock while a writer waits (writer preference); `Bump` locks a package-level mutex twice | `Notify`, `AddMore`, `Bump` (deadlock), `First` (goroutine leak) and `Drain` (`close of closed channel`) confirmed by `go test`; `ReadWhileWriting` found by the model, inconclusive in M3 (Go's scheduler did not take the interleaving in 200 runs); `Pipe`, `Sum`, `TrySend` (`select` with `default`), `Once`, `SumGen` (`range` over a channel `gen` returns), `CountAtomic`, `BumpAll` and the rest hold on every input (sampled schedules) |
 | `examples/portable` | constructs that gave spurious or missed results on one-api and spf13/cast: `URL` slices the `BaseURL` of a `*meta.Meta` (a struct of exported fields from another package, which has a function returning one); `Pick` indexes with `rand.Intn(len(xs))`; `Parse` and `parse` (ids differ only in case) divide by `strconv.Atoi`'s result; `Port` calls the generic `Must`; `Unit` reads group 2 of a one-group regexp; `Minor` divides by group 2 of a version, read through a helper that takes the regexp; `Head` divides by the first element after checking a sentinel error; `Per` divides by a `uint8` case of a type switch on `any`; `Label` reads a field of a handle (`*meta.Session`), then divides by a name's length; `Tokens` divides through a pointer only `InitEncoder` sets; `ring.push` would panic on a ring with an empty buffer, which only a receiver built field by field has; `Shrink` and `Budget` use `min`/`max`; `Drain` divides by an `atomic.Int64`; `Kind.String` and `Label2` read a stringer's index table | `URL`, `Pick` (Go's own `invalid argument to Intn`), `Parse`, `parse`, `Port` (via `Must[int]`), `Head`, `Per` (with `uint8(0)`), `Unit`, `Minor` (`"v0.0"`, a string the search drew from the pattern), `Label`, `Shrink`, `Drain`, `Label2` and `Tokens` confirmed (`Tokens` with the note `reads_unknown_state`: the program may call `InitEncoder` first, as one-api's `CountToken*` rely on `InitTokenEncoders`); `Count` (`errors.Is` on the sentinel `first` returns covers the empty slice), `Digit` (`rand.Intn` stays below its bound), `IntPart` (a one-group match has two elements), `PerMB` (`var mb = kb * 1024` folded), `PerMax` (`Atoi` of an out-of-range number is `MaxInt64`, not 0) and `Month` (both ends of a regexp group checked) certified (`Fill`, through `newRing`, `Budget` and `Kind.String` too); `ring.push` is no target (its unexported type is built by `newRing` only); the helper `group` as a target of its own is inconclusive (a `*regexp.Regexp` input cannot be generated) |
 
 ## On a real module
@@ -241,7 +242,8 @@ Construct-by-construct detail: [docs/semantics.md](docs/semantics.md).
 - ✅ Package variables with constant initializers, constant lookup tables
 - 🟡 Other package variables (havoc), `init` functions (not run), stores to globals (ignored)
 - 🟡 `defer` of an unmodelled call (ignored); `recover` (havoc)
-- ❌ `defer` of a modelled function, goroutines, `select`, channel operations
+- ✅ `defer` of a modelled function (not in a loop)
+- 🟡 Goroutines, channels, `select`, `sync.Mutex` `RWMutex` `WaitGroup` `Once`: deadlocks, goroutine leaks and misuse panics under schedules the search picks ([concurrency.md](docs/concurrency.md)); `context`, timers, `sync.Cond` not yet; data races not modelled
 
 **Standard library and SDKs** (✅ unless noted)
 - `strings`: `HasPrefix` `HasSuffix` `Contains` `Index*` `LastIndex*` `Count` `Cut` `Trim*` `ReplaceAll` `Split` `Fields` `Join` `Repeat` `Builder` `Replacer` (literal pairs); `TrimSpace` `ToLower` `ToUpper` `EqualFold` ASCII only 🟡
@@ -249,7 +251,7 @@ Construct-by-construct detail: [docs/semantics.md](docs/semantics.md).
 - `unicode/utf8`, `unicode/utf16`, `net/url`: translated from their Go source
 - `encoding/json`: `Marshal`, `Unmarshal`, `Valid`, `Encoder` to a `strings.Builder`; `encoding/base64` standard encodings; `encoding/hex.EncodeToString`
 - `regexp` with constant patterns; `fmt.Sprintf` with `%s %d %v %t` 🟡 otherwise; `reflect` `ValueOf` `IsZero` `Kind` `IsNil`
-- `sync/atomic` integer types; `sync.Mutex` and friends ignored (single-threaded model)
+- `sync/atomic` integer types and functions (`LoadInt32`, `AddInt64`, `CompareAndSwapUint32`, ...)
 - anthropic-sdk-go and openai-go JSON unions, `Message.Accumulate` (under `-deps`)
 - 🟡 `math/rand` (any value in range), clocks, environment, I/O, network (havoc)
 
@@ -320,7 +322,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ M3: every counterexample replayed as a `go test`, verdict with PoC
 - ✅ Spec-in-Go properties and probes (model value vs real value)
 - ✅ LLM agent: proposes specs, runs them, reports
-- ✅ Regression gate in CI (199 properties); benchmark of hand-found bugs (34/34)
+- ✅ Regression gate in CI (217 properties); benchmark of hand-found bugs (34/34)
 - ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
 - ✅ Proof prototype: a postcondition proved for all 64-bit inputs by hand (`lean/Proofs`)
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))
@@ -331,7 +333,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ Go fuzz targets (`FuzzXxx`) read as specs (`go2lean run`, `-fuzz-specs`): a project with fuzz targets needs no spec writing
 - 🚧 Proofs of postconditions and of functions over slices and strings
 - 🚧 `init` functions and package state (stores an `init` makes on every path, since 2026-10-23); floats ⬜
-- ⬜ Goroutines, `select`, channels, `defer` of modelled functions
+- 🚧 Concurrency (C1, [concurrency.md](docs/concurrency.md)): goroutines, channels, `select`, `sync`; deadlocks and leaks found and confirmed in 35 of GoKer's 68 blocking kernels; `context`, timers, `sync.Cond`, deterministic replay and data races next
 
 **LLVM line (C, LLVM IR, TinyGo → VeIR semantics)**: 7 / 11
 - ✅ `lean-llvm/`: LLVM dialect over the same core with [VeIR](https://github.com/opencompl/veir)'s integer and memory semantics

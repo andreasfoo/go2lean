@@ -198,7 +198,12 @@ def link (registry : List (String × GoSSA.Prog)) (main : String) : Option GoSSA
     match registry.lookup pkg with
     | some p => acc ++ (Array.range p.havocWidths.size).map (pkg, ·)
     | none => acc
-  return { funcs, havocWidths := widths, siteOrigin := origin }
+  -- The schedule: the first model that has one, its site renumbered.
+  let sched := order.findSome? fun pkg =>
+    match registry.lookup pkg, bases.lookup pkg with
+    | some p, some (_, hb) => p.schedSite.map (· + hb)
+    | _, _ => none
+  return { funcs, havocWidths := widths, siteOrigin := origin, schedSite := sched }
 
 /-- Entry point of the `go2lean-search` executable: `go2lean-search spec.json`,
 with the models in `registry`. -/

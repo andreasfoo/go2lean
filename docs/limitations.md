@@ -79,8 +79,9 @@ list, instead of `exhausted`; counterexamples carry the list too. On the
 example packages 4 of 101 certificates changed (a store to a global
 dropped, a callee the model got stuck in, an assumed `errors.As` target).
 
-Still open: `sync` calls are dropped without a note (no concurrency is
-modelled at all, see §7); havoc sites are still sampled, not enumerated
+Still open: synchronisation the model does not cover yet (`sync.Cond`,
+`context`, timers, a `sync.Locker` through an interface) is havoc or
+ignored, with a note in the model report (§7); havoc sites are still sampled, not enumerated
 (`exhausted_havoc`); and the list is not yet a hypothesis of any theorem.
 
 ## 3. Confirmed is not the same as actionable
@@ -197,10 +198,14 @@ generated Lean model.
 
 - Unit tests are thin (7 test files for 35 Go files); the gates are the
   end-to-end regression and differential scripts, which are slow.
-- Concurrency is out of scope: one goroutine, `sync` calls ignored, no
-  channels or `select` interleaving, so data races, deadlocks and
-  ordering bugs can be neither stated nor found. Reports on concurrent code
-  should say so prominently. Properties are about one run of a function;
+- Concurrency (C1, [concurrency.md](concurrency.md)): goroutines, channels,
+  `select`, mutexes, wait groups and `Once` are modelled, and the search
+  finds deadlocks, leaks and misuse panics; but data races are not
+  modelled (the machine is sequentially consistent between scheduling
+  points), `context`, timers and `sync.Cond` are not yet, a certificate
+  for a concurrent function covers sampled schedules only
+  (`exhausted_havoc`), and M3 cannot steer Go's scheduler, so a bug that
+  needs a rare interleaving stays `inconclusive`. Properties are about one run of a function;
   properties of a sequence of calls over a finite input are written as
   `go2lean:sequence` specs (design §5.2) and checked by bounded model
   checking, which covers "always" after each step and "eventually" at the

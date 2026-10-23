@@ -229,3 +229,30 @@ func TestProgramStructHoldingSDKValueIsALiteral(t *testing.T) {
 		t.Fatalf("want a literal holding a decoded SDK value, got %s", got)
 	}
 }
+
+// A test function as the target (-tests) whose model run deadlocked: its t
+// is the harness's own, the call runs under the concurrency watchdog, and
+// the harness compiles in a module older than Go 1.18 (no `any`).
+func TestHarnessTestEntryConc(t *testing.T) {
+	abi := &contract.ABI{Params: []contract.ABIParam{
+		{Go: "t", GoType: "*testing.T", Kind: contract.ABIOpaque, Model: []string{"t"}, Zero: "go2leanT"},
+	}}
+	cx := &contract.Counterexample{ID: "cx1", Objects: map[string]json.RawMessage{"t": json.RawMessage(`null`)},
+		ModelOutput: &contract.ModelOutput{Res: "panic", Panic: contract.PanicDeadlock}}
+	src, err := Harness("m", &contract.Target{Func: "TestKernel", Package: "example.com/m"}, &contract.Property{Kind: contract.KindNoPanic}, cx, abi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"t := go2leanT", "TestKernel(t)", "time.After(", `"runtime"`} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("harness lacks %q:\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "any{") || strings.Contains(src, "]any") {
+		t.Fatalf("harness uses any (needs Go 1.18):\n%s", src)
+	}
+	if got := rankOf(&prepared{prop: &contract.Property{Kind: contract.KindNoPanic}, target: &contract.Target{Func: "TestKernel"},
+		cx: &contract.Counterexample{}, v: &contract.Verdict{}, test: true}, nil); got.Tier != 1 {
+		t.Fatalf("rank of a failing test = %+v", got)
+	}
+}

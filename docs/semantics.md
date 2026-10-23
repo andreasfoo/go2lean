@@ -39,7 +39,8 @@ memory images.
 | func | `.boxed 0 (tuple [fid, captured…])`, nil `.opaqueNil` | exact for functions and closures of the program |
 | tuple (multiple results) | `.tuple vs` | exact |
 | `float32/64`, `complex64/128` | opaque (`.unit`) | havoc: arithmetic, comparisons and conversions |
-| `chan T`, `unsafe.Pointer` | opaque | rejected for channel operations (§8) |
+| `chan T` | `.ptr r []` to a heap object `.structv [cap, .arr buffer, .bool closed, zero]`; nil is `.ptr 0 []` or `.opaqueNil` | exact (§6) |
+| `unsafe.Pointer` | opaque | havoc |
 
 Integers are bitvectors of the Go width, not mathematical integers: the
 `int` of a 64-bit target is 64 bits, overflow wraps.
@@ -62,7 +63,7 @@ yields UB or poison, Go panics. A run ends in one of:
 | outcome | Go | kinds |
 |---|---|---|
 | `ok v` | returned | — |
-| `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `other` |
+| `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex, negative wait group: fatal errors in Go), `deadlock`, `goroutine_leak` (§6), `other` |
 | `panic modelStuck` | — | the model cannot continue (stuck); not a Go panic, never reported as one |
 | `outOfFuel` | — | the step budget ran out (loops, recursion); moot |
 
@@ -187,7 +188,7 @@ Calls not listed here are unmodelled (§4.6).
 | `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell) |
 | `strconv.Atoi` | exact for decimal `int64` (sign, range error) |
 | `strconv.Itoa` | exact |
-| `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add` | exact: plain reads and writes of the wrapped field (the model is single-threaded); other methods (`Swap`, `CompareAndSwap`): havoc |
+| `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add`; the functions `Load Store Add Swap CompareAndSwap` on `*int32 *int64 *uint32 *uint64` | exact: plain reads and writes (a goroutine's instructions between two scheduling points run atomically, §6); other methods (`Swap`, `CompareAndSwap` on the types): havoc |
 | `strconv.ParseInt ParseUint` | exact: bases 0 (prefixes `0b 0o 0x 0`, underscores) and 2–36, bit sizes 0–64, syntax, range (the bound, as soon as the value overflows), base and bit size errors; checked against Go by `PKG=testdata/convdiff scripts/json-diff.sh` |
 | `strconv.ParseBool FormatInt FormatUint` | exact (an illegal base panics, as in Go) |
 | `math/rand` and `math/rand/v2` `Intn Int31n Int63n IntN Int32N Int64N UintN Uint32N Uint64N` (functions and `*Rand` methods) | any value in `[0, n)` (havoc); Go's panic for `n <= 0` |
@@ -216,11 +217,51 @@ Calls not listed here are unmodelled (§4.6).
 
 ## 6. Concurrency
 
-| Go | status |
+A function that can reach a synchronisation operation (directly, or through
+a call, a closure or a deferred call) runs in a small-step machine
+(`Go2Lean.GoConc`, design in [concurrency.md](concurrency.md)); the others
+keep the big-step interpreter. A goroutine runs from one scheduling point
+(a `go` statement or a synchronisation operation) to the next in one step;
+which goroutine moves next is the next value of a havoc site (`schedule`),
+so the engines vary schedules as they vary inputs and a counterexample
+records its schedule.
+
+| Go | model |
 |---|---|
-| `go f()`, `select`, channel send/receive, `close` | rejected |
-| `make(chan T)` | opaque value (the function is still rejected if it uses the channel) |
-| `sync.Mutex` and other `sync` types | opaque values; `Lock`/`Unlock` calls ignored (no concurrency is modelled, so a single-goroutine run is exact) |
+| `go f(x)`, `go func(){...}()`, `go` of a method | a new goroutine; arguments evaluated by the spawning goroutine |
+| `make(chan T, n)` | a channel object (capacity, buffer, closed flag, zero value of `T`) |
+| `ch <- v`, `<-ch`, `v, ok := <-ch`, `for v := range ch` | exact: unbuffered is a rendezvous, buffered blocks when full / empty, a receive on a closed channel gets the zero value and `ok == false` once the buffer is drained, a nil channel blocks forever, a send on a closed channel panics |
+| `close(ch)`, `defer close(ch)` | exact: a closed or nil channel panics; blocked receivers wake, blocked senders panic |
+| `len(ch)`, `cap(ch)` | exact |
+| `select` (send and receive cases, with or without `default`) | any enabled case, chosen by the schedule; blocks when none is enabled and there is no `default` |
+| `sync.Mutex` `Lock Unlock TryLock` | a lock word in place of the field; `Unlock` of an unlocked mutex: `sync_fatal` |
+| `sync.RWMutex` `Lock Unlock RLock RUnlock` | readers count and writer flag; writer preference: a blocked `Lock` stops new `RLock`s, as Go does (read–write–read deadlock) |
+| `sync.WaitGroup` `Add Done Wait` | a counter; negative: `sync_fatal`; `Wait` blocks until zero |
+| `sync.Once` `Do` | not started / running / done; a `Do` while another runs blocks; `f` runs once |
+| `time.Sleep`, `runtime.Gosched` | a scheduling point; time is not modelled |
+| deferred `Unlock`, `RUnlock`, `Done`, `close` | run at the function's returns, as other deferred calls |
+| `sync.Cond`, `context`, timers (`time.After`, `NewTimer`, `NewTicker`), `sync.Locker` through an interface | not yet: havoc or ignored, with a note in the model report |
+
+The end of a run, when no goroutine can move: all goroutines done, the main
+goroutine's result; the main goroutine blocked, `deadlock` (Go's "all
+goroutines are asleep", also when Go would not detect it because other
+goroutines of the process are running); the main goroutine returned and
+another one blocked forever, `goroutine_leak`, unless it waits on a channel
+the main goroutine returns (the caller may still use it). The report names
+where each blocked goroutine waits. Fuel counts every goroutine's steps; an
+unfair schedule that spins runs out of fuel and is moot.
+
+What a certificate means for a concurrent function: the exhaustive engine
+enumerates inputs, and the schedule is a havoc site, so its certificate is
+`exhausted_havoc` (sampled schedules), not a statement about every
+interleaving. Data races are not modelled: the machine is sequentially
+consistent at scheduling points.
+
+M3 for `deadlock` and `goroutine_leak` runs the call up to 200 times with a
+2-second watchdog per run, and for a leak scans the goroutine dump for a
+goroutine of the package blocked on a channel or a lock that was not there
+before the first run. Go's scheduler cannot be steered, so a bug that needs
+a rare schedule may not show up: `inconclusive (schedule_not_reproduced)`.
 
 ## 7. Inputs (what the engines generate)
 
@@ -247,9 +288,10 @@ writes the same value as a Go literal.
 
 ## 8. Not modelled (rejected functions)
 
-Goroutines, `select` and channel operations (so `range` over a channel);
 `defer` of a modelled function in a loop; string orderings (`<` on strings);
-`unsafe` conversions; parameters of type `*testing.T` (test helpers);
+`unsafe` conversions; parameters of type `*testing.T` (test helpers; with
+`-tests` the test functions themselves, `TestXxx(t *testing.T)`, are
+targets, `t` the harness's own);
 generic functions as targets (their instances are not targets either:
 a harness cannot name them).
 

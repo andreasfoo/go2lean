@@ -38,6 +38,8 @@ type Env struct {
 	// Overlay adds files to the packages for compiling and replaying
 	// (absolute path to contents), never written into them.
 	Overlay map[string][]byte
+	// Tests makes test functions targets (gossa.Options.Tests).
+	Tests bool
 }
 
 func (e Env) module() string {
@@ -69,7 +71,7 @@ func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*con
 // CompileAll runs M1 on every package matching the patterns (e.g. "./...")
 // with a single load of the dependency graph.
 func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string) ([]*contract.ModelReport, error) {
-	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: env.Deps, Overlay: env.Overlay}, patterns...)
+	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: env.Deps, Overlay: env.Overlay, Tests: env.Tests}, patterns...)
 	if err != nil {
 		return nil, err
 	}
