@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "comment_in_string",
+    "post": "False",
+    "prelude": "",
+    "proof": "  have _s := \"--\"; exact sorry",
+    "attack": "sorry after a string holding a comment opener on the same line: a check that strips comments without lexing strings does not see it."
+  }
+]

@@ -47,8 +47,9 @@ Lean finds the inputs; `go test` is the judge.
   configurations, a certificate that none occurs under any schedule.
 - **Functional proofs** — `go2lean prove` states a function's contract from a
   postcondition (in Lean, or one of your Go specs) and proves it for every
-  input, checked by Lean's kernel; loop invariants are written by the
-  optional agent or by hand.
+  input; loop invariants are written by the optional agent or by hand. A
+  proof counts only when Lean's comparator accepts it against go2lean's own
+  statement, in a sandbox, with a certificate ([trust model](docs/trust.md)).
 - **Optional spec-writing agent** — read source, propose and repair Go specs,
   run the pipeline, and report the verdicts. The basic pipeline needs no API key.
 
@@ -132,6 +133,7 @@ these checks are evidence, not a general correctness guarantee.
 | [Go support](docs/reference.md#supported-go-subset) | Supported constructs and library models |
 | [Semantics](docs/semantics.md) | How faithfully the model follows Go |
 | [Limitations](docs/limitations.md) | Unsupported behavior and trust boundaries |
+| [Proof trust](docs/trust.md) | What a `proved` record asserts, and what it rests on |
 | [Validation](docs/validation.md) | Regression cases, reproducibility, evaluation evidence |
 | [Project reference](docs/reference.md) | Repository layout and roadmap |
 | [Design](docs/design.md) | Architecture and technical decisions |

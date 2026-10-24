@@ -7,3 +7,4 @@
 # are left over from checkouts that predate it.
 /lean/Search/
 /lean/Go2Lean/Generated/
+/testdata/mutant-*/

@@ -1,0 +1,6 @@
+{
+  "attack": "A whole solution file that imports Lean, turns the kernel off (debug.skipKernelTC) and closes the goal with a tactic that assigns an ill-typed proof.",
+  "imports": "import Lean",
+  "prelude": "open Lean Elab Tactic in\nelab \"cheat_tac\" : tactic => do\n  let g ← getMainGoal\n  g.assign (mkConst ``True.intro)\n  replaceMainGoal []\n\nset_option debug.skipKernelTC true\n",
+  "proof": "  cheat_tac"
+}

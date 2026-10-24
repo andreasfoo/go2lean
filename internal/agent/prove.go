@@ -32,10 +32,15 @@ deep embedding in Lean 4 (v4.35, core and Std only: no Mathlib) and proves
 functional properties of them over that model.
 
 go2lean has stated a theorem: the contract of one Go function, in the form
-wpFun prog or0 h0 <id> [args] (fun ret s' => <postcondition>) s, meaning that
-every run of the function on these arguments that ends returns without
-panicking, with a result ret and final state s' satisfying the
-postcondition (partial correctness). You write its proof. The function has
+wpFun prog orc hv <id> [args] (fun ret s' => s'.assumed = #[] ∧ <postcondition>) s,
+for every memory oracle orc and havoc function hv (the values the model
+does not know: any value) and every state s that has taken no
+under-approximation (h_assumed : s.assumed = #[]), meaning that every run
+of the function on these arguments that ends returns without panicking,
+takes no under-approximation, and has a result ret and final state s'
+satisfying the postcondition (partial correctness). wp_simp and wp_step
+keep s.assumed = #[] along the walk when nothing is assumed; carry it in
+your invariants. You write its proof. The function has
 loops: each needs an invariant at its header block, applied with
 wpPt_loop, as in the worked examples.
 
@@ -64,8 +69,10 @@ prog_fN is already stated; do not restate it.
 Rules: the statement is fixed and not yours to write or restate. Never use
 sorry, admit, axiom, native_decide, macros, notation, syntax extensions,
 namespace or section commands, or anything that runs code at elaboration.
-The kernel checks the result, and #print axioms must list no more than
-propext, Classical.choice and Quot.sound. Prefer small lemmas in the
+A judge checks the result apart from your text: it holds the theorem to
+the statement go2lean wrote, allows no axiom but propext,
+Classical.choice and Quot.sound, and replays the proof in Lean's kernel
+and independent checkers; your Lean runs in a sandbox. Prefer small lemmas in the
 prelude over one long proof. When Lean's errors come back, fix the cause;
 the goal states in the errors show what is left to prove.`
 
@@ -87,7 +94,7 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 		if err != nil {
 			return nil, nil, "", err
 		}
-		rs, text, err := prover.CheckGoals(leanDir, f, goals, opts.Budget)
+		rs, text, err := prover.CheckGoals(leanDir, report.LeanModule, f, goals, opts.Budget)
 		return rs, f, text, err
 	}
 	rs, _, _, err := check()
@@ -279,7 +286,7 @@ func provePrompt(library, model string, fid int, fn, statement string, contracts
 	b.WriteString("\n\n# The model of the function's package\n\n```lean\n")
 	b.WriteString(model)
 	fmt.Fprintf(&b, "```\n\n# Your goal\n\nThe function is %s, f%d in the model (lookup equation prog_f%d : prog.funcs[%d]? = some f%d, already stated). ", fn, fid, fid, fid, fid)
-	b.WriteString("In the file, `prog`, `or0` (the memory oracle) and `h0` (the havoc values) are in scope, ")
+	b.WriteString("In the file, `prog` is in scope, ")
 	b.WriteString("with `open Go2Lean.SSA Go2Lean.GoSSA Go2Lean.GoSSA.WP` and the model's namespace. The theorem:\n\n```lean\n")
 	b.WriteString(statement)
 	b.WriteString("\n```\n")

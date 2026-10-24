@@ -22,12 +22,13 @@ set_option maxHeartbeats 1000000
 
 namespace Go2Lean.Proofs.Functional
 
-def or0 : Oracle := { mem := fun _ _ => 0#64 }
-def h0 : Havoc Val := fun _ _ => .unit
+-- Every theorem holds for every memory oracle and every havoc function
+-- (the values the model does not know).
+variable {orc : Oracle} {hv : Havoc Val}
 
 /-- Partial correctness at a point of this package's model. -/
-local notation "wp" => wpPt prog or0 h0
-local notation "wpN" => wpPtN prog or0 h0
+local notation "wp" => wpPt prog orc hv
+local notation "wpN" => wpPtN prog orc hv
 
 theorem prog_f0 : prog.funcs[0]? = some f0 := rfl
 theorem prog_f1 : prog.funcs[1]? = some f1 := rfl
@@ -46,7 +47,7 @@ theorem max2_correct (a b : BitVec 64) (s : HState Val) :
 
 /-- `Max2`'s contract for a call: from any state, with any two integers. -/
 theorem max2_spec (a b : BitVec 64) (s : HState Val) :
-    wpFun prog or0 h0 3 [.int 64 a, .int 64 b]
+    wpFun prog orc hv 3 [.int 64 a, .int 64 b]
       (fun v _ => ∃ m, v = .int 64 m ∧ b.sle m ∧ a.sle m) s :=
   wpFun_of_wpPt prog_f3 (max2_correct a b s)
 
@@ -58,13 +59,16 @@ theorem max3_correct (a b c : BitVec 64) :
 /-! ## `CountUp`: one loop -/
 
 /-- At the header (block 3): `i` (value 1) between 0 and `max n 0`, `n`
-(value 0) unchanged. -/
-def countInv (n : BitVec 64) (env : Env Val) (_ : HState Val) : Prop :=
-  env.size = 6 ∧ env[0]? = some (.int 64 n) ∧
+(value 0) unchanged, and no under-approximation taken (`s.assumed`: the
+state carries it, so the invariant does). -/
+def countInv (n : BitVec 64) (env : Env Val) (s : HState Val) : Prop :=
+  env.size = 6 ∧ env[0]? = some (.int 64 n) ∧ s.assumed = #[] ∧
   ∃ i : BitVec 64, env[1]? = some (.int 64 i) ∧ 0 ≤ i.toInt ∧ i.toInt ≤ max n.toInt 0
 
+/-- Every run that ends returns `max n 0` and takes no under-approximation
+(the form `go2lean prove` states: `s'.assumed = #[] ∧ post`). -/
 theorem countUp_correct (n : BitVec 64) :
-    wp ⟨0, 0⟩ (fun v _ => v = .int 64 (if n.toInt < 0 then 0 else n))
+    wp ⟨0, 0⟩ (fun v s' => s'.assumed = #[] ∧ v = .int 64 (if n.toInt < 0 then 0 else n))
       (bindParams (Array.replicate 6 default) [0] [.int 64 n]) {} := by
   apply wpPt_of_block prog_f0 rfl
   intro k
@@ -72,7 +76,7 @@ theorem countUp_correct (n : BitVec 64) :
   apply wpPtN_of_wpPt
   apply wpPt_loop prog_f0 (countInv n)
   · intro m env s hI ih
-    obtain ⟨hsz, h0, i, h1, hlo, hhi⟩ := hI
+    obtain ⟨hsz, h0, ha, i, h1, hlo, hhi⟩ := hI
     obtain ⟨_, e0⟩ := Array.getElem?_eq_some_iff.mp h0
     obtain ⟨_, e1⟩ := Array.getElem?_eq_some_iff.mp h1
     apply wpPtN_of_block prog_f0 rfl
@@ -82,7 +86,7 @@ theorem countUp_correct (n : BitVec 64) :
     · -- exit: block 2 returns i
       dsimp only
       wp_step prog_f0 [f0] as m
-      simp [e1, hsz]
+      simp [e1, hsz, ha]
       simp only [BitVec.slt, decide_eq_false_iff_not, Int.not_lt] at hc
       split
       · apply BitVec.eq_of_toInt_eq; simp; omega
@@ -95,10 +99,10 @@ theorem countUp_correct (n : BitVec 64) :
       apply ih
       simp only [BitVec.slt, decide_eq_true_eq] at hc
       have hn : n.toInt < 2 ^ 63 := by have := @BitVec.toInt_lt 64 n; simpa using this
-      refine ⟨by simp [hsz], by simp [hsz]; exact e0, i + 1, by simp [hsz], ?_, ?_⟩
+      refine ⟨by simp [hsz], by simp [hsz]; exact e0, ha, i + 1, by simp [hsz], ?_, ?_⟩
       · rw [BitVec.toInt_add_of_not_saddOverflow] <;> simp [BitVec.saddOverflow] <;> omega
       · rw [BitVec.toInt_add_of_not_saddOverflow] <;> simp [BitVec.saddOverflow] <;> omega
-  · refine ⟨by simp, by simp, 0, by simp, by simp, Int.le_max_right _ _⟩
+  · refine ⟨by simp, by simp, rfl, 0, by simp, by simp, Int.le_max_right _ _⟩
 
 /-! ## `Max`: a loop reading a slice -/
 

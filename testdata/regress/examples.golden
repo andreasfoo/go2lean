@@ -238,7 +238,7 @@ exhausted mut=1/1 strs_before_specbeforebytewise
 confirmed strs_hextag_nopanic
 exhausted strs_isadmin_nopanic
 exhausted strs_label_nopanic
-proved mut=1/1 strs_label_speclabelformat
+exhausted mut=1/1 strs_label_speclabelformat
 exhausted strs_parseport_nopanic
 confirmed strs_parseport_specparseportrange
 confirmed strs_scheme_nopanic

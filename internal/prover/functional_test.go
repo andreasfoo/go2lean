@@ -18,10 +18,10 @@ func TestStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"theorem F_spec (n : BitVec 32) (ok : Bool) (xs : List (BitVec 64)) (xs_len : BitVec 64) (xs_ref : Nat) (s : HState Val)",
-		"(h_xs_len : xs_len.toInt = xs.length) (h_xs_ref : xs_ref ≠ 0) (h_xs : s.heap[xs_ref]? = some (.arr (xs.map (.int 64))))",
-		"wpFun prog or0 h0 7 [.int 32 n, .bool ok, .slice xs_ref 0 xs_len xs_len]",
-		"(fun ret s' => ret = .int 64 0) s",
+		"theorem F_spec (orc : Oracle) (hv : Havoc Val) (n : BitVec 32) (ok : Bool) (xs : List (BitVec 64)) (xs_len : BitVec 64) (xs_ref : Nat) (s : HState Val)",
+		"(h_xs_len : xs_len.toInt = xs.length) (h_xs_ref : xs_ref ≠ 0) (h_xs : s.heap[xs_ref]? = some (.arr (xs.map (.int 64)))) (h_assumed : s.assumed = #[])",
+		"wpFun prog orc hv 7 [.int 32 n, .bool ok, .slice xs_ref 0 xs_len xs_len]",
+		"(fun ret s' => s'.assumed = #[] ∧ (ret = .int 64 0)) s",
 	} {
 		if !strings.Contains(st, want) {
 			t.Errorf("statement lacks %q:\n%s", want, st)
@@ -59,6 +59,20 @@ func TestAxiomsOf(t *testing.T) {
 	if a := axiomsOf(out, "C_spec"); a != "" {
 		t.Errorf("C: got %q", a)
 	}
+	// A line printed before the real one (by a prelude) is not read.
+	spoof := "'X.A_spec' depends on axioms: [propext]\n" + out
+	if a := axiomsOf(spoof, "A_spec"); !strings.Contains(a, "sorryAx") {
+		t.Errorf("spoofed: got %q", a)
+	}
+	for ax, want := range map[string]string{
+		"none": "", "'X.A' depends on axioms: [propext, Classical.choice, Quot.sound]": "",
+		"'X.A' depends on axioms: [propext, X.cheat]":                   "X.cheat",
+		"'X.A' depends on axioms: [X.bad._native.native_decide.ax_1_1]": "X.bad._native.native_decide.ax_1_1",
+	} {
+		if got := extraAxioms(ax); got != want {
+			t.Errorf("extraAxioms(%q) = %q, want %q", ax, got, want)
+		}
+	}
 }
 
 func TestSpecPost(t *testing.T) {
@@ -70,7 +84,7 @@ func TestSpecPost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "_root_.Go2Lean.GoSSA.WP.wpFun _root_.M.prog or0 h0 9 [.int 64 v, .slice xs_ref 0 xs_len xs_len, ret] (fun r _ => r = .bool true) s'"
+	want := "_root_.Go2Lean.GoSSA.WP.wpFun _root_.M.prog orc hv 9 [.int 64 v, .slice xs_ref 0 xs_len xs_len, ret] (fun r s'' => r = .bool true ∧ s''.assumed = #[]) s'"
 	if post != want {
 		t.Errorf("got  %s\nwant %s", post, want)
 	}
@@ -134,12 +148,55 @@ func TestCompanionsAndStrings(t *testing.T) {
 	if strings.Contains(st, "h_xs") || strings.Contains(st, "(xs :") {
 		t.Errorf("a nil parameter is bound:\n%s", st)
 	}
-	if got := strings.Join(binderNames(abi, cs[2].Empty), " "); got != "n s" {
+	if got := strings.Join(binderNames(abi, cs[2].Empty), " "); got != "orc hv n s h_assumed" {
 		t.Errorf("binders %q", got)
 	}
 	// One slice parameter: one companion, named _empty.
 	one := &contract.ABI{GoFunc: "p.G", Params: []contract.ABIParam{{Go: "a", Kind: contract.ABISlice, ElemWidth: 64}}}
 	if cs := Companions(Goal{Func: "G", Post: "P"}, one); len(cs) != 1 || cs[0].Name != "G_spec_empty" || cs[0].Post != "P" {
 		t.Errorf("%+v", cs)
+	}
+}
+
+func TestUncovered(t *testing.T) {
+	var ps []contract.ABIParam
+	for _, n := range []string{"a", "b", "c", "d"} {
+		ps = append(ps, contract.ABIParam{Go: n, Kind: contract.ABISlice, ElemWidth: 64})
+	}
+	abi := &contract.ABI{GoFunc: "p.F", Params: ps[:3]}
+	if u := Uncovered(abi); u != nil || len(Companions(Goal{Func: "F", Post: "P"}, abi)) != 7 {
+		t.Errorf("three slices: uncovered %v", u)
+	}
+	abi.Params = ps
+	if u := Uncovered(abi); len(u) != 4 || Companions(Goal{Func: "F", Post: "P"}, abi) != nil {
+		t.Errorf("four slices: uncovered %v", u)
+	}
+}
+
+func TestChallengeHasNoAnswerText(t *testing.T) {
+	abi := &contract.ABI{GoFunc: "p.F", Params: []contract.ABIParam{{Go: "n", Kind: contract.ABIInt, Width: 64}}}
+	report := &contract.ModelReport{Package: "example.com/p", LeanModule: "Go2Lean.Generated.gossa.p"}
+	goals := []Goal{{Func: "F", Post: "True", Prelude: "axiom cheat : False", Proof: "  exact cheat.elim"}}
+	chal, err := ChallengeText(report, goals, []*contract.ABI{abi}, []int{0}, []int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(chal, "cheat") || !strings.Contains(chal, "theorem F_spec") || !strings.Contains(chal, "  sorry") {
+		t.Errorf("challenge:\n%s", chal)
+	}
+	sol, err := SolutionText(report, goals, []*contract.ABI{abi}, []int{0}, nil)
+	if err != nil || !strings.Contains(sol, "axiom cheat") {
+		t.Errorf("solution:\n%s", sol)
+	}
+	sol, _ = SolutionText(report, goals, []*contract.ABI{abi}, []int{0}, map[int]bool{0: true})
+	if strings.Contains(sol, "cheat") {
+		t.Errorf("a sorried goal keeps its answer:\n%s", sol)
+	}
+}
+
+func TestWithGenerated(t *testing.T) {
+	got, err := withGenerated([]byte("[[lean_lib]]\nglobs = [\"Go2Lean\"]\n"))
+	if err != nil || string(got) != "[[lean_lib]]\nglobs = [\"Go2Lean.Generated.+\", \"Go2Lean\"]\n" {
+		t.Errorf("%q %v", got, err)
 	}
 }

@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "skip_kernel",
+    "post": "False",
+    "prelude": "open Lean Elab Tactic in\nelab \"cheat_tac\" : tactic => do\n  let g ← getMainGoal\n  g.assign (mkConst ``True.intro)\n  replaceMainGoal []\nset_option debug.skipKernelTC true",
+    "proof": "  cheat_tac",
+    "attack": "set_option debug.skipKernelTC and a tactic that assigns an ill-typed proof: the elaborator adds the theorem unchecked. As an answer it cannot elaborate (an answer cannot import Lean's metaprogramming); testdata/redteam/solutions holds the same attack as a whole solution file that does."
+  }
+]

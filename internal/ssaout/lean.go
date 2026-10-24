@@ -3,6 +3,7 @@
 package ssaout
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -271,7 +272,8 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 	if err := os.MkdirAll(filepath.Dir(leanFile), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(leanFile, []byte(Print(p, module)), 0o644); err != nil {
+	text := Print(p, module)
+	if err := os.WriteFile(leanFile, []byte(text), 0o644); err != nil {
 		return nil, err
 	}
 	if err := WriteRegistry(leanDir); err != nil {
@@ -283,6 +285,7 @@ func Emit(p *ir.Prog, leanDir string, ws contract.Workspace, modulePath string) 
 		Frontend:   p.Frontend,
 		LeanModule: module,
 		LeanFile:   rel,
+		LeanSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(text))),
 		Havoc:      p.Havoc,
 		Dependency: p.Dependency,
 	}

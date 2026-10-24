@@ -1,0 +1,16 @@
+# Semantic mutants of the proved functions (scripts/mutants.sh): package,
+# function, the text replaced in the package's source, its replacement.
+# Each mutant must fail the Go property test of its package and leave at
+# least one goal of its function unproved with the saved proofs.
+proofs|Max2|return b|return a
+proofs|Max3|return Max2(Max2(a, b), c)|return Max2(a, b)
+invariants|CountPositive|n++|n += 2
+invariants|IndexOf|return i|return i + 1
+invariants|AllNonNeg|x < 0|x < -1
+invariants|Fill|xs[i] = v|xs[i] = v + 1
+loops|Clamp|return lo|return lo - 1
+loops|ClampAll|xs[i] = Clamp(xs[i], lo, hi)|xs[i] = Clamp(xs[i], lo, hi) + 1
+loops|HasDuplicate|j := i + 1|j := i
+loops|BubbleSort|a[j] > a[j+1]|a[j] < a[j+1]
+strloops|FirstByte|return int(s[0])|return int(s[0]) + 256
+strloops|CountByte|n++|n += 2

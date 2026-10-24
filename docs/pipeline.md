@@ -45,7 +45,11 @@ under-approximation such as a dropped store to a global). When it passes on
 a `no_panic` property of a function of integer and bool parameters, a Lean
 theorem over every input is generated and checked, and the result becomes
 `proved`, with the trust base `kernel` or `compiler` read from
-`#print axioms` (design doc §5.3). A third property shape,
+`#print axioms` (design doc §5.3). For a loop-free function (integers,
+bools, strings and integer slices), `no_panic` or a spec is stated as the
+function's contract for every input and every value the model does not
+know, proved by `wp_auto`, and recorded `proved` only when Lean's
+comparator accepts it, with a certificate ([trust](trust.md)). A third property shape,
 `go2lean:sequence`, states what must hold over a sequence of calls (an
 invariant after every event, a condition at the end of the stream) and is
 checked by bounded model checking over short sequences (design doc §5.2). A spec whose verdict

@@ -48,6 +48,27 @@ const keepCores = 4
 // search links against. The most recently used keepCores are kept.
 func CoreDir(root string) (string, error) {
 	src := LeanDir(root)
+	files, err := CoreFiles(root)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	for _, f := range files {
+		b, err := os.ReadFile(filepath.Join(src, f))
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", f, len(b))
+		h.Write(b)
+	}
+	return coreSnapshot(src, files, h.Sum(nil))
+}
+
+// CoreFiles are the core library's files in the checkout (relative to
+// LeanDir): its sources, lakefile, toolchain and manifest, without the
+// generated models, the search engines' sources or the hand proofs.
+func CoreFiles(root string) ([]string, error) {
+	src := LeanDir(root)
 	var files []string
 	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -67,18 +88,13 @@ func CoreDir(root string) (string, error) {
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	sort.Strings(files)
-	h := sha256.New()
-	for _, f := range files {
-		b, err := os.ReadFile(filepath.Join(src, f))
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(h, "%s\x00%d\x00", f, len(b))
-		h.Write(b)
-	}
+	return files, nil
+}
+
+func coreSnapshot(src string, files []string, sum []byte) (string, error) {
 	base := os.Getenv("GO2LEAN_CACHE")
 	if base == "" {
 		c, err := os.UserCacheDir()
@@ -87,7 +103,7 @@ func CoreDir(root string) (string, error) {
 		}
 		base = filepath.Join(c, "go2lean")
 	}
-	dir := filepath.Join(base, "core-"+hex.EncodeToString(h.Sum(nil))[:16])
+	dir := filepath.Join(base, "core-"+hex.EncodeToString(sum)[:16])
 	if _, err := os.Stat(filepath.Join(dir, ".complete")); err != nil {
 		tmp := fmt.Sprintf("%s.tmp-%d", dir, os.Getpid())
 		os.RemoveAll(tmp)

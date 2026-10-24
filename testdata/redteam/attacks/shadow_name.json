@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "shadow_name",
+    "post": "False",
+    "prelude": "abbrev False := True",
+    "proof": "  apply wpFun_of_wpPt prog_f0\n  wp_auto prog_f0 [f0]",
+    "attack": "A namespace-local False that is True: the postcondition, read inside the namespace the answer writes in, names it instead of Lean's False."
+  }
+]

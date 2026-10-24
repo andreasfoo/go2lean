@@ -1,0 +1,6 @@
+{
+  "attack": "A whole solution file that imports Lean and adds an unchecked theorem of False to the environment (addDecl with the kernel skipped), then proves the goal from it.",
+  "imports": "import Lean",
+  "prelude": "open Lean Elab Command in\nrun_cmd liftCoreM do\n  let decl := Declaration.thmDecl { name := `cheatThm, levelParams := [], type := mkConst ``False, value := mkConst ``True.intro }\n  withOptions (fun o => debug.skipKernelTC.set o true) (addDecl decl)\n",
+  "proof": "  exact cheatThm.elim"
+}

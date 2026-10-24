@@ -33,6 +33,8 @@ func cmdProve(args []string) error {
 	rounds := fs.Int("rounds", 6, "agent attempts per goal, Lean's errors fed back after each")
 	leanTools := fs.Bool("lean-tools", true, "give the claude-code agent Lean tools (lean-lsp-mcp, when on PATH) to check its answers itself")
 	thinking := fs.Bool("thinking", true, "let the agent think at length (adaptive thinking; --effort high for claude-code)")
+	judgeAll := fs.Bool("judge-all", false, "judge every goal, also those Lean's check in the workspace rejected (the verdict is the judge's alone; for testing the judge)")
+	paranoid := fs.Bool("paranoid", true, "the judge also replays proofs in the external checkers bundled with Lean (lean4lean, nanoda, ...), not only Lean's kernel")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
 		return fmt.Errorf("prove: exactly one package expected")
@@ -141,7 +143,7 @@ func cmdProve(args []string) error {
 	fmt.Printf("theorems: %s\n", file.Rel)
 	var rs []prover.GoalResult
 	if *llmSpec == "" {
-		if rs, _, err = prover.CheckGoals(leanDir, file, goals, *budget); err != nil {
+		if rs, _, err = prover.CheckGoals(leanDir, report.LeanModule, file, goals, *budget); err != nil {
 			return err
 		}
 	} else {
@@ -161,6 +163,10 @@ func cmdProve(args []string) error {
 				if err := os.MkdirAll(filepath.Join(w.Root, "agent"), 0o755); err != nil {
 					return err
 				}
+				// The tools get a copy of the project with the model built.
+				if err := prover.BuildTrusted(leanDir, report.LeanModule); err != nil {
+					return err
+				}
 				if llm, err = agent.WithLeanTools(llm, bin, leanDir, filepath.Join(w.Root, "agent", "lean-mcp.json")); err != nil {
 					return err
 				}
@@ -172,6 +178,39 @@ func cmdProve(args []string) error {
 		if err != nil {
 			return err
 		}
+	}
+	// The verdict: Lean's check above ran on the agent's text in the
+	// workspace; the judge holds each theorem it accepted to go2lean's
+	// statement in a project of its own (prover.Judge).
+	var cands []int
+	for i, r := range rs {
+		if (r.Proved || *judgeAll) && !strings.HasPrefix(goals[i].Proof, "  sorry") {
+			cands = append(cands, i)
+		}
+	}
+	judgeDir := filepath.Join(w.Root, "judge", fmt.Sprintf("%s-%d", contract.PackageKey(report.Package), time.Now().UnixNano()))
+	certs, err := prover.Judge(prover.JudgeInput{Root: env.Root, WSLean: leanDir, Dir: judgeDir, Report: report,
+		Goals: goals, ABIs: abis, Fids: fids, Candidates: cands, Budget: *budget, Paranoid: *paranoid, Log: os.Stdout})
+	if err != nil {
+		return err
+	}
+	for _, i := range cands {
+		switch {
+		case certs[i] != nil:
+			rs[i].Proved, rs[i].Error, rs[i].Certificate = true, "", certs[i]
+		case rs[i].Proved:
+			rs[i].Proved = false
+			rs[i].Error = "the judge rejected it (Lean accepted it in the workspace): see " + filepath.Join(judgeDir, "judge.log")
+		default:
+			rs[i].Error += " (the judge rejected it too)"
+		}
+	}
+	if len(cands) > 0 {
+		b, _ := json.MarshalIndent(rs, "", "  ")
+		if err := os.WriteFile(filepath.Join(judgeDir, "results.json"), append(b, '\n'), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("judge: %s (results.json: the certificates)\n", judgeDir)
 	}
 	if *outFile != "" {
 		// Only proved goals keep their proof text: an open one is written
@@ -202,7 +241,7 @@ func cmdProve(args []string) error {
 	failed := 0
 	for i, r := range rs {
 		if r.Proved {
-			fmt.Printf("  proved   %s (%s), kernel only\n", r.Func, r.Theorem)
+			fmt.Printf("  proved   %s (%s), kernel only, judged\n", r.Func, r.Theorem)
 		} else {
 			failed++
 			why := r.Error

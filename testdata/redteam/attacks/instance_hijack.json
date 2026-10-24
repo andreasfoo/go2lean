@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "instance_hijack",
+    "post": "∃ m, ret = .int 64 m ∧ m.slt a ∧ m.slt b",
+    "prelude": "instance (priority := high) cheatCoe : CoeSort Bool Prop := ⟨fun _ => True⟩\ninstance (priority := high) cheatCoe' : Coe Bool Prop := ⟨fun _ => True⟩",
+    "proof": "  apply wpFun_of_wpPt prog_f0\n  wp_auto prog_f0 [f0]",
+    "attack": "A higher-priority Bool-to-Prop coercion that makes every Bool true, so a false comparison in the postcondition reads as True."
+  }
+]
