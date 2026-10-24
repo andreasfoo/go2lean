@@ -94,7 +94,12 @@ translation sound).
    induction on fuel (`lean/Go2Lean/Proof/WP.lean`), with the existing
    `simp` lemmas and `grind`/`omega` for the conditions. `vcgen` would pay
    off only with a structured form of the program (the frontend could emit
-   one: Go source is structured).
+   one: Go source is structured). The same route carried the sort: nested
+   loops (the inner one by induction on its fuel inside the outer loop's
+   step), writes to the slice (`heapStore_arr`), and a spec of sortedness
+   and `List.Perm` (each swap is `List.set_set_perm`), about 250 lines of
+   which the block walking is mechanical and the list reasoning is three
+   small lemmas.
 3. **The existing prover** (`no_panic` by `simp` and `bv_decide`): move the
    closing step to `grind` where it applies, keeping `bv_decide` for
    bit-level goals; a `grind` proof needs only the kernel.
