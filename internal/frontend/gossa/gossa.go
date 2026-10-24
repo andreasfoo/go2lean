@@ -1292,7 +1292,7 @@ func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
 			}
 		}
 		for g, v := range full {
-			if !bad[g] && elems[g] == nil && len(v.(ir.ArrVal).Elems) <= 4096 {
+			if !bad[g] && elems[g] == nil && len(v.(ir.ArrVal).Elems) <= 4096 && !hasStr(v) {
 				s.tables[g] = v
 			}
 		}
@@ -1315,7 +1315,7 @@ func (s *progState) arrayTable(g *ssa.Global) (ir.Val, bool) {
 			okAll := true
 			for i, c := range es {
 				v, err := constVal(c)
-				if err != nil || i < 0 || i >= arr.Len() {
+				if _, str := v.(ir.StrConst); err != nil || str || i < 0 || i >= arr.Len() {
 					okAll = false
 					break
 				}
@@ -2662,6 +2662,12 @@ func (t *fnState) sliceOf(x ssa.Value, elems []ir.Val) error {
 	if !ok {
 		return fmt.Errorf("slice of unsupported type %s", x.Type())
 	}
+	for _, e := range elems {
+		if _, str := e.(ir.StrConst); !str && hasStr(e) {
+			// Struct or array elements holding strings: not built here.
+			return t.havoc(x, "load of a slice of "+elem.String()+" holding strings", "unmodeled-load", "")
+		}
+	}
 	n := t.fresh()
 	t.emit(ir.Instr{Dst: n, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: strconv.Itoa(len(elems))}}})
 	s := t.def(x)
@@ -2675,10 +2681,32 @@ func (t *fnState) sliceOf(x ssa.Value, elems []ir.Val) error {
 		p := t.fresh()
 		t.emit(ir.Instr{Dst: p, Op: ir.Simple("indexAddr"), Args: []ir.Var{s, k}})
 		c := t.fresh()
-		t.emit(ir.Instr{Dst: c, Op: ir.Const{V: e}})
+		if sv, ok := e.(ir.StrConst); ok {
+			// A string literal is an allocating instruction (as in val).
+			if !slices.Contains(t.out.StrConsts, string(sv.Bytes)) {
+				t.out.StrConsts = append(t.out.StrConsts, string(sv.Bytes))
+			}
+			t.emit(ir.Instr{Dst: c, Op: sv})
+		} else {
+			t.emit(ir.Instr{Dst: c, Op: ir.Const{V: e}})
+		}
 		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{p, c}})
 	}
 	return nil
+}
+
+// hasStr says whether v holds a string literal: a string is a heap object
+// in the model, so such a value is not a constant.
+func hasStr(v ir.Val) bool {
+	switch v := v.(type) {
+	case ir.StrConst:
+		return true
+	case ir.ArrVal:
+		return slices.ContainsFunc(v.Elems, hasStr)
+	case ir.StructVal:
+		return slices.ContainsFunc(v.Fields, hasStr)
+	}
+	return false
 }
 
 func (t *fnState) unop(x *ssa.UnOp) error {

@@ -115,7 +115,8 @@ and records real-world case studies. CI pins expected regression outcomes;
 these checks are evidence, not a general correctness guarantee.
 
 [Validation and regression cases](docs/validation.md) ·
-[semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md)
+[semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md) ·
+[concurrency evaluation](docs/eval/conc.md)
 
 ## Documentation
 

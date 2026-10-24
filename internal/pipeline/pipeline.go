@@ -315,6 +315,7 @@ func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io
 		return nil, err
 	}
 	var results []*Result
+	var failed []string
 	for _, report := range reports {
 		if report.Dependency {
 			// Modelled for its callers (-deps); not a target of the run.
@@ -333,11 +334,15 @@ func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io
 		res, err := runReport(w, env, report, opts, out)
 		if err != nil {
 			// One package's trouble (a Lean build failure, a harness that does
-			// not compile) must not end a sweep.
+			// not compile) must not end a sweep, but the sweep reports it.
 			fmt.Fprintf(out, "  error: %v\n", err)
+			failed = append(failed, report.Package)
 			continue
 		}
 		results = append(results, res)
+	}
+	if len(failed) > 0 {
+		return results, fmt.Errorf("%d of %d packages failed: %s", len(failed), len(failed)+len(results), strings.Join(failed, ", "))
 	}
 	return results, nil
 }

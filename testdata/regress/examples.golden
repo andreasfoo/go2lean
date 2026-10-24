@@ -119,6 +119,7 @@ exhausted initvars_pair_nopanic
 exhausted initvars_range_contains_newrange_nopanic
 confirmed initvars_slot_nopanic
 proved initvars_sub_nopanic
+exhausted initvars_unit_nopanic
 exhausted inputs_count_nopanic
 exhausted mut=1/6 inputs_count_speccountbounded
 confirmed inputs_label_nopanic

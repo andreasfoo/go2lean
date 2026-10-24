@@ -131,3 +131,15 @@ func band(b byte) int {
 // BandWidth returns the width of b's band. It never panics: the bands
 // cover every byte, so band never returns -1.
 func BandWidth(b byte) int { return widths[band(b)] }
+
+// units is a table of strings: in the model a string is a heap object, so
+// the table is not a constant value.
+var units = []string{"B", "KB", "MB"}
+
+// Unit names the unit of 1024^i, "" past the last one. It never panics.
+func Unit(i int) string {
+	if i < 0 || i >= len(units) {
+		return ""
+	}
+	return units[i]
+}
