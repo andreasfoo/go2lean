@@ -686,16 +686,24 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 				domain += fmt.Sprintf("; runs took %d under-approximations (see assumptions)", len(res.Assumptions))
 			}
 			pr := &contract.ProofResult{Property: prop.ID, Status: status, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain, Assumptions: res.Assumptions}
-			// Specs are not attempted yet: composing target and spec makes the
-			// generic case split blow up (minutes, then no proof).
-			// The prover runs the sequential interpreter: not for a function
-			// that synchronises (its schedules were enumerated instead).
-			if opts.Prove && status == contract.ProofExhausted && prop.Kind == contract.KindNoPanic && res.Schedules == 0 && prover.Eligible(abi) {
-				// A certificate for the sample; try one for every input.
-				p, why := prove(leanDir, report, prop, abi, fid, sid, opts)
+			// A certificate for the sample; try one for every input. The
+			// prover runs the sequential interpreter: not for a function that
+			// synchronises (its schedules were enumerated instead). First the
+			// bounded theorem by case split (integer and bool no_panic), then
+			// the weakest precondition (Go2Lean.Proof.WP: specs and integer
+			// slices too, any fuel, kernel only) for loop-free functions.
+			if opts.Prove && status == contract.ProofExhausted && res.Schedules == 0 {
+				var why string
+				var p *contract.ProofResult
+				if prop.Kind == contract.KindNoPanic && prover.Eligible(abi) {
+					p, why = prove(leanDir, report, prop, abi, fid, sid, opts)
+				}
+				if p == nil && wpEligible(report, prop, abi, fid, sid) {
+					p, why = proveWP(leanDir, report, prop, abi, fid, sid, opts)
+				}
 				if p != nil {
 					pr = p
-				} else {
+				} else if why != "" {
 					summary = append(summary, "prover: not proved ("+why+")")
 				}
 			}
@@ -811,6 +819,61 @@ func prove(leanDir string, report *contract.ModelReport, prop *contract.Property
 	return &contract.ProofResult{Property: prop.ID, Status: contract.ProofProved, Tactic: "simp, split, bv_decide",
 		Domain:   fmt.Sprintf("every input (all %d parameters over their full width); runs within fuel %d, no havoc read, no assumption taken", len(abi.Params), prover.Fuel),
 		LeanFile: filepath.Join("lean", rel), TimeMs: r.Time.Milliseconds(), Trust: r.Trust}, ""
+}
+
+// wpEligible says whether proveWP applies: a no_panic or spec property of a
+// function whose parameters a statement covers, which reads no havoc value,
+// and which, with its spec, has no loop and makes no call (wp_auto walks
+// loop-free code; a loop needs an invariant, a call a contract).
+func wpEligible(report *contract.ModelReport, prop *contract.Property, abi *contract.ABI, fid, sid int) bool {
+	if prop.Kind != contract.KindNoPanic && prop.Kind != contract.KindPostcondition || len(abi.Havoc) > 0 {
+		return false
+	}
+	if prop.Kind == contract.KindPostcondition && sid < 0 {
+		return false
+	}
+	for _, f := range report.Funcs {
+		if (f.ID == fid || f.ID == sid) && (len(f.LoopHeaders) > 0 || len(f.Calls) > 0 || len(f.XCalls) > 0) {
+			return false
+		}
+	}
+	_, err := prover.Statement(abi, fid, "t", "True")
+	return err == nil
+}
+
+// proveWP states the property as the function's contract (no panic, or the
+// spec returns true) and proves it with wp_auto: for every input and every
+// run that ends, checked by the kernel alone.
+func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Property, abi *contract.ABI,
+	fid, sid int, opts SearchOptions) (*contract.ProofResult, string) {
+	g := prover.Goal{Func: abi.GoFunc, Name: "holds", Post: "True"}
+	if prop.Kind == contract.KindPostcondition {
+		post, err := prover.SpecPost(abi, report.LeanModule, sid)
+		if err != nil {
+			return nil, err.Error()
+		}
+		g.Post, g.Spec, g.SpecFid = post, prop.Spec.GoFunc, sid
+	}
+	rel := filepath.Join("Proofs", "WP_"+prop.ID+".lean")
+	f, err := prover.FunctionalFileAt(leanDir, rel, report, []prover.Goal{g}, []*contract.ABI{abi}, []int{fid})
+	if err != nil {
+		return nil, err.Error()
+	}
+	budget := time.Duration(opts.ProveSeconds) * time.Second
+	if budget <= 0 {
+		budget = 120 * time.Second
+	}
+	start := time.Now()
+	rs, _, err := prover.CheckGoals(leanDir, f, []prover.Goal{g}, budget)
+	if err != nil {
+		return nil, err.Error()
+	}
+	if !rs[0].Proved {
+		return nil, rs[0].Error
+	}
+	return &contract.ProofResult{Property: prop.ID, Status: contract.ProofProved, Tactic: "wp_auto",
+		Domain:   fmt.Sprintf("every input (all %d parameters, slices of any length); every run that ends (partial correctness)", len(abi.Params)),
+		LeanFile: filepath.Join("lean", rel), TimeMs: time.Since(start).Milliseconds(), Trust: prover.TrustKernel}, ""
 }
 
 // stuckNote names the most frequent site at which the model got stuck.

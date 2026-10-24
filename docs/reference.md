@@ -85,7 +85,7 @@ Completion is counted in items; ✅ done, 🚧 in progress, ⬜ not started.
 - ✅ Differential tests of the JSON, regexp, UTF-16 and number models against Go
 - ✅ Proof prototype: a postcondition proved for all 64-bit inputs by hand (`lean/Proofs`)
 - ✅ Real-world run: tingly-box, 82 bugs found and confirmed ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box))
-- ✅ Proofs over all inputs in the pipeline for `no_panic` on integer and bool functions, each with its trust base (7 of 13 eligible on the examples, all kernel-checked)
+- ✅ Proofs over all inputs in the pipeline for `no_panic` on integer and bool functions, each with its trust base (7 of 13 eligible on the examples, all kernel-checked), and, through the weakest precondition, for specs and integer slices of loop-free functions (4 more on the examples)
 - ✅ Sequence specs (`go2lean:sequence`): properties of a sequence of calls, bounded model checking over short sequences
 - ✅ Spec mutation check: each spec that held is run against mutants of the code under test; a spec no mutant fails is flagged as checking nothing
 - ✅ Specs as Go fuzz targets (`go2lean fuzz`, and in `agent`): the same properties searched by `go test -fuzz` on the real code

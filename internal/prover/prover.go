@@ -210,10 +210,10 @@ func buildLemmas(leanDir string) error {
 	var err error
 	// From leanDir, not with -d: elan picks the toolchain from the
 	// lean-toolchain file of the current directory (CI has no default).
-	cmd := exec.Command("lake", "build", "Go2Lean.Proof.Simp")
+	cmd := exec.Command("lake", "build", "Go2Lean.Proof.Simp", "Go2Lean.Proof.Tactic")
 	cmd.Dir = leanDir
 	if out, e := cmd.CombinedOutput(); e != nil {
-		err = fmt.Errorf("lake build Go2Lean.Proof.Simp: %s", firstError(string(out)))
+		err = fmt.Errorf("lake build Go2Lean.Proof.Simp Go2Lean.Proof.Tactic: %s", firstError(string(out)))
 	}
 	lemmasErr[leanDir] = err
 	return err

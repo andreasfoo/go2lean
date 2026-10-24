@@ -501,11 +501,17 @@ concurrency (one goroutine, `sync` ignored); docs/limitations.md §7.
    packages 7 of the 13 eligible properties that held are proved, all with
    trust `kernel`, in 15–25 s each (`checked.Double`, `checked.Half`,
    `divzero.Ratio` including `MinInt / -1`, `oob.Clamp`, ...); the other 6
-   allocate, dispatch through an interface or call another package. Not
-   attempted yet: postconditions (target and spec composed: the generic
-   split takes minutes and fails; the hand-written
-   `lean/Proofs/OobClampIdentity.lean` shows targeted case splits work),
-   functions with slices, strings or pointers, and the LLVM line.
+   allocate, dispatch through an interface or call another package. Since
+   2026-10-24 a second route follows when this one does not apply or
+   fails: the function's contract in `Go2Lean.Proof.WP` (no panic, or the
+   spec returns true), walked by `wp_auto`, for a loop-free function that
+   makes no call, reads no havoc and takes integers, bools or integer
+   slices; it covers every run that ends (partial correctness, any fuel)
+   and needs only the kernel. It proves spec properties, which the case
+   split could not (`oob.Clamp`'s `SpecClamp` and `SpecClampIdentity`,
+   `loops.Clamp`), and `globals.DefaultGen`'s `no_panic`. Not attempted:
+   functions with loops (an invariant: `go2lean prove -llm`) or calls (a
+   contract), strings and pointers, and the LLVM line.
 4. **`bv_decide`** is the last step of rung 3; on its own it is not used.
 5. **SMT export** (Z3/cvc5) when complete bug-finding on loops is needed:
    external, asynchronous, better `mul`/`div` heuristics; no Lean certificate,
