@@ -747,3 +747,54 @@ func (p *Prog) FuncID(name string) int {
 	}
 	return -1
 }
+
+// Succs are the blocks a terminator may continue in.
+func (t *Term) Succs() []int {
+	switch t.Kind {
+	case TermJump:
+		return []int{t.B}
+	case TermBr:
+		return []int{t.T, t.F}
+	case TermCall, TermXCall, TermCallV:
+		if t.Fallback > 0 {
+			return []int{t.Next, t.Fallback}
+		}
+		return []int{t.Next}
+	case TermSpawn, TermSync:
+		return []int{t.Next}
+	}
+	return nil
+}
+
+// LoopHeaders are the blocks a back edge enters (in a depth-first walk
+// from the entry): one per loop of the source, in block order.
+func (f *Func) LoopHeaders() []int {
+	state := make([]int8, len(f.Blocks)) // 0 unseen, 1 on the path, 2 done
+	heads := map[int]bool{}
+	var walk func(int)
+	walk = func(b int) {
+		state[b] = 1
+		for _, s := range f.Blocks[b].Term.Succs() {
+			if s < 0 || s >= len(f.Blocks) {
+				continue
+			}
+			switch state[s] {
+			case 0:
+				walk(s)
+			case 1:
+				heads[s] = true
+			}
+		}
+		state[b] = 2
+	}
+	if f.Entry >= 0 && f.Entry < len(f.Blocks) {
+		walk(f.Entry)
+	}
+	var out []int
+	for b := range f.Blocks {
+		if heads[b] {
+			out = append(out, b)
+		}
+	}
+	return out
+}

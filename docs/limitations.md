@@ -52,9 +52,11 @@ the callee's contract (`wpFun`: `Max3` calls `Max2` twice and is proved
 from `Max2`'s theorem, not by unfolding it). The block walking is
 tactics (`Go2Lean.Proof.Tactic`): `wp_auto` proves a loop-free function
 with no hand-written step (`Max2`, and `Max3` given `Max2`'s contract),
-and `wp_step` takes one block inside a loop proof. Still missing: the
-pipeline writing the theorems, loop invariants (the agent's part), and
-termination (the theorems are about runs that end).
+and `wp_step` takes one block inside a loop proof. `go2lean prove`
+states the theorem from a postcondition (integer, bool and integer-slice
+parameters) and proves loop-free functions with no proof text. Still
+missing: loop invariants (the agent's part, #22), postconditions taken
+from Go specs, and termination (the theorems are about runs that end).
 
 ## 2. Under-approximations are not tracked mechanically
 
