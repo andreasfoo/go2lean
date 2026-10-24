@@ -2,8 +2,8 @@
 # Check the functional proofs of lean/Proofs/Functional.lean against a freshly
 # generated model of examples/proofs: compile the package into a workspace,
 # then elaborate the proof file from it, prove examples/proofs/goals.json
-# with go2lean prove, and check the agent's proofs (examples/invariants and
-# examples/loops, proofs.json).
+# with go2lean prove, and check the agent's proofs (examples/invariants,
+# examples/loops and examples/strloops, proofs.json).
 # Fails on an error, a `sorry`, or a
 # proof that trusts more than the kernel (Lean.ofReduceBool).
 # usage: scripts/proofs.sh <workspace>
@@ -40,3 +40,8 @@ if ! "$WS/g2l" prove -workspace "$WS/prove-loops" -goals examples/loops/proofs.j
   tail -20 "$WS/prove-loops.log"; echo "proofs: examples/loops/proofs.json no longer proves"; exit 1
 fi
 grep '^  proved' "$WS/prove-loops.log"
+# String parameters, the empty string by the companions: examples/strloops.
+if ! "$WS/g2l" prove -workspace "$WS/prove-str" -goals examples/strloops/proofs.json ./examples/strloops > "$WS/prove-str.log" 2>&1; then
+  tail -20 "$WS/prove-str.log"; echo "proofs: examples/strloops/proofs.json no longer proves"; exit 1
+fi
+grep '^  proved' "$WS/prove-str.log"

@@ -854,8 +854,16 @@ func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Proper
 		}
 		g.Post, g.Spec, g.SpecFid = post, prop.Spec.GoFunc, sid
 	}
+	// With the companions: the same property for nil slices and empty
+	// strings, which the first theorem does not cover.
+	goals := append([]prover.Goal{g}, prover.Companions(g, abi)...)
+	var abis []*contract.ABI
+	var fids []int
+	for range goals {
+		abis, fids = append(abis, abi), append(fids, fid)
+	}
 	rel := filepath.Join("Proofs", "WP_"+prop.ID+".lean")
-	f, err := prover.FunctionalFileAt(leanDir, rel, report, []prover.Goal{g}, []*contract.ABI{abi}, []int{fid})
+	f, err := prover.FunctionalFileAt(leanDir, rel, report, goals, abis, fids)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -864,15 +872,17 @@ func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Proper
 		budget = 120 * time.Second
 	}
 	start := time.Now()
-	rs, _, err := prover.CheckGoals(leanDir, f, []prover.Goal{g}, budget)
+	rs, _, err := prover.CheckGoals(leanDir, f, goals, budget)
 	if err != nil {
 		return nil, err.Error()
 	}
-	if !rs[0].Proved {
-		return nil, rs[0].Error
+	for _, r := range rs {
+		if !r.Proved {
+			return nil, r.Theorem + ": " + r.Error
+		}
 	}
 	return &contract.ProofResult{Property: prop.ID, Status: contract.ProofProved, Tactic: "wp_auto",
-		Domain:   fmt.Sprintf("every input (all %d parameters, slices of any length); every run that ends (partial correctness)", len(abi.Params)),
+		Domain:   fmt.Sprintf("every input (all %d parameters; slices and strings of any length, nil and empty included, with capacity equal to length); every run that ends (partial correctness)", len(abi.Params)),
 		LeanFile: filepath.Join("lean", rel), TimeMs: time.Since(start).Milliseconds(), Trust: prover.TrustKernel}, ""
 }
 

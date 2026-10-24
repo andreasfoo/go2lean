@@ -100,6 +100,17 @@ earlier runs fed back over rounds (normal forms after `simp`, a missed
 block, a type mismatch) are now found and fixed by the agent in its own
 turns, in seconds each instead of a round of go2lean's.
 
+## Strings and empty inputs
+
+`examples/strloops` takes strings (`FirstByte`, and `CountByte`, a loop
+over the bytes). With the Lean tools both are proved by the first answer
+(25 and 27 tool turns: `FirstByte` has no loop, but its string indexing
+is past `wp_auto`). Every goal with a slice or string parameter now has a
+companion theorem for the nil slice or empty string, which `wp_auto`
+proves alone in every case here (the walk is concrete); two
+postconditions that speak of the slice's backing array say what holds
+for nil instead (`"empty_post": "True"`: no panic).
+
 ## Reading
 
 The invariants are what a person would write: `CountPositive`'s says the

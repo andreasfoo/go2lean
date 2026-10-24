@@ -98,7 +98,13 @@ which is then run in the model on the arguments and the result, so the
 theorem is about the same property the search checks
 (`examples/proofs/goals.json`, `examples/loops/goals.json`). Goals are
 proved in order, each with the earlier ones as contracts at its calls; a
-goal's `"name"` names its theorem. Loop-free functions are proved
+goal's `"name"` names its theorem. Parameters may be integers, bools,
+strings and slices of integers; a string or slice is quantified by its
+contents (a `List (BitVec w)` under the parameter's name, with `x_len`
+and `x_ref`), and go2lean adds a companion theorem per goal for the nil
+slice or empty string, with `"empty_post"` as its postcondition when the
+goal's speaks of what a nil slice lacks (its backing array). A parameter
+named `s`, `ret` or like a Lean keyword is `s_` in the postcondition. Loop-free functions are proved
 with no proof text; a function with loops needs an invariant per loop.
 With `-llm`, an agent writes them: it answers with invariants and a proof,
 Lean checks, and its errors go back for up to `-rounds` attempts
