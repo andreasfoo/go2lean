@@ -113,10 +113,26 @@ func cmdProve(args []string) error {
 		}
 		abis = append(abis, abi)
 		fids = append(fids, id)
-		if goals[i].Proof == "" && len(loops[g.Func]) > 0 {
+		if goals[i].Proof == "" && len(loops[g.Func]) > 0 && len(g.Empty) == 0 {
 			goals[i].Proof = prover.LoopProof(loops[g.Func])
 		}
 	}
+	// Each goal, then its companions: the same postcondition with its slice
+	// and string parameters nil or empty, which its theorem does not cover.
+	var allGoals []prover.Goal
+	var allABIs []*contract.ABI
+	var allFids []int
+	var given []bool
+	for i, g := range goals {
+		allGoals, allABIs, allFids, given = append(allGoals, g), append(allABIs, abis[i]), append(allFids, fids[i]), append(given, true)
+		for _, c := range prover.Companions(g, abis[i]) {
+			if names[prover.TheoremName(c)] {
+				continue
+			}
+			allGoals, allABIs, allFids, given = append(allGoals, c), append(allABIs, abis[i]), append(allFids, fids[i]), append(given, false)
+		}
+	}
+	goals, abis, fids = allGoals, allABIs, allFids
 	leanDir := repo.WorkspaceLeanDir(w.Root)
 	file, err := prover.FunctionalFile(leanDir, report, goals, abis, fids)
 	if err != nil {
@@ -160,15 +176,20 @@ func cmdProve(args []string) error {
 	if *outFile != "" {
 		// Only proved goals keep their proof text: an open one is written
 		// as given, so that the file states what is proved.
-		saved := make([]prover.Goal, len(goals))
+		// Companions are not saved: go2lean adds them on every run.
+		var saved []prover.Goal
 		for i, g := range goals {
-			saved[i] = g
+			if !given[i] {
+				continue
+			}
+			sg := g
 			if g.Spec != "" {
-				saved[i].Post = ""
+				sg.Post = ""
 			}
 			if !rs[i].Proved || strings.HasPrefix(g.Proof, "  sorry") {
-				saved[i].Prelude, saved[i].Proof = "", ""
+				sg.Prelude, sg.Proof = "", ""
 			}
+			saved = append(saved, sg)
 		}
 		b, err := json.MarshalIndent(saved, "", "  ")
 		if err != nil {

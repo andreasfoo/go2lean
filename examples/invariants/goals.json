@@ -2,5 +2,5 @@
   {"func": "CountPositive", "post": "∃ n, ret = .int 64 n ∧ 0 ≤ n.toInt ∧ n.toInt ≤ xs.length"},
   {"func": "IndexOf", "post": "∃ r, ret = .int 64 r ∧ (r.toInt = -1 ∨ ∃ (i : Nat) (h : i < xs.length), r.toInt = i ∧ xs[i] = x)"},
   {"func": "AllNonNeg", "post": "ret = .bool true → ∀ y ∈ xs, 0 ≤ y.toInt"},
-  {"func": "Fill", "post": "∃ ys : List (BitVec 64), s'.heap[xs_ref]? = some (.arr (ys.map (.int 64))) ∧ ys.length = xs.length ∧ ∀ y ∈ ys, y = v"}
+  {"func": "Fill", "post": "∃ ys : List (BitVec 64), s'.heap[xs_ref]? = some (.arr (ys.map (.int 64))) ∧ ys.length = xs.length ∧ ∀ y ∈ ys, y = v", "empty_post": "True"}
 ]

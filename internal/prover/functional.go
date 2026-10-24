@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +37,13 @@ type Goal struct {
 	// same property the search checks, with no translation by hand.
 	Spec    string `json:"spec,omitempty"`
 	SpecFid int    `json:"-"` // the spec's model id, set by the caller (SpecPost)
+	// Empty names the slice and string parameters the goal takes nil or
+	// empty (`.slice 0 0 0 0`, `.str 0 0 0`), which the theorem for a
+	// non-nil one does not cover: the companions go2lean adds (Companions).
+	Empty []string `json:"empty,omitempty"`
+	// EmptyPost is the companions' postcondition, when Post speaks of
+	// what a nil slice does not have (its backing array); default Post.
+	EmptyPost string `json:"empty_post,omitempty"`
 	// Prelude holds definitions and lemmas the proof uses (invariants),
 	// written before the theorem; Proof is its tactic block (default:
 	// wp_auto with the earlier goals' contracts).
@@ -55,23 +63,36 @@ type GoalResult struct {
 // hypotheses that tie a slice parameter to the heap, and the conclusion.
 // name is the theorem's name and fid the function's model id.
 func Statement(abi *contract.ABI, fid int, name, post string) (string, error) {
-	return statement(abi, fid, name, post, "prog")
+	return statement(abi, fid, name, post, "prog", nil)
 }
 
 // statement spells the program as prog: FunctionalFile names it in full,
 // so that nothing a prelude defines can stand in for the model.
-func statement(abi *contract.ABI, fid int, name, post, prog string) (string, error) {
+func statement(abi *contract.ABI, fid int, name, post, prog string, empty []string) (string, error) {
 	if abi.Method != "" || abi.Ctor != nil || abi.Variadic {
 		return "", fmt.Errorf("%s: methods, constructor-built receivers and variadic functions are not supported", abi.GoFunc)
 	}
 	if len(abi.Results) > 1 {
 		return "", fmt.Errorf("%s: more than one result is not supported", abi.GoFunc)
 	}
-	var binders, hyps, args []string
+	var binders, hyps, args, lets []string
 	for _, p := range abi.Params {
-		x := p.Go
-		if reserved[x] || x == "" || x == "_" {
-			return "", fmt.Errorf("%s: parameter name %q cannot be a Lean binder here", abi.GoFunc, x)
+		x := LeanName(p.Go)
+		if x == "" || x == "_" {
+			return "", fmt.Errorf("%s: parameter name %q cannot be a Lean binder here", abi.GoFunc, p.Go)
+		}
+		if slices.Contains(empty, p.Go) {
+			// Nil or empty: the canonical value, and its names bound for the
+			// postcondition.
+			w, ctor := p.ElemWidth, ".slice 0 0 0 0"
+			if p.Kind == contract.ABIString {
+				w, ctor = 8, ".str 0 0 0"
+			} else if p.Kind != contract.ABISlice {
+				return "", fmt.Errorf("%s: %s is not a slice or a string, it cannot be empty", abi.GoFunc, x)
+			}
+			args = append(args, ctor)
+			lets = append(lets, fmt.Sprintf("let %[1]s : List (BitVec %[2]d) := []; let %[1]s_len : BitVec 64 := 0; let %[1]s_ref : Nat := 0; ", x, w))
+			continue
 		}
 		switch {
 		case p.Kind == contract.ABIBool:
@@ -89,16 +110,65 @@ func statement(abi *contract.ABI, fid int, name, post, prog string) (string, err
 				fmt.Sprintf("(h_%[1]s_ref : %[1]s_ref ≠ 0)", x),
 				fmt.Sprintf("(h_%[1]s : s.heap[%[1]s_ref]? = some (.arr (%[1]s.map (.int %[2]d))))", x, p.ElemWidth))
 			args = append(args, fmt.Sprintf(".slice %[1]s_ref 0 %[1]s_len %[1]s_len", x))
+		case p.Kind == contract.ABIString:
+			// A string: its bytes in the heap object at x_ref, from offset 0.
+			// The empty string go2lean builds is `.str 0 0 0` (Empty).
+			binders = append(binders, fmt.Sprintf("(%[1]s : List (BitVec 8)) (%[1]s_len : BitVec 64) (%[1]s_ref : Nat)", x))
+			hyps = append(hyps,
+				fmt.Sprintf("(h_%[1]s_len : %[1]s_len.toInt = %[1]s.length)", x),
+				fmt.Sprintf("(h_%[1]s_ref : %[1]s_ref ≠ 0)", x),
+				fmt.Sprintf("(h_%[1]s : s.heap[%[1]s_ref]? = some (.arr (%[1]s.map (.int 8))))", x))
+			args = append(args, fmt.Sprintf(".str %[1]s_ref 0 %[1]s_len", x))
 		default:
-			return "", fmt.Errorf("%s: parameter %s (%s) is not supported (integers, bools and slices of integers are)", abi.GoFunc, x, p.GoType)
+			return "", fmt.Errorf("%s: parameter %s (%s) is not supported (integers, bools, strings and slices of integers are)", abi.GoFunc, x, p.GoType)
 		}
 	}
 	binders = append(binders, "(s : HState Val)")
 	if post == "" {
 		return "", fmt.Errorf("%s: no postcondition", abi.GoFunc)
 	}
-	return fmt.Sprintf("theorem %s %s\n    %s :\n    _root_.Go2Lean.GoSSA.WP.wpFun %s or0 h0 %d [%s]\n      (fun ret s' => %s) s",
-		name, strings.Join(binders, " "), strings.Join(hyps, " "), prog, fid, strings.Join(args, ", "), post), nil
+	return fmt.Sprintf("theorem %s %s\n    %s :\n    _root_.Go2Lean.GoSSA.WP.wpFun %s or0 h0 %d [%s]\n      (fun ret s' => %s%s) s",
+		name, strings.Join(binders, " "), strings.Join(hyps, " "), prog, fid, strings.Join(args, ", "), strings.Join(lets, ""), post), nil
+}
+
+// Companions are the goals that cover what goal g's theorem leaves out:
+// for each nonempty set of its slice and string parameters (at most two
+// such parameters: three would take seven), the same postcondition with
+// those taken nil or empty, named after g with _empty. A goal that is a
+// companion has none.
+func Companions(g Goal, abi *contract.ABI) []Goal {
+	if len(g.Empty) > 0 {
+		return nil
+	}
+	var opt []string
+	for _, p := range abi.Params {
+		if p.Kind == contract.ABISlice || p.Kind == contract.ABIString {
+			opt = append(opt, p.Go)
+		}
+	}
+	if len(opt) == 0 || len(opt) > 2 {
+		return nil
+	}
+	var out []Goal
+	for mask := 1; mask < 1<<len(opt); mask++ {
+		var empty []string
+		for k, x := range opt {
+			if mask&(1<<k) != 0 {
+				empty = append(empty, x)
+			}
+		}
+		c := g
+		c.Name = TheoremName(g) + "_empty"
+		if len(opt) > 1 {
+			c.Name += "_" + strings.Join(empty, "_")
+		}
+		c.Empty, c.Prelude, c.Proof = empty, "", ""
+		if g.EmptyPost != "" {
+			c.Post, c.Spec = g.EmptyPost, ""
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // SpecPost is the postcondition a Go spec gives (Goal.Spec): the spec's
@@ -106,7 +176,7 @@ func statement(abi *contract.ABI, fid int, name, post, prog string) (string, err
 // the state the function's run ended in, returns true if it ends. module
 // is the model's Lean module and sid the spec's model id.
 func SpecPost(abi *contract.ABI, module string, sid int) (string, error) {
-	st, err := statement(abi, 0, "_", "True", "prog")
+	st, err := statement(abi, 0, "_", "True", "prog", nil)
 	if err != nil {
 		return "", err
 	}
@@ -129,12 +199,25 @@ var reserved = map[string]bool{"s": true, "ret": true, "or0": true, "h0": true, 
 	"at": true, "by": true, "do": true, "end": true, "fun": true, "have": true, "in": true, "let": true,
 	"match": true, "show": true, "then": true, "with": true, "from": true, "where": true, "open": true}
 
+// LeanName is a Go parameter's name in a statement: itself, or with an
+// underscore after it when the statement binds the name itself (s, ret)
+// or it is a Lean keyword. A postcondition uses this name.
+func LeanName(goName string) string {
+	if reserved[goName] {
+		return goName + "_"
+	}
+	return goName
+}
+
 // binderNames are the statement's binders and hypotheses, in order.
-func binderNames(abi *contract.ABI) []string {
+func binderNames(abi *contract.ABI, empty []string) []string {
 	var names, hyps []string
 	for _, p := range abi.Params {
-		x := p.Go
-		if p.Kind == contract.ABISlice {
+		x := LeanName(p.Go)
+		if slices.Contains(empty, p.Go) {
+			continue
+		}
+		if p.Kind == contract.ABISlice || p.Kind == contract.ABIString {
 			names = append(names, x, x+"_len", x+"_ref")
 			hyps = append(hyps, "h_"+x+"_len", "h_"+x+"_ref", "h_"+x)
 		} else {
@@ -185,12 +268,17 @@ func FunctionalFileAt(leanDir, rel string, report *contract.ModelReport, goals [
 				proof += fmt.Sprintf("\n  all_goals (apply wpFun_of_wpPt prog_f%[1]d; wp_auto prog_f%[1]d [f%[1]d])", g.SpecFid)
 			}
 		}
-		st, err := statement(abis[i], fids[i], TheoremName(g), g.Post, "_root_."+report.LeanModule+".prog")
+		st, err := statement(abis[i], fids[i], TheoremName(g), g.Post, "_root_."+report.LeanModule+".prog", g.Empty)
 		if err != nil {
 			return nil, err
 		}
 		if g.Prelude != "" {
 			fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(g.Prelude))
+		}
+		if len(g.Empty) > 0 && g.Proof == "" {
+			// A companion's walk is concrete, but a loop over another
+			// parameter would not end: bound it.
+			b.WriteString("\nset_option maxHeartbeats 1000000 in")
 		}
 		fmt.Fprintf(&b, "\n%s := by\n%s\n", st, proof)
 		before = append(before, TheoremName(g))
@@ -202,13 +290,13 @@ func FunctionalFileAt(leanDir, rel string, report *contract.ModelReport, goals [
 	b.WriteString("\nsection Check\nopen Go2Lean.SSA Go2Lean.GoSSA\n")
 	f := &File{}
 	for i, g := range goals {
-		st, err := statement(abis[i], fids[i], "_", g.Post, report.LeanModule+".prog")
+		st, err := statement(abis[i], fids[i], "_", g.Post, report.LeanModule+".prog", g.Empty)
 		if err != nil {
 			return nil, err
 		}
 		st = strings.Replace(st, "theorem _ ", "example ", 1)
 		st = strings.ReplaceAll(st, " or0 h0 ", fmt.Sprintf(" %[1]s.or0 %[1]s.h0 ", ns))
-		ex := fmt.Sprintf("%s :=\n  @%s.%s %s\n", st, ns, TheoremName(g), strings.Join(binderNames(abis[i]), " "))
+		ex := fmt.Sprintf("%s :=\n  @%s.%s %s\n", st, ns, TheoremName(g), strings.Join(binderNames(abis[i], g.Empty), " "))
 		b.WriteString("\n")
 		start := strings.Count(b.String(), "\n") + 1
 		b.WriteString(ex)
@@ -274,7 +362,7 @@ func ScratchFile(report *contract.ModelReport, goals []Goal, abis []*contract.AB
 	var b strings.Builder
 	b.WriteString(fileHeader(report, goals, fids))
 	for j := 0; j <= i; j++ {
-		st, err := statement(abis[j], fids[j], TheoremName(goals[j]), goals[j].Post, "_root_."+report.LeanModule+".prog")
+		st, err := statement(abis[j], fids[j], TheoremName(goals[j]), goals[j].Post, "_root_."+report.LeanModule+".prog", goals[j].Empty)
 		if err != nil {
 			return "", err
 		}

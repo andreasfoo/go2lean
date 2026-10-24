@@ -231,12 +231,14 @@ none stream_converter_finish_nopanic
 none stream_converter_process_nopanic
 exhausted mut=4/14 stream_seqbounded_sequence
 confirmed stream_seqcomplete_sequence
+exhausted strloops_countbyte_nopanic
+exhausted strloops_firstbyte_nopanic
 exhausted strs_before_nopanic
 exhausted mut=1/1 strs_before_specbeforebytewise
 confirmed strs_hextag_nopanic
 exhausted strs_isadmin_nopanic
 exhausted strs_label_nopanic
-exhausted mut=1/1 strs_label_speclabelformat
+proved mut=1/1 strs_label_speclabelformat
 exhausted strs_parseport_nopanic
 confirmed strs_parseport_specparseportrange
 confirmed strs_scheme_nopanic

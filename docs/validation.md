@@ -12,7 +12,7 @@ the pipeline proves over all inputs `no_panic` of integer and bool
 functions and the specs of loop-free ones, and the postconditions `go2lean prove` is given: loop-free
 functions alone, loops with invariants an agent writes
 (`examples/invariants`, `examples/loops`: nested loops, bubble sort) or by hand (`lean/Proofs/Functional.lean`: up to
-insertion sort, sorted and a permutation, for every slice). 30 ground-truth packages run in CI (258 properties, each outcome
+insertion sort, sorted and a permutation, for every slice). 31 ground-truth packages run in CI (260 properties, each outcome
 pinned, including every spec's mutation score). The design is in
 [docs/design.md](../docs/design.md); the Go semantics modelled, and how
 faithfully, in [docs/semantics.md](../docs/semantics.md); what it does not

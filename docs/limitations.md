@@ -60,9 +60,14 @@ check: four single-loop functions, then nested loops, a call in a loop
 and bubble sort (sorted, and a permutation), each in two or three rounds,
 and in one with Lean tools for the agent (`docs/eval/proof-agent.md`). A Go spec can be the postcondition: it runs
 in the model on the arguments and the result, so the theorem is the
-property the search checks. Still missing: termination (the theorems are
-about runs that end, and a spec that does not end satisfies any), and
-parameters beyond integers, bools and integer slices.
+property the search checks. Inputs: integers, bools, strings and slices
+of integers, nil slices and the empty string by companion theorems;
+a non-nil slice is taken with capacity equal to its length, so a
+function whose behaviour depends on spare capacity (`append` into it) is
+not covered for such slices, which the search does generate. Still
+missing: termination (the theorems are about runs that end, and a spec
+that does not end satisfies any), spare capacity, and parameters of other
+kinds (structs, pointers, maps).
 
 ## 2. Under-approximations are not tracked mechanically
 

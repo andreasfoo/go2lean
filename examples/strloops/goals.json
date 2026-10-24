@@ -1,0 +1,4 @@
+[
+  {"func": "FirstByte", "post": "∃ r, ret = .int 64 r ∧ (s_ = [] → r.toInt = -1) ∧ (s_ ≠ [] → 0 ≤ r.toInt ∧ r.toInt < 256)"},
+  {"func": "CountByte", "post": "∃ n, ret = .int 64 n ∧ 0 ≤ n.toInt ∧ n.toInt ≤ s_.length"}
+]
