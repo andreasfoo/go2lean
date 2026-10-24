@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
@@ -123,7 +124,7 @@ def results : Res Val → List Val | .ok (.tuple vs) => vs | .ok v => [v] | _ =>
 	if sid < 0 {
 		b.WriteString("  resOk r.1 && r.2.log.isEmpty && r.2.assumed.isEmpty\n")
 	} else {
-		fmt.Fprintf(&b, "  let s := runFunc prog or0 h0 %d (%s ++ results r.1) r.2 %d\n", sid, argList, Fuel)
+		fmt.Fprintf(&b, "  let s := runFunc prog or0 h0 false %d (%s ++ results r.1) r.2 %d\n", sid, argList, Fuel)
 		b.WriteString("  resOk r.1 && resTrue s.1 && s.2.log.isEmpty && s.2.assumed.isEmpty\n")
 	}
 	lemmas := fmt.Sprintf(`holds, run, runFunc, runBlock, execInstrs, enter, bindParams, %s,
@@ -168,6 +169,11 @@ func Check(leanDir, rel string, budget time.Duration) Result {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "lake", "lean", rel)
 	cmd.Dir = leanDir
+	// Kill the whole process group on timeout: killing lake alone leaves
+	// its lean child running, and the output pipe open until it ends.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	r.Time = time.Since(start)
 	text := string(out)

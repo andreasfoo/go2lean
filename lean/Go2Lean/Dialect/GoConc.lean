@@ -47,6 +47,8 @@ structure Gor where
   result : Val := .unit
   /-- Runs a `Func.daemon` function (a ticker). -/
   daemon : Bool := false
+  /-- Its vector clock, for the race detector. -/
+  vc : Array Nat := #[]
 
 instance : Inhabited Gor := ⟨{ frames := [] }⟩
 
@@ -79,7 +81,7 @@ def advance (p : Prog) (or : Oracle) (h : Havoc Val) : List Frame → HState Val
     match fr.fn.blocks[fr.bid]? with
     | none => (.panicked .modelStuck, s)
     | some blk =>
-      match execInstrs (Op := Go2Lean.GoSSA.Op) or h blk.instrs.toList fr.env s with
+      match execInstrs (Op := Go2Lean.GoSSA.Op) or h true blk.instrs.toList fr.env s with
       | (.panic k, s) => (.panicked k, s)
       | (.outOfFuel, s) => (.outOfFuel, s)
       | (.ok env, s) =>
@@ -94,7 +96,7 @@ def advance (p : Prog) (or : Oracle) (h : Havoc Val) : List Frame → HState Val
             if callee.sync then
               advance p or h ({ entryFrame callee vals with dst, next, nargs } :: { fr with env } :: rest) s fuel
             else
-              match runFunc p or h f vals s fuel with
+              match runFunc p or h true f vals s fuel with
               | (.ok v, s') => advance p or h (goto next (env.set! dst v) nargs) s' fuel
               | (.panic k, s') =>
                 if k.isStuck then
@@ -521,6 +523,112 @@ def completedBy (before after : Array Gor) (i : Nat) : List Nat :=
   (List.range before.size).filter fun j =>
     j != i && pendingName before[j]! != "" && (after[j]?.map pendingName) == some ""
 
+/-! ## Data races (C2)
+
+Happens-before with vector clocks. Every synchronisation operation joins
+the clocks of the goroutines taking part with the clock of the object
+(channel, lock word, wait group, once, cond), in both directions: an
+over-approximation of Go's happens-before (a buffered send is ordered
+with every receive of its channel, readers of a `RWMutex` with each
+other), so a race reported is one Go's own detector also has, and the
+search may miss some. A spawn orders the parent's past with the child;
+`sync/atomic` operations acquire and release their location. Plain heap
+accesses (`Dialect.accesses`, recorded per step) are checked against the
+last write and the reads since of their location (FastTrack). -/
+
+def vcGet (v : Array Nat) (i : Nat) : Nat := v.getD i 0
+
+def vcJoin (a b : Array Nat) : Array Nat :=
+  (Array.range (max a.size b.size)).map fun i => max (vcGet a i) (vcGet b i)
+
+def vcTick (v : Array Nat) (i : Nat) : Array Nat :=
+  let v := if i < v.size then v else v ++ Array.replicate (i + 1 - v.size) 0
+  v.set! i (v[i]! + 1)
+
+/-- The heap location a pointer (or a locker holding one) names. -/
+def locKey : Val → Option (Nat × List Nat)
+  | .ptr r p => if r = 0 then none else some (r, p)
+  | .boxed _ (.ptr r p) => if r = 0 then none else some (r, p)
+  | _ => none
+
+def syncGet (s : HState Val) (k : Nat × List Nat) : Array Nat :=
+  ((s.syncVC.find? (·.1 == k)).map (·.2)).getD #[]
+
+def syncSet (s : HState Val) (k : Nat × List Nat) (v : Array Nat) : HState Val :=
+  { s with syncVC := (k, v) :: s.syncVC.filter (·.1 != k) }
+
+/-- The object a fired operation synchronises on: its first argument, or
+the case a select took. -/
+def syncObj (g : Gor) (name : String) : Option (Nat × List Nat) :=
+  match pendingSync g with
+  | some (.select ss _, args) =>
+    match (name.drop 7).toString.toInt? with
+    | some k =>
+      if k < 0 then none else
+      ((selectCases ss args)[k.toNat]?).bind fun (_, ch, _) => locKey ch
+    | none => none
+  | some (.yield, _) => none
+  | some (_, a :: _) => locKey a
+  | _ => none
+
+def overlaps (a b : Nat × List Nat) : Bool :=
+  a.1 == b.1 && (a.2.isPrefixOf b.2 || b.2.isPrefixOf a.2)
+
+/-- Goroutine `g` with clock `vc` reads or writes `k`: the race it makes, or
+the shadow state with the access added. -/
+def checkAccess (s : HState Val) (vc : Array Nat) (g : Nat) (k : Nat × List Nat) (write : Bool) :
+    Except String (HState Val) :=
+  let unordered := fun (h c : Nat) => h != g && c > vcGet vc h
+  let race := s.shadow.findSome? fun (k', w, rs) =>
+    if !overlaps k k' then none else
+    let byWrite := match w with
+      | some (h, c) => if unordered h c then some (h, "wrote") else none
+      | none => none
+    let byRead := if write then rs.findSome? fun (h, c) => if unordered h c then some (h, "read") else none else none
+    byWrite <|> byRead
+  match race with
+  | some (h, what) =>
+    .error s!"data race on object {k.1} at {k.2}: goroutine {g} {if write then "writes" else "reads"} it, goroutine {h} {what} it, neither ordered before the other"
+  | none =>
+    let clk := vcGet vc g
+    let (w, rs) := ((s.shadow.find? (·.1 == k)).map (·.2)).getD (none, [])
+    let entry := if write then (some (g, clk), []) else (w, (g, clk) :: rs.filter (·.1 != g))
+    .ok { s with shadow := (k, entry) :: s.shadow.filter (·.1 != k) }
+
+/-- After goroutine `i` stepped from `gs` to `gs'` (firing `name`, completing
+`partners`): its synchronisation, then its accesses, in order. -/
+def raceStep (gs gs' : Array Gor) (i : Nat) (name : String) (partners : List Nat) (s : HState Val) :
+    Except String (Array Gor × HState Val) :=
+  let vcOf := fun (gs : Array Gor) (j : Nat) => (gs[j]?.map (·.vc)).getD #[]
+  let (gs', s) :=
+    if name == "spawn" then
+      let child := gs.size
+      let gs' := gs'.modify child fun g => { g with vc := vcTick (vcOf gs i) child }
+      (gs'.modify i fun g => { g with vc := vcTick (vcOf gs i) i }, s)
+    else if name == "" then (gs', s) else
+    match gs[i]? >>= (syncObj · name) with
+    | none => (gs', s)
+    | some k =>
+      let parts := i :: partners
+      let joined := parts.foldl (fun v j => vcJoin v (vcOf gs j)) (syncGet s k)
+      (parts.foldl (fun gs' j => gs'.modify j fun g => { g with vc := vcTick joined j }) gs', syncSet s k joined)
+  let rec go : List (Val × Nat) → Array Nat → HState Val → Except String (Array Nat × HState Val)
+    | [], vc, s => .ok (vc, s)
+    | (p, kind) :: rest, vc, s =>
+      match locKey p with
+      | none => go rest vc s
+      | some k =>
+        match kind with
+        | 2 => go rest (vcJoin vc (syncGet s k)) s
+        | 3 => go rest (vcTick vc i) (syncSet s k (vcJoin (syncGet s k) vc))
+        | _ =>
+          match checkAccess s vc i k (kind == 1) with
+          | .ok s => go rest vc s
+          | .error e => .error e
+  match go s.acc.toList (vcOf gs' i) s with
+  | .ok (vc, s) => .ok (gs'.modify i fun g => { g with vc }, { s with acc := #[] })
+  | .error e => .error e
+
 /-- Schedule until no goroutine can move. `outOfFuel` when the steps run out
 (an unfair schedule spinning one goroutine ends here, not as a finding).
 Daemon goroutines (tickers) always can: when only they can, `idle` counts
@@ -546,10 +654,13 @@ def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
       let i := cands[c % cands.length]!
       -- The case a select takes: stepGor draws the same choice from `s`.
       let name := (selectTaken s.heap gs i (schedChoice p h s).1).getD (pendingName gs[i]!)
-      match stepGor p or h gs i s stepFuel with
+      match stepGor p or h gs i { s with acc := #[] } stepFuel with
       | (.ok (gs', s), _) =>
-        let s := { s with sched := s.sched.push (i, name, completedBy gs gs' i) }
-        schedule p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0)
+        let partners := completedBy gs gs' i
+        let s := { s with sched := s.sched.push (i, name, partners) }
+        match raceStep gs gs' i name partners s with
+        | .ok (gs', s) => schedule p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0)
+        | .error e => (.panic .dataRace, { s with panicAt := some e })
       | (.error .other, s) => (.outOfFuel, s)
       | (.error k, s) => (.panic k, s)
 
@@ -559,7 +670,7 @@ def runConc (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List
     (heap : Heap Val := #[]) : Res Val × HState Val :=
   match p.funcs[fid]? with
   | none => (.panic .modelStuck, { heap })
-  | some fn => schedule p or h fuel #[{ frames := [entryFrame fn args] }] { heap } fuel 0
+  | some fn => schedule p or h fuel #[{ frames := [entryFrame fn args], vc := #[1] }] { heap } fuel 0
 
 /-- Run `fid`: in the concurrent machine when it can synchronise, else with
 the big-step interpreter. -/

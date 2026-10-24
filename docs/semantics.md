@@ -63,7 +63,7 @@ yields UB or poison, Go panics. A run ends in one of:
 | outcome | Go | kinds |
 |---|---|---|
 | `ok v` | returned | — |
-| `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex: a fatal error in Go), `deadlock`, `goroutine_leak` (§6), `other` |
+| `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex: a fatal error in Go), `deadlock`, `goroutine_leak`, `data_race` (§6), `other` |
 | `panic modelStuck` | — | the model cannot continue (stuck); not a Go panic, never reported as one |
 | `outOfFuel` | — | the step budget ran out (loops, recursion); moot |
 
@@ -263,8 +263,33 @@ unfair schedule that spins runs out of fuel and is moot.
 What a certificate means for a concurrent function: the exhaustive engine
 enumerates inputs, and the schedule is a havoc site, so its certificate is
 `exhausted_havoc` (sampled schedules), not a statement about every
-interleaving. Data races are not modelled: the machine is sequentially
-consistent at scheduling points.
+interleaving.
+
+Data races (C2): the machine keeps a vector clock per goroutine and per
+synchronisation object. Every synchronisation operation joins the clocks
+of the goroutines taking part with the object's, both ways; a spawn
+orders the parent's past with the child; `sync/atomic` operations acquire
+and release their location. This over-approximates Go's happens-before (a
+buffered send is ordered with every receive on its channel, two readers of
+a `RWMutex` with each other), so a race the model reports is one Go's
+memory model has, and some are missed. Each step's heap accesses (loads
+and stores through pointers, map reads and writes, `append`/`copy` on a
+backing array; a map or slice is one location, a field or element through
+a pointer its own) are checked against the location's last write and the
+reads since (FastTrack); two accesses, one a write, neither ordered before
+the other, end the run with `data_race`. Within a step the machine is
+sequentially consistent: no weak-memory reorderings. In a package that
+starts goroutines, the package variables its functions write are shared
+cells (zero at the start of a run), so their races are seen.
+
+The replay stage for `data_race` builds the test with `-race` and runs the
+call 20 times: Go's race detector reports a race whenever both accesses
+happen, whatever the timing. A report whose accesses are both in the
+program (not in the replay controller or the harness) confirms it. When
+none comes, the model's schedule is replayed (below) under `-race`, with
+the controller invisible to the detector (`//go:norace`, its lock's
+events off), so it neither orders the program's accesses nor reports its
+own.
 
 The replay stage for `deadlock` and `goroutine_leak` runs the call up to 200 times with a
 2-second watchdog per run, and for a leak scans the goroutine dump for a

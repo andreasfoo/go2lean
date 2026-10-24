@@ -1,8 +1,8 @@
-# Concurrency in the model (C1)
+# Concurrency in the model (C1, C2)
 
 Status, 2026-10-23: the machine, the frontend lowering and the replay stage checks
 are built (C1a), `context`, timers and `sync.Cond` (C1b), and the
-deterministic replay of the model's schedule (C1c). "Built" below lists what landed and how it differs from the
+deterministic replay of the model's schedule (C1c), and data races (C2). "Built" below lists what landed and how it differs from the
 plan; the rest of the page is the plan. What other
 projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 [related-work.md](related-work.md).
@@ -60,47 +60,84 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   could take the lock is not waiting yet); the replay stage leak scan waits while a
   goroutine of the package is still running or sleeping.
 
-### GoKer
+## Built (C2)
+
+- Data races in the model: vector clocks per goroutine and per
+  synchronisation object, and a FastTrack shadow per location (last write,
+  reads since); semantics in [semantics.md §6](semantics.md#6-concurrency).
+  The dialect lists each operation's heap accesses (`Dialect.accesses`),
+  the machine checks them after every goroutine step. The interpreter
+  records them only when its `track` argument is set: the concurrent
+  machine sets it, also for the callees it runs big-step; sequential runs
+  and the prover pass a literal `false`, which `simp` folds away. A race ends the run with
+  the panic kind `data_race`, naming the location and both goroutines.
+- `sync/atomic`'s functions are `atomicLoad`/`atomicStore`, which acquire
+  and release their location: no race between atomics, and an atomic
+  publishes the writes before it.
+- Package variables written by a function other than `init`, in a package
+  that starts goroutines, are cells every goroutine shares (as the
+  sync-holding ones of C1a), starting at their zero value or at a constant
+  initializer (`var interval = 10 * time.Second`), so a race on a package
+  counter or setting is seen.
+- Replay stage: a `data_race` finding runs `go test -race` up to 20 times;
+  when no run reports a race in the package's code, the model's schedule
+  is replayed under `-race` (C1c). The replay controller is invisible to
+  the race detector (`//go:norace`, `runtime.RaceDisable` around its own
+  lock), and a report whose first program frame is the controller or the
+  harness is ignored, so the report the PoC shows is the program's race.
+- Ground truth: `examples/conc/races.go`, 4 planted races (an unguarded
+  counter, a read before the channel that orders it, a map read without
+  its `RWMutex`, a package counter) next to their race-free twins (mutex,
+  atomic, channel hand-over, `RLock`).
+
+## GoKer
 
 `scripts/goker.sh <gobench> <out>` on all 103 kernels (GoBench at
 2e91eb1), each kernel's test function as the target, default search
-budget, 2026-10-23, with C1c (the replay of the model's schedule). The
-kernels are the ground truth: each blocking kernel has a blocking bug its
-test can trigger; most non-blocking ones have a data race, which C1 does
-not model.
+budget, 3 kernels at a time, 2026-10-23, with C2. The kernels are the
+ground truth: each blocking kernel has a blocking bug its test can
+trigger; most non-blocking ones have a data race.
 
 | | blocking (68) | non-blocking (35) |
 |---|---|---|
-| bug found by the model, confirmed by `go test` | **59** (20 deadlocks, 38 leaks, 1 double unlock) | 6 (3 leaks, 2 `closed_channel`, 1 nil dereference) |
-| found by the model, not reproduced by `go test`, even with its schedule replayed | 0 | 1 |
-| found by the model, refuted by `go test` (spurious) | 1 | 4 |
-| nothing found | 8 | 24 (holds) |
+| bug found by the model, confirmed by `go test` | **58** (20 deadlocks, 37 leaks, 1 data race) | **25** (22 data races, 2 `closed_channel`, 1 nil dereference) |
+| found by the model, refuted by `go test` (spurious) | 2 | 3 |
+| nothing found | 8 | 7 (holds) |
 
-The first row was 35 with C1a alone (no `context`, timers or `Cond`; 16
-blocking kernels got stuck on a channel the model did not know), and 53
-with C1b, when 6 findings stayed unreproduced by Go's scheduler. Now the
-model reports a blocking bug in 60 of the 68 blocking kernels and `go
-test` confirms 59 (a confirmed finding is the real kernel deadlocking,
-leaking or panicking, not the model). About 6 of them (cockroach 7504,
-10214, 16167, istio 16224, serving 2137, and, depending on the run,
-cockroach 1462, etcd 5509 or kubernetes 1321, 62464) only show up with the
-model's schedule replayed; which ones moves a little between runs, as Go's
-scheduler varies, but the confirmed total does not.
+How it grew: blocking 35 with C1a alone (no `context`, timers or `Cond`;
+16 kernels got stuck on a channel the model did not know), 53 with C1b,
+when 6 findings stayed unreproduced by Go's scheduler, 59 with C1c (the
+replay of the model's schedule); non-blocking 6 before C2. A confirmed
+finding is the real kernel deadlocking, leaking, panicking or racing,
+not the model. About 6 blocking ones (cockroach 7504, 10214, 16167, istio
+16224, serving 2137, and, depending on the run, cockroach 1462, etcd 5509
+or kubernetes 1321, 62464) only show up with the model's schedule
+replayed; which ones moves a little between runs, as Go's scheduler
+varies.
 
-- Not reproduced, schedule replayed: etcd 3077 (non-blocking). The real
-  run follows all 8 steps of the model's schedule and does not deadlock:
-  likely a model false positive, left `inconclusive`.
+- Data races: every race the model reports, `go test -race` confirms,
+  most on the plain run, the rest with the model's schedule replayed. In
+  4 kernels the race is the first bug the model meets, before the leak it
+  reported with C1 (moby 27782, istio 8967, kubernetes 79631, 88331), and
+  etcd 3077 (C1c's unreproduced deadlock) and etcd 8194 (C1c's spurious
+  slice bound) turn out to be races. Missed: `sync.Map` (istio 8144), a
+  package map built by its initializer (istio 16742), and istio 8214.
+- Spurious, each rejected by the replay stage: `recover` (etcd 7443
+  recovers its send on a closed channel), unmodelled `os/exec` and a
+  callback (moby 18412, serving 6472), a data race the model's
+  sequentially consistent steps turn into a panic before the race
+  detector sees it (kubernetes 13058), and hugo 3251: the model's
+  `sync_fatal` (a mutex from a map the model does not know) stands in for
+  the kernel's real deadlock, which shows up in one run often but not
+  always under load; confirmed in the earlier runs and alone.
 - Not found: `fmt` calling a `String` method that takes a read lock
   (cockroach 6181), `io.ReadFull` (grpc 1275), `cond.Wait` passed as a
   func value (kubernetes 11298), a sync-holding package variable set by
   `init` (moby 29733), an external test package `package x_test`
   (syncthing 5795), and three whose trials all run out of fuel (grpc 862,
-  istio 18454, kubernetes 58107: polling loops).
-- Spurious, each rejected by the replay stage: `recover` (etcd 7443
-  recovers its send on a closed channel), a store to an `int` package
-  variable ignored (etcd 8194), unmodelled `os/exec` and a callback (moby
-  18412, serving 6472), and a data race the model's sequentially
-  consistent steps turn into a panic (kubernetes 13058).
+  istio 18454, kubernetes 58107: polling loops). Non-blocking: a
+  `WaitGroup` misuse (cockroach 4407), a channel misuse (grpc 1687) and
+  two testing-library bugs (serving 4908, 6171).
 
 ## Why
 

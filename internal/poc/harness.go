@@ -259,6 +259,9 @@ func ReplayHarnessFunc(t *contract.Target, p *contract.Property, cx *contract.Co
 // among ready cases the model did not force and the release at the end.
 const replayRuns = 20
 
+// raceRuns: runs of a data race's harness under -race.
+const raceRuns = 20
+
 // scheduleLit is the schedule as a Go literal of the controller's type.
 func scheduleLit(sched []contract.SchedStep) string {
 	var b strings.Builder
@@ -396,8 +399,13 @@ func harnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		specArgs := append(append([]string{}, specNames...), d.Rets...)
 		d.SpecCall = fmt.Sprintf("%s(%s)", p.Spec.GoFunc, strings.Join(specArgs, ", "))
 	}
-	if cx.ModelOutput != nil && (cx.ModelOutput.Panic == contract.PanicDeadlock || cx.ModelOutput.Panic == contract.PanicGoroutineLeak) {
+	if m := modelPanic(cx); m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak || m == contract.PanicDataRace {
 		d.Conc, d.ConcRuns, d.PkgPath = true, concRuns, t.Package
+		if m == contract.PanicDataRace {
+			// Under -race: the detector sees unordered accesses whatever
+			// the timing, so a few runs cover what the inputs reach.
+			d.ConcRuns = raceRuns
+		}
 		if replay {
 			d.Replay, d.ConcRuns = scheduleLit(cx.Schedule), replayRuns
 		}

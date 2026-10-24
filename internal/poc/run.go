@@ -79,6 +79,8 @@ type prepared struct {
 	// replayed: the package files of a confirmed replay (base name ->
 	// rewritten source), which the PoC is built with.
 	replayed map[string][]byte
+	// race: build and run the harness with -race (a data race).
+	race bool
 }
 
 // VerifyAll realises the counterexamples, runs those of each package in a
@@ -129,6 +131,15 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 				return nil, err
 			}
 			p.v = verdictOf(p, r, c, e, o, eo, root)
+		}
+		// A data race: under Go's race detector, then with the model's
+		// schedule replayed.
+		for _, p := range batch {
+			if p.v != nil && modelPanic(p.cx) == contract.PanicDataRace {
+				if err := raceOne(root, pkgDir, pkgName, pkg, p, overlay); err != nil {
+					return nil, err
+				}
+			}
 		}
 		// A deadlock or leak Go's scheduler did not reproduce: replay the
 		// model's schedule in the package rewritten to follow it.
@@ -216,6 +227,112 @@ func replayOne(root, pkgDir, pkgName, pkg string, p *prepared, overlay map[strin
 	v.Observed["replay"] = "the model's schedule replayed (" + res.Replay + " steps); Go's own scheduler did not take it in " + strconv.Itoa(concRuns) + " runs"
 	p.v, p.fn, p.imps, p.replayed = v, fn, imps, files
 	return nil
+}
+
+// raceOne judges a data race the model found by Go's race detector: the
+// harness under -race, then, when it reports none, with the model's
+// schedule replayed (the controller's own synchronisation hidden from the
+// detector).
+func raceOne(root, pkgDir, pkgName, pkg string, p *prepared, overlay map[string][]byte) error {
+	q := *p
+	q.race, q.v = true, nil
+	r, c, e, o, eo, err := runBatch(root, pkgDir, pkgName, pkg, []*prepared{&q}, overlay)
+	if err != nil {
+		return err
+	}
+	if rep := raceReport(eo); rep != "" {
+		v := verdictOf(&q, r, c, e, o, eo, root)
+		v.Status, v.Diagnosis = contract.VerdictConfirmed, nil
+		v.Observed["race"] = rep
+		p.v, p.race = v, true
+		return nil
+	}
+	if len(p.cx.Schedule) == 0 {
+		return nil
+	}
+	note := func(s string) error {
+		p.v.Diagnosis.Notes = append(p.v.Diagnosis.Notes, "replay of the model's schedule under -race: "+s)
+		return nil
+	}
+	files, err := replay.Rewrite(root, pkg)
+	if err != nil {
+		return note("the package could not be rewritten: " + err.Error())
+	}
+	ov := maps.Clone(overlay)
+	if ov == nil {
+		ov = map[string][]byte{}
+	}
+	for name, src := range files {
+		ov[filepath.Join(pkgDir, name)] = src
+	}
+	fn, imps, err := ReplayHarnessFunc(p.target, p.prop, p.cx, p.abi)
+	if err != nil {
+		return note(err.Error())
+	}
+	q.fn, q.imps = fn, imps
+	r, c, e, o, eo, err = runBatch(root, pkgDir, pkgName, pkg, []*prepared{&q}, ov)
+	if err != nil {
+		return err
+	}
+	res := r[p.cx.ID]
+	rep := raceReport(eo)
+	switch {
+	case rep == "" && res.ReplayDiverged != "":
+		return note(fmt.Sprintf("the real run left the schedule after %s steps: %s", res.Replay, res.ReplayDiverged))
+	case rep == "":
+		return note(fmt.Sprintf("followed (%s steps), no race reported", res.Replay))
+	}
+	v := verdictOf(&q, r, c, e, o, eo, root)
+	v.Status, v.Diagnosis = contract.VerdictConfirmed, nil
+	v.Observed["race"] = rep
+	v.Observed["replay"] = "the model's schedule replayed (" + res.Replay + " steps); -race reported nothing in " + strconv.Itoa(raceRuns) + " plain runs"
+	p.v, p.fn, p.imps, p.replayed, p.race = v, fn, imps, files, true
+	return nil
+}
+
+// raceReport is the first data race report in a -race run's output whose
+// accesses are both in the program: not in the replay controller
+// (go2lean*) or the harness. An access is placed by the first frame of
+// its stack outside the runtime, reflect and sync (a map access starts in
+// the runtime's map code).
+func raceReport(out string) string {
+	for _, block := range strings.Split(out, "==================") {
+		if !strings.Contains(block, "WARNING: DATA RACE") {
+			continue
+		}
+		lines := strings.Split(block, "\n")
+		ours, accesses := false, 0
+		for i, l := range lines {
+			if !(strings.HasPrefix(l, "Read at") || strings.HasPrefix(l, "Write at") ||
+				strings.HasPrefix(l, "Previous read at") || strings.HasPrefix(l, "Previous write at")) {
+				continue
+			}
+			accesses++
+			for _, f := range lines[i+1:] {
+				f = strings.TrimSpace(f)
+				if f == "" {
+					break
+				}
+				if strings.HasPrefix(f, "/") || strings.HasPrefix(f, "runtime.") || strings.HasPrefix(f, "internal/") ||
+					strings.HasPrefix(f, "reflect.") || strings.HasPrefix(f, "sync.") || strings.HasPrefix(f, "sync/") {
+					continue // a file:line line, or a frame of the runtime
+				}
+				if strings.Contains(f, ".go2lean") || strings.Contains(f, "TestGo2LeanPoC_") {
+					ours = true
+				}
+				break
+			}
+		}
+		if !ours && accesses >= 2 {
+			// The accesses come first; the goroutines' creation sites after.
+			rep := strings.TrimSpace(block)
+			if len(rep) > 2000 {
+				rep = rep[:2000] + "..."
+			}
+			return rep
+		}
+	}
+	return ""
 }
 
 func reasonOf(v *contract.Verdict) string {
@@ -306,7 +423,13 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[
 			files[filepath.Base(path)] = b
 		}
 	}
-	buildOut, exit, err := sandbox.BuildTest(root, pkg, pkgDir, files, bin)
+	var flags []string
+	for _, p := range batch {
+		if p.race {
+			flags = []string{"-race"}
+		}
+	}
+	buildOut, exit, err := sandbox.BuildTest(root, pkg, pkgDir, files, bin, flags...)
 	if err != nil {
 		return nil, "", 0, "", "", err
 	}
@@ -320,6 +443,9 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[
 		}
 	}
 	cmdLine := "go test -count=1 -v -run '" + run + "' " + pkg
+	if len(flags) > 0 {
+		cmdLine = "go test -race -count=1 -v -run '" + run + "' " + pkg
+	}
 	results := parseResults(stdout)
 	if len(results) == 0 {
 		return nil, cmdLine, exit, stdout, stderr, nil
@@ -522,6 +648,9 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 			return err
 		}
 		cmd := "go test -count=1 -v -run '^TestGo2LeanPoC_" + p.cx.ID + "$' " + p.target.Package
+		if p.race {
+			cmd = strings.Replace(cmd, "go test ", "go test -race ", 1)
+		}
 		if p.replayed != nil {
 			// The package rewritten to follow the model's schedule: built
 			// through an overlay, the package itself unchanged.
@@ -540,7 +669,7 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 			if err := os.WriteFile(filepath.Join(odir, "overlay.json"), b, 0o644); err != nil {
 				return err
 			}
-			cmd = "go test -count=1 -v -overlay " + filepath.Join(odir, "overlay.json") + strings.TrimPrefix(cmd, "go test -count=1 -v")
+			cmd = strings.Replace(cmd, "-count=1 -v", "-count=1 -v -overlay "+filepath.Join(odir, "overlay.json"), 1)
 		}
 		readme := fmt.Sprintf("# PoC %s\n\nProperty: %s (%s)\n\n%s\n\nVerdict: **%s**\n\nReproduce: copy `%s` into `%s` and run\n\n    %s\n",
 			p.cx.ID, p.prop.ID, p.prop.Kind, p.prop.NL, v.Status, testName, pkgDir, cmd)
@@ -606,6 +735,15 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 	}
 	if model := modelPanic(cx); model == contract.PanicDeadlock || model == contract.PanicGoroutineLeak {
 		judgeConc(v, prop, model, r, diag)
+		return
+	}
+	if modelPanic(cx) == contract.PanicDataRace {
+		// Only Go's race detector can say: judged from -race's report
+		// (raceOne); a run without it proves nothing.
+		v.Status = contract.VerdictInconclusive
+		diag.Reason = "race_not_observed"
+		diag.Notes = []string{"go test -race reported no data race between the program's accesses"}
+		v.Diagnosis = diag
 		return
 	}
 	switch prop.Kind {

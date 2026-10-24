@@ -241,6 +241,10 @@ inductive ConcOp where
   /-- `sync.Cond`: `condEnter` `[cond]` takes a ticket for a `Wait`;
   `condSignal all` `[cond]` releases the oldest ticket, or all. -/
   | condEnter | condSignal (all : Bool)
+  /-- `sync/atomic`: `atomicLoad` `[ptr]`, `atomicStore` `[ptr, v]`, as
+  `loadPath` and `storePath`, but synchronising (acquire, release) instead
+  of racing. -/
+  | atomicLoad | atomicStore
   deriving Repr
 
 inductive Op where
@@ -2585,6 +2589,16 @@ def setCondState (heap : Heap Val) (c : Val) (n : Nat) (ws : List Nat) : Res (He
 
 /-- The `ConcOp`s, on the heap. -/
 def denoteConc (heap : Heap Val) : ConcOp → List Val → Res (Val × Heap Val)
+  | .atomicLoad, [p] =>
+    match heapLoad heap p with
+    | .ok v => .ok (v, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
+  | .atomicStore, [p, v] =>
+    match heapStore heap p v with
+    | .ok heap => .ok (.unit, heap)
+    | .panic k => .panic k
+    | .outOfFuel => .outOfFuel
   | .ctxBackground, [] => .ok (heapAlloc heap (ctxObj (.ptr 0 []) 0 []))
   | .ctxNew, [parent] =>
     let (ch, heap) := heapAlloc heap (chanObj 0 [] false (.structv []))
@@ -3102,8 +3116,34 @@ def assumption (heap : Heap Val) : Op → List Val → Option String
     | _ => none
   | _, _ => none
 
+/-- The heap object a map or slice value lives in. -/
+def objOf : Val → Val
+  | .boxed _ p => p
+  | .slice r _ _ _ => .ptr r []
+  | v => v
+
+/-- The heap accesses of an op, for the race detector: reads (0), writes
+(1), atomic acquires (2) and releases (3). Maps and slices are one location
+each (their backing object); a field or element through a pointer is its
+own. -/
+def accesses : Op → List Val → List (Val × Nat)
+  | .loadPath, [p] => [(p, 0)]
+  | .storePath, [p, _] => [(p, 1)]
+  | .mapLookup _ _, m :: _ => [(objOf m, 0)]
+  | .mapLen, [m] => [(objOf m, 0)]
+  | .mapRange, [m] => [(objOf m, 0)]
+  | .mapUpdate, m :: _ => [(objOf m, 1)]
+  | .mapDelete, m :: _ => [(objOf m, 1)]
+  | .appendSlice _, [s, t] => [(objOf t, 0), (objOf s, 1)]
+  | .copySlice, [d, t] => [(objOf t, 0), (objOf d, 1)]
+  | .bytesToStr, [b] => [(objOf b, 0)]
+  | .conc .atomicLoad, [p] => [(p, 2)]
+  | .conc .atomicStore, [p, _] => [(p, 3)]
+  | _, _ => []
+
 instance : Dialect Op Val Oracle where
   denote := denote
+  accesses := accesses
   stuckSite := stuckSite
   assumption := assumption
   toBool

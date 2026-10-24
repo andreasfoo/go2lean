@@ -99,6 +99,7 @@ const (
 	PanicSyncFatal     PanicKind = "sync_fatal"
 	PanicDeadlock      PanicKind = "deadlock"
 	PanicGoroutineLeak PanicKind = "goroutine_leak"
+	PanicDataRace      PanicKind = "data_race"
 	PanicOther         PanicKind = "other"
 )
 

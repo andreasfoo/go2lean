@@ -511,7 +511,7 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
       -- A spec takes every result of the target after its parameters.
       let results := match v with | .tuple vs => vs | v => [v]
       let before := s.log.size
-      match runFunc p or h spec (args ++ results) s fuel with
+      match runFunc p or h false spec (args ++ results) s fuel with
       -- A verdict that read a havoc value (the spec compared opaque values,
       -- or called something unmodelled) is neither a refutation nor support,
       -- unless the spec gives the same verdict when rerun from the same
@@ -519,7 +519,7 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
       -- havoc it read did not decide it (the trial stays havoc-dependent).
       | (.ok (.bool b), s') =>
         let decided := !alts.isEmpty && alts.all fun h' =>
-          match runFunc p or h' spec (args ++ results) s fuel with
+          match runFunc p or h' false spec (args ++ results) s fuel with
           | (.ok (.bool b'), _) => b' == b
           | _ => false
         -- An assumed value (an unmodelled result taken as zero) is the same

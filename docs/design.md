@@ -42,8 +42,8 @@ used for **proof**.
 
 ### 1.2 Non-goals (first phase)
 
-- Data races: not modelled (goroutines, channels and `sync` are: see
-  [concurrency.md](concurrency.md)).
+- Weak-memory reorderings: not modelled (goroutines, channels, `sync` and
+  data races under happens-before are: see [concurrency.md](concurrency.md)).
 - GC, finalizers, `unsafe`, cgo, reflection, the fine semantics of
   `defer`/`recover`.
 - Floating point: a function using it is marked unmodellable.

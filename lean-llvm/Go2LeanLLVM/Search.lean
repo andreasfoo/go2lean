@@ -210,14 +210,14 @@ def runOnce (p : Prog) (globals : List GlobalInit) (fid : FuncId) (args : List A
     -- The package's initialisation first (TinyGo's `pkg.init(context)`):
     -- package variables set at run time hold their values.
     let s := match init with
-      | some i => match runFunc p () h i [.ptr Veir.Data.LLVM.Ptr.null] s fuel with
+      | some i => match runFunc p () h false i [.ptr Veir.Data.LLVM.Ptr.null] s fuel with
         | (.ok _, s') => some s'
         | _ => none
       | none => some s
     match s with
     | none => (.stuck, {})
     | some s =>
-    match runFunc p () h fid vals s fuel with
+    match runFunc p () h false fid vals s fuel with
     | (.ok _, s) => (.holds, s)
     | (.panic k, s) => (if k.isStuck then .stuck else .ub k, s)
     | (.outOfFuel, s) => (.outOfFuel, s)

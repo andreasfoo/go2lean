@@ -27,7 +27,7 @@ structure Pt where
 def wpPt (pt : Pt) (Q : Val → HState Val → Prop) (env : Env Val) (s : HState Val) : Prop :=
   match p.funcs[pt.fid]? with
   | none => False
-  | some fn => ∀ fuel, match runBlock p or hv fn pt.bid env s fuel with
+  | some fn => ∀ fuel, match runBlock p or hv false fn pt.bid env s fuel with
     | (.ok v, s') => Q v s'
     | (.panic _, _) => False
     | (.outOfFuel, _) => True
@@ -36,7 +36,7 @@ def wpPt (pt : Pt) (Q : Val → HState Val → Prop) (env : Env Val) (s : HState
 def wpPtN (n : Nat) (pt : Pt) (Q : Val → HState Val → Prop) (env : Env Val) (s : HState Val) : Prop :=
   match p.funcs[pt.fid]? with
   | none => False
-  | some fn => ∀ fuel, fuel ≤ n → match runBlock p or hv fn pt.bid env s fuel with
+  | some fn => ∀ fuel, fuel ≤ n → match runBlock p or hv false fn pt.bid env s fuel with
     | (.ok v, s') => Q v s'
     | (.panic _, _) => False
     | (.outOfFuel, _) => True
@@ -59,7 +59,7 @@ def wpTermN (n : Nat) (fid : Nat) (fn : GoSSA.Func) (b : Nat) (t : Term)
 /-- One block: its instructions, then its terminator. -/
 def wpBlockN (n : Nat) (fid : Nat) (fn : GoSSA.Func) (b : Nat) (blk : GoSSA.Block)
     (Q : Val → HState Val → Prop) (env : Env Val) (s : HState Val) : Prop :=
-  match execInstrs (Op := GoSSA.Op) or hv blk.instrs.toList env s with
+  match execInstrs (Op := GoSSA.Op) or hv false blk.instrs.toList env s with
   | (.ok env', s') => wpTermN p or hv n fid fn b blk.term Q env' s'
   | (.panic _, _) => False
   | (.outOfFuel, _) => True
@@ -110,7 +110,7 @@ theorem wpPtN_of_block {n fid b : Nat} {fn : GoSSA.Func} {blk : GoSSA.Block}
     have hm : m ≤ n := Nat.le_of_succ_le_succ hfuel
     unfold wpBlockN at h
     simp only [runBlock, hb]
-    rcases he : execInstrs (Op := GoSSA.Op) or hv blk.instrs.toList env s with ⟨r, s'⟩
+    rcases he : execInstrs (Op := GoSSA.Op) or hv false blk.instrs.toList env s with ⟨r, s'⟩
     rw [he] at h
     cases r with
     | panic k => exact h.elim
