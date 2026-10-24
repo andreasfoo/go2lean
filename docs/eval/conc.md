@@ -135,12 +135,13 @@ turned race detection on in CI) on other code, and nothing on this test.
 2. **A failed model build did not fail the run**: `go2lean run` printed
    the Lean errors and exited 0. Fixed: the sweep goes on, and the run
    exits non-zero naming the packages that failed.
-3. **Method values passed to `time.AfterFunc` are not followed**:
-   `time.AfterFunc(d, b.flushCurrentBatch)` spawns a goroutine on the
-   method value's wrapper (`flushCurrentBatch$bound`), which the model
-   does not include, so the flush never runs and four of the batcher's
-   tests deadlock in the model; the replay stage left them `inconclusive`
-   (the schedule did not reproduce). Not fixed yet.
+3. **A channel the program made had unknown nil-ness**: in
+   `flushCurrentBatch`, `if b.submit == nil` was havoc (the model knew
+   only interface boxes and nil as decided), so a timer's flush could
+   return without closing the batch it was armed for, and four of the
+   batcher's tests deadlocked in the model; the replay stage left them
+   `inconclusive` (the schedule did not reproduce). Diagnosed after the
+   run, fixed separately.
 4. **Results of unmodelled calls**: `time.Now` (four breaker tests) and
    `(*time.Timer).Stop` (`Batcher.submitWork`) are havoc, and the model
    picks values Go does not give; all five refuted by the replay stage
@@ -167,4 +168,4 @@ already finds them in 7 seconds; go2lean's own contribution here is the
 argument and API-misuse panics, all by design or unreachable. The run
 also found two frontend bugs (1, 2) that no earlier target hit, and
 three model gaps (3 to 5) worth closing before the next concurrent
-target.
+target (#15).
