@@ -766,6 +766,16 @@ func (t *Term) Succs() []int {
 	return nil
 }
 
+// ProofSuccs are Succs without a call's fallback: a proof goes through the
+// callee's contract, under which a callee never gets stuck.
+func (t *Term) ProofSuccs() []int {
+	switch t.Kind {
+	case TermCall, TermXCall, TermCallV:
+		return []int{t.Next}
+	}
+	return t.Succs()
+}
+
 // LoopHeaders are the blocks a back edge enters (in a depth-first walk
 // from the entry): one per loop of the source, in block order.
 func (f *Func) LoopHeaders() []int {

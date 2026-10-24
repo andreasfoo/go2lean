@@ -108,11 +108,14 @@ translation sound).
    arithmetic and list facts that keep it, which an agent now writes
    under the kernel's check (`go2lean prove -llm`, docs/eval/proof-agent.md):
    the statement is go2lean's, never the agent's, and its postcondition can
-   be a Go spec run in the model. Next, from a survey of the tools (#22):
-   one obligation per path, stated by go2lean from the CFG (as LORIS and
-   AutoVerus localise feedback), and candidate invariants filtered by
-   running the model before Lean sees them (Houdini over traces, as Loopy
-   and LaM4Inv filter with a bounded model checker).
+   be a Go spec run in the model. From a survey of the tools (#22), two
+   are in: the paths from each loop header, from the CFG, in the prompt,
+   and lean-lsp-mcp, through which the agent checks its own answers (every
+   goal then proved by the first answer). Next: one obligation per path
+   stated by go2lean (as LORIS and AutoVerus localise feedback), and
+   candidate invariants filtered by running the model before Lean sees
+   them (Houdini over traces, as Loopy and LaM4Inv filter with a bounded
+   model checker).
 3. **The existing prover** (`no_panic` by `simp` and `bv_decide`): move the
    closing step to `grind` where it applies, keeping `bv_decide` for
    bit-level goals; a `grind` proof needs only the kernel.

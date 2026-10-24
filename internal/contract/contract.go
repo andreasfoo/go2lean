@@ -522,6 +522,9 @@ type ModelFunc struct {
 	// LoopHeaders are the blocks of the model's function that loops come
 	// back to: a proof needs an invariant at each (go2lean prove).
 	LoopHeaders []int `json:"loop_headers,omitempty"`
+	// Succs are each block's successors, for a function with loops: the
+	// proof agent is told the paths from each loop header.
+	Succs [][]int `json:"succs,omitempty"`
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`

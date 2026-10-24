@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ func cmdProve(args []string) error {
 	model := fs.String("model", "", "model id for the agent")
 	outFile := fs.String("out", "", "write the goals with the proofs that worked (an agent's included) to this JSON file, to check again without the agent")
 	rounds := fs.Int("rounds", 6, "agent attempts per goal, Lean's errors fed back after each")
+	leanTools := fs.Bool("lean-tools", true, "give the claude-code agent Lean tools (lean-lsp-mcp, when on PATH) to check its answers itself")
 	thinking := fs.Bool("thinking", true, "let the agent think at length (adaptive thinking; --effort high for claude-code)")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
@@ -131,12 +133,26 @@ func cmdProve(args []string) error {
 		if err != nil {
 			return err
 		}
-		lib, err := proofLibrary(env.Root)
+		lib, err := proofLibrary(env.Root, report.Package)
 		if err != nil {
 			return err
 		}
+		tools := false
+		if _, isCC := llm.(*agent.ClaudeCode); *leanTools && isCC {
+			if bin, err := exec.LookPath("lean-lsp-mcp"); err != nil {
+				fmt.Println("prove: lean-lsp-mcp is not on PATH: the agent works without Lean tools")
+			} else {
+				if err := os.MkdirAll(filepath.Join(w.Root, "agent"), 0o755); err != nil {
+					return err
+				}
+				if llm, err = agent.WithLeanTools(llm, bin, leanDir, filepath.Join(w.Root, "agent", "lean-mcp.json")); err != nil {
+					return err
+				}
+				tools = true
+			}
+		}
 		rs, err = agent.ProveGoals(context.Background(), llm, w, leanDir, report, goals, abis, fids,
-			agent.ProveOptions{Rounds: *rounds, Budget: *budget, Library: lib}, os.Stdout)
+			agent.ProveOptions{Rounds: *rounds, Budget: *budget, Library: lib, LeanTools: tools}, os.Stdout)
 		if err != nil {
 			return err
 		}
@@ -184,7 +200,7 @@ func cmdProve(args []string) error {
 // proofLibrary is what the proof agent reads before its goal: the
 // weakest-precondition library, its tactics and lemmas, and the hand
 // proofs as worked examples.
-func proofLibrary(root string) (string, error) {
+func proofLibrary(root, pkg string) (string, error) {
 	var b strings.Builder
 	for _, f := range []string{"lean/Go2Lean/Proof/WP.lean", "lean/Go2Lean/Proof/Tactic.lean",
 		"lean/Go2Lean/Proof/Simp.lean", "lean/Proofs/Functional.lean"} {
@@ -194,12 +210,20 @@ func proofLibrary(root string) (string, error) {
 		}
 		fmt.Fprintf(&b, "## %s\n\n```lean\n%s```\n\n", f, text)
 	}
-	// Proofs the agent wrote before, for single loops over slices: the
-	// goals with their preludes and proofs.
-	text, err := os.ReadFile(filepath.Join(root, "examples/invariants/proofs.json"))
-	if err != nil {
-		return "", err
+	// Proofs the agent wrote before (examples/*/proofs.json): the goals
+	// with their preludes and proofs; not the proved package's own, whose
+	// answers they would give away.
+	files, _ := filepath.Glob(filepath.Join(root, "examples", "*", "proofs.json"))
+	for _, f := range files {
+		dir, _ := filepath.Rel(root, filepath.Dir(f))
+		if strings.HasSuffix(pkg, "/"+filepath.ToSlash(dir)) {
+			continue
+		}
+		text, err := os.ReadFile(f)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "## %s/proofs.json (goals of %s, proved)\n\n```json\n%s```\n\n", dir, dir, text)
 	}
-	fmt.Fprintf(&b, "## examples/invariants/proofs.json (goals of examples/invariants, proved)\n\n```json\n%s```\n\n", text)
 	return b.String(), nil
 }

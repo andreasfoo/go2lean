@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/prover"
 )
 
@@ -74,5 +76,50 @@ func TestDeclared(t *testing.T) {
 	got := strings.Join(declared(goals, 1), ",")
 	if got != "inv,inv_ok,post" {
 		t.Errorf("got %s", got)
+	}
+}
+
+func TestLoopPaths(t *testing.T) {
+	// CountPositive: 0 → 1 (header); 1 → 2 (body) | 3 (done); 2 → 4 | 1; 4 → 1.
+	f := contract.ModelFunc{ID: 1, Name: "CountPositive", LoopHeaders: []int{1},
+		Succs: [][]int{{1}, {2, 3}, {4, 1}, nil, {1}}}
+	got := LoopPaths(f)
+	for _, want := range []string{
+		"1 → 2 → 4 → 1  (back edge",
+		"1 → 2 → 1  (back edge",
+		"1 → 3  (returns or panics)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	if LoopPaths(contract.ModelFunc{}) != "" {
+		t.Error("a function without loops has no paths")
+	}
+}
+
+func TestWithLeanTools(t *testing.T) {
+	cfg := t.TempDir() + "/mcp.json"
+	llm, err := WithLeanTools(&ClaudeCode{Effort: "high"}, "/bin/lean-lsp-mcp", "/ws/lean", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc := llm.(*ClaudeCode)
+	if cc.MCPConfig != cfg || cc.Effort != "high" || cc.MaxTurns == 0 {
+		t.Errorf("%+v", cc)
+	}
+	for _, tool := range cc.AllowedTools {
+		if !strings.HasPrefix(tool, "mcp__lean__lean_") || strings.Contains(tool, "search") && tool != "mcp__lean__lean_local_search" {
+			t.Errorf("tool %s", tool)
+		}
+	}
+	b, err := os.ReadFile(cfg)
+	if err != nil || !strings.Contains(string(b), "/ws/lean") || !strings.Contains(string(b), "lean_loogle") {
+		t.Errorf("config %s (%v)", b, err)
+	}
+	// Other LLMs are left as they are.
+	m := &Mock{Path: "x"}
+	if got, _ := WithLeanTools(m, "b", "d", cfg); got != m {
+		t.Error("a mock should not change")
 	}
 }

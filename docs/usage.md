@@ -86,7 +86,7 @@ go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, h
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
                 [-repairs n] [-report] <package>
 go2lean prove   [-workspace out] -goals goals.json | -func F -post P  [-llm claude-code|claude|mock:<path>]
-                [-rounds n] [-out proofs.json] <package>
+                [-rounds n] [-lean-tools] [-out proofs.json] <package>
 ```
 
 `prove` states, for each goal, the function's contract as a Lean theorem
@@ -102,7 +102,10 @@ goal's `"name"` names its theorem. Loop-free functions are proved
 with no proof text; a function with loops needs an invariant per loop.
 With `-llm`, an agent writes them: it answers with invariants and a proof,
 Lean checks, and its errors go back for up to `-rounds` attempts
-(`claude-code` runs the `claude` CLI on its own login). `-out` saves the
+(`claude-code` runs the `claude` CLI on its own login; with
+[lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) on `PATH`, e.g.
+`uv tool install lean-lsp-mcp`, it also checks its answers in Lean itself
+before giving them, `-lean-tools`, on by default). `-out` saves the
 proofs that worked, which `prove -goals` checks again without the agent
 ([results](eval/proof-agent.md)).
 

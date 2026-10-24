@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,9 @@ type ProveOptions struct {
 	// Library is the text of the proof library and the worked examples the
 	// prompt carries (WP.lean, Tactic.lean, the hand proofs).
 	Library string
+	// LeanTools: the LLM can check Lean code itself (lean-lsp-mcp); the
+	// prompt then carries a file to check its answer in.
+	LeanTools bool
 }
 
 const proveSystem = `You are the proof agent of go2lean, which translates Go functions into a
@@ -112,6 +116,18 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 		feedback := ""
 		for round := 1; round <= opts.Rounds; round++ {
 			user := provePrompt(opts.Library, string(model), fids[i], goals[i].Func, goalStatement(goals[i], abis[i], fids[i]), proved, feedback)
+			if paths := loopPaths(report, fids[i], goals[i].SpecFid, goals[i].Spec != ""); paths != "" {
+				user += "\n\nThe loops, from the control-flow graph: every block on a path needs its own step (wp_step), and a path ends where marked.\n\n" + paths
+			}
+			if opts.LeanTools {
+				if scratch, err := prover.ScratchFile(report, goals, abis, fids, i); err == nil {
+					user += "\n\n# Checking your answer yourself\n\nYou have Lean tools (lean_run_code, lean_goal, lean_multi_attempt, ...) on the project the model is built in. " +
+						"Before you answer, check your prelude and proof with lean_run_code on this complete file, your prelude and proof put in its two places " +
+						"(the goals before yours are stated with sorry there; in the real file they are proved). Read the goal states in the errors, fix, and run again " +
+						"until it reports no error but the sorry of earlier goals; then answer with the two blocks as usual. Each run takes some seconds; prefer one complete run " +
+						"to many small ones.\n\n```lean\n" + scratch + "```\n"
+				}
+			}
 			if taken := declared(goals, i); len(taken) > 0 {
 				user += "\n\nNames other goals' preludes already declare in the file (choose others): " + strings.Join(taken, ", ") + "\n"
 			}
@@ -123,6 +139,10 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 				return nil, fmt.Errorf("%s round %d: %w", goals[i].Func, round, err)
 			}
 			os.WriteFile(base+".response.md", []byte(resp), 0o644)
+			turns := ""
+			if t, ok := llm.(interface{ Turns() int }); ok && t.Turns() > 1 {
+				turns = fmt.Sprintf(", %d turns", t.Turns())
+			}
 			prelude, proof, perr := parseProof(resp)
 			if perr == nil {
 				perr = vetProof(prelude + "\n" + proof)
@@ -141,10 +161,10 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 			}
 			os.WriteFile(base+".lean.log", []byte(text), 0o644)
 			if rs[i].Proved {
-				fmt.Fprintf(out, "  %s round %d (%s): proved\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second))
+				fmt.Fprintf(out, "  %s round %d (%s%s): proved\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second), turns)
 				break
 			}
-			fmt.Fprintf(out, "  %s round %d (%s): %s\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second), firstLine(rs[i].Error))
+			fmt.Fprintf(out, "  %s round %d (%s%s): %s\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second), turns, firstLine(rs[i].Error))
 			feedback = "Lean rejected it. Your text in the file, with line numbers:\n\n" +
 				numbered(leanDir, f.Rel, goals[i]) + "\nLean's errors:\n\n" + prover.Errors(text, f.Rel, 12000)
 			if rs[i].Error != "" && !strings.Contains(feedback, "error") {
@@ -163,6 +183,17 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 
 var declRe = regexp.MustCompile(`(?m)^(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+)*(?:def|abbrev|theorem|lemma|structure|inductive|instance)\s+([^\s:({\[]+)`)
 
+// loopPaths are LoopPaths of the goal's function and spec.
+func loopPaths(report *contract.ModelReport, fid, sid int, spec bool) string {
+	var out string
+	for _, f := range report.Funcs {
+		if f.ID == fid || spec && f.ID == sid {
+			out += LoopPaths(f)
+		}
+	}
+	return out
+}
+
 // declared are the names the preludes of the goals other than i declare.
 func declared(goals []prover.Goal, i int) []string {
 	var out []string
@@ -175,6 +206,61 @@ func declared(goals []prover.Goal, i int) []string {
 		}
 	}
 	return out
+}
+
+// LoopPaths describes the loops of a function for the prompt: for each
+// loop header, the paths of blocks from it until one reaches a loop header
+// (its own back edge, or another loop) or a block with no successor (a
+// return or a panic). Each block on a path is one wp_step in the proof.
+func LoopPaths(f contract.ModelFunc) string {
+	if len(f.LoopHeaders) == 0 || len(f.Succs) == 0 {
+		return ""
+	}
+	head := map[int]bool{}
+	for _, h := range f.LoopHeaders {
+		head[h] = true
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "f%d (%s): loop headers %v.\n", f.ID, f.Name, f.LoopHeaders)
+	const limit = 24
+	for _, h := range f.LoopHeaders {
+		var paths []string
+		var walk func(path []int)
+		walk = func(path []int) {
+			if len(paths) >= limit {
+				return
+			}
+			last := path[len(path)-1]
+			var succs []int
+			if last < len(f.Succs) {
+				succs = f.Succs[last]
+			}
+			if len(path) > 1 && head[last] || len(succs) == 0 {
+				end := "returns or panics"
+				switch {
+				case len(path) > 1 && last == h:
+					end = "back edge to this header: the invariant again"
+				case len(path) > 1 && head[last]:
+					end = fmt.Sprintf("reaches header %d: that loop's invariant", last)
+				}
+				var parts []string
+				for _, x := range path {
+					parts = append(parts, fmt.Sprint(x))
+				}
+				paths = append(paths, fmt.Sprintf("  %s  (%s)", strings.Join(parts, " → "), end))
+				return
+			}
+			for _, s := range succs {
+				if slices.Contains(path[1:], s) {
+					continue
+				}
+				walk(append(append([]int{}, path...), s))
+			}
+		}
+		walk([]int{h})
+		fmt.Fprintf(&b, "Paths from header %d:\n%s\n", h, strings.Join(paths, "\n"))
+	}
+	return b.String()
 }
 
 // goalStatement is the theorem a prompt shows for goal g.
