@@ -49,9 +49,12 @@ held, through nested loops and writes to the slice. They rest on
 interpreter with a cut-point rule for loops (an inner loop is proved by
 induction on its fuel inside the outer loop's step), and calls through
 the callee's contract (`wpFun`: `Max3` calls `Max2` twice and is proved
-from `Max2`'s theorem, not by unfolding it). Still missing: the automation that would let the pipeline write
-these proofs (block walking is mechanical; loop invariants are the agent's
-part), and termination (the theorems are about runs that end).
+from `Max2`'s theorem, not by unfolding it). The block walking is
+tactics (`Go2Lean.Proof.Tactic`): `wp_auto` proves a loop-free function
+with no hand-written step (`Max2`, and `Max3` given `Max2`'s contract),
+and `wp_step` takes one block inside a loop proof. Still missing: the
+pipeline writing the theorems, loop invariants (the agent's part), and
+termination (the theorems are about runs that end).
 
 ## 2. Under-approximations are not tracked mechanically
 

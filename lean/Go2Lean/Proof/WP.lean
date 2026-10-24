@@ -160,6 +160,16 @@ theorem wpPtN_of_block {n fid b : Nat} {fn : GoSSA.Func} {blk : GoSSA.Block}
         | outOfFuel => simp
       | _ => rw [ht] at h; exact h.elim
 
+/-- One block of a walk whose fuel is a variable: out of fuel, or the block
+unfolded with one fuel less (`wp_step`). -/
+theorem wpPtN_step {n fid b : Nat} {fn : GoSSA.Func} {blk : GoSSA.Block}
+    (hf : p.funcs[fid]? = some fn) (hb : fn.blocks[b]? = some blk)
+    {Q : Val → HState Val → Prop} {env : Env Val} {s : HState Val}
+    (h : ∀ m, n = m + 1 → wpBlockN p or hv m fid fn b blk Q env s) : wpPtN p or hv n ⟨fid, b⟩ Q env s := by
+  cases n with
+  | zero => exact wpPtN_zero hf
+  | succ m => exact wpPtN_of_block hf hb (h m rfl)
+
 /-- A callee's partial correctness from its entry block is its contract
 for every call: `wpFun` on the arguments, bound to its parameters. -/
 theorem wpFun_of_wpPt {f : Nat} {fn : GoSSA.Func} (hf : p.funcs[f]? = some fn)
