@@ -791,7 +791,12 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     if let some b := specExit prop o s then exits := bump exits b
     if o.moot prop then
       moots := moots + 1
-      if let some site := s.stuck then stuckSites := bump stuckSites site
+      if let some site := s.stuck then
+        -- Where: the function and block the run stopped in, when known.
+        let place := match s.panicAt with
+          | some w => if w.startsWith "@" then (w.takeWhile (· != ':')).toString ++ ": " else ""
+          | none => ""
+        stuckSites := bump stuckSites (place ++ site)
   if let some j := fallback then
     IO.println (j.setObjVal! "havoc_dependent" true).compress
     return

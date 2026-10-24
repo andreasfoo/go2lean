@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/sandbox"
@@ -429,7 +430,7 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[
 			flags = []string{"-race"}
 		}
 	}
-	buildOut, exit, err := sandbox.BuildTest(root, pkg, pkgDir, files, bin, flags...)
+	buildOut, exit, err := sandbox.BuildTest(root, testPath(pkg), pkgDir, files, bin, flags...)
 	if err != nil {
 		return nil, "", 0, "", "", err
 	}
@@ -442,9 +443,9 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[
 			return nil, "", 0, "", "", err
 		}
 	}
-	cmdLine := "go test -count=1 -v -run '" + run + "' " + pkg
+	cmdLine := "go test -count=1 -v -run '" + run + "' " + testPath(pkg)
 	if len(flags) > 0 {
-		cmdLine = "go test -race -count=1 -v -run '" + run + "' " + pkg
+		cmdLine = "go test -race -count=1 -v -run '" + run + "' " + testPath(pkg)
 	}
 	results := parseResults(stdout)
 	if len(results) == 0 {
@@ -647,7 +648,7 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 		if err := os.WriteFile(filepath.Join(pocDir, testName), []byte(File(pkgName, p.imps, []string{p.fn})), 0o644); err != nil {
 			return err
 		}
-		cmd := "go test -count=1 -v -run '^TestGo2LeanPoC_" + p.cx.ID + "$' " + p.target.Package
+		cmd := "go test -count=1 -v -run '^TestGo2LeanPoC_" + p.cx.ID + "$' " + testPath(p.target.Package)
 		if p.race {
 			cmd = strings.Replace(cmd, "go test ", "go test -race ", 1)
 		}
@@ -908,6 +909,14 @@ func goList(root, pkg string) (dir, name string, err error) {
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
+		// An external test package (package x_test) is not importable: its
+		// directory is the base package's, and the harness joins x_test.
+		if base, ok := strings.CutSuffix(pkg, "_test"); ok {
+			if dir, name, berr := goList(root, base); berr == nil {
+				xtestBase.Store(pkg, base)
+				return dir, name + "_test", nil
+			}
+		}
 		return "", "", fmt.Errorf("go list %s: %w", pkg, err)
 	}
 	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
@@ -915,6 +924,18 @@ func goList(root, pkg string) (dir, name string, err error) {
 		return "", "", fmt.Errorf("go list %s: unexpected output %q", pkg, out)
 	}
 	return parts[0], parts[1], nil
+}
+
+// xtestBase maps an external test package's path to its directory's
+// package path (what go test builds), as goList found it.
+var xtestBase sync.Map
+
+// testPath is the package path go test builds for target package pkg.
+func testPath(pkg string) string {
+	if base, ok := xtestBase.Load(pkg); ok {
+		return base.(string)
+	}
+	return pkg
 }
 
 // frameRe matches a stack frame's file:line.

@@ -107,7 +107,7 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 	if errs := loadErrors(loaded); len(errs) > 0 {
 		return nil, "", fmt.Errorf("packages %s do not load:\n  %s", strings.Join(patterns, " "), strings.Join(errs, "\n  "))
 	}
-	pkgs := selectVariant(loaded)
+	pkgs := selectVariant(loaded, opts.Tests)
 	if len(pkgs) == 0 {
 		return nil, "", fmt.Errorf("patterns %s matched no packages", strings.Join(patterns, " "))
 	}
@@ -1159,12 +1159,12 @@ func loadErrors(loaded []*packages.Package) []string {
 }
 
 // selectVariant keeps the internal test variant of each package when one was
-// loaded, else the plain package; external test packages and test mains are
-// dropped.
-func selectVariant(loaded []*packages.Package) []*packages.Package {
+// loaded, else the plain package; test mains are dropped, and external test
+// packages (package x_test) too unless their tests are targets.
+func selectVariant(loaded []*packages.Package, xtests bool) []*packages.Package {
 	best := map[string]*packages.Package{}
 	for _, p := range loaded {
-		if strings.HasSuffix(p.PkgPath, "_test") || strings.HasSuffix(p.PkgPath, ".test") {
+		if strings.HasSuffix(p.PkgPath, ".test") || (strings.HasSuffix(p.PkgPath, "_test") && !xtests) {
 			continue
 		}
 		isTestVariant := strings.HasSuffix(p.ID, ".test]")
@@ -2445,6 +2445,13 @@ func (t *fnState) instr(b *ssa.BasicBlock, in ssa.Instruction) error {
 	case *ssa.FieldAddr:
 		if t.prog.tableRoot(x) {
 			return nil // read through by the load (tableLoad)
+		}
+		if isTestingType(x.X.Type()) {
+			// &t.common for a promoted method of the test handle (t.Error):
+			// the handle is the harness's, opaque in the model, and the
+			// calls on it are ignored, so its fields are a placeholder.
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Const{V: ir.UnitVal{}}})
+			return nil
 		}
 		p, err := t.val(x.X)
 		if err != nil {

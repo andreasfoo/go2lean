@@ -31,7 +31,14 @@ const ControllerFile = "zz_go2lean_replay.go"
 func Rewrite(root, pkg string) (map[string][]byte, error) {
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax |
 		packages.NeedTypes | packages.NeedTypesInfo, Tests: true, Dir: root}
-	pkgs, err := packages.Load(cfg, pkg)
+	load := pkg
+	if base, ok := strings.CutSuffix(pkg, "_test"); ok {
+		// An external test package loads through its directory's package.
+		if probe, err := packages.Load(&packages.Config{Mode: packages.NeedName, Dir: root}, pkg); err != nil || len(probe) == 0 || len(probe[0].Errors) > 0 {
+			load = base
+		}
+	}
+	pkgs, err := packages.Load(cfg, load)
 	if err != nil {
 		return nil, err
 	}

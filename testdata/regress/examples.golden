@@ -28,6 +28,8 @@ confirmed closures_last_nopanic
 proved closures_negative_nopanic
 exhausted closures_total_nopanic
 exhausted mut=3/4 closures_total_spectotal
+exhausted conc_addbefore_nopanic
+confirmed conc_addinside_nopanic
 confirmed conc_addmore_nopanic
 exhausted conc_atomiccount_nopanic
 confirmed conc_bump_nopanic

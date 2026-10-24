@@ -82,7 +82,12 @@ def advance (p : Prog) (or : Oracle) (h : Havoc Val) : List Frame → HState Val
     | none => (.panicked .modelStuck, s)
     | some blk =>
       match execInstrs (Op := Go2Lean.GoSSA.Op) or h true blk.instrs.toList fr.env s with
-      | (.panic k, s) => (.panicked k, s)
+      | (.panic k, s) =>
+        -- Name the function and block (once: the innermost site).
+        let s := match s.panicAt with
+          | some site => if site.startsWith "@" then s else { s with panicAt := some s!"@{fr.fn.name}#{fr.bid}: {site}" }
+          | none => { s with panicAt := some s!"@{fr.fn.name}#{fr.bid}" }
+        (.panicked k, s)
       | (.outOfFuel, s) => (.outOfFuel, s)
       | (.ok env, s) =>
         let goto := fun (b : BlockId) (env : Env Val) (args : List Var) =>
@@ -615,6 +620,25 @@ def checkAccess (s : HState Val) (vc : Array Nat) (g : Nat) (k : Nat × List Nat
     let entry := if write then (some (g, clk, atomic), []) else (w, (g, clk, atomic) :: rs.filter (·.1 != g))
     .ok { s with conc.shadow := (k, entry) :: s.conc.shadow.filter (·.1 != k) }
 
+/-- Go's race annotations of `sync.WaitGroup`, as accesses to a location of
+its own next to the counter: an `Add` that raises the counter from zero
+reads it, a `Wait` that finds the counter above zero (and blocks) writes
+it, so the two race unless ordered (an `Add` concurrent with a `Wait`).
+The fired operation of goroutine `g` (before the step) and the one `g'`
+arrives at (after it), with the heap after the step. -/
+def wgAccesses (heap : Heap Val) (g g' : Gor) : List (Val × Nat) × List (Val × Nat) :=
+  let sema := fun (p : Val) => match p with
+    | .ptr r path => some (Val.ptr r (path ++ [4294967295]))
+    | _ => none
+  let add := match pendingSync g with
+    | some (.wgAdd, [p, .int _ d]) =>
+      if d.toInt > 0 && (wordAt heap p : Int) == d.toInt then (sema p).toList.map (·, 0) else []
+    | _ => []
+  let wait := match pendingSync g' with
+    | some (.wgWait, [p]) => if wordAt heap p > 0 then (sema p).toList.map (·, 1) else []
+    | _ => []
+  (add, wait)
+
 /-- After goroutine `i` stepped from `gs` to `gs'` (firing `name`, completing
 `partners`): its synchronisation, then its accesses, in order. -/
 def raceStep (gs gs' : Array Gor) (i : Nat) (name : String) (partners : List Nat) (s : HState Val) :
@@ -645,7 +669,10 @@ def raceStep (gs gs' : Array Gor) (i : Nat) (name : String) (partners : List Nat
           match checkAccess s vc i k (kind == 1 || kind == 5) (kind ≥ 4) with
           | .ok s => go rest vc s
           | .error e => .error e
-  match go s.conc.acc.toList (vcOf gs' i) s with
+  let (wgAdd, wgWait) := match gs[i]?, gs'[i]? with
+    | some g, some g' => wgAccesses s.heap g g'
+    | _, _ => ([], [])
+  match go (wgAdd ++ s.conc.acc.toList ++ wgWait) (vcOf gs' i) s with
   | .ok (vc, s) => .ok (gs'.modify i fun g => { g with vc }, { s with conc.acc := #[] })
   | .error e => .error e
 
