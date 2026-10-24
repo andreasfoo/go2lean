@@ -27,7 +27,10 @@ model gap, fixed since and reported separately) and
 [gobwas/glob](../docs/eval/glob.md) (6 new bugs and 1 known, all from the
 agent's specs or its reading of the source; the most serious one, a wrong
 match, was found by reading and reached by no search; templates again
-found none). The 85 tingly-box findings
+found none) and [concurrent code](../docs/eval/conc.md) (eapache/go-resiliency
+and patrickmn/go-cache: every concurrency result confirmed was real, the
+one bug, a data race in a package's own test, new, and found as well by
+`go test -race`; the run found two frontend bugs, fixed since). The 85 tingly-box findings
 were triaged by hand ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box)).
 
 ## Ground truth
