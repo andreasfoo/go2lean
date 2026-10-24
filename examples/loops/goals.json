@@ -1,0 +1,8 @@
+[
+  {"func": "Clamp", "name": "Clamp_range", "post": "∃ m, ret = .int 64 m ∧ (lo.sle hi → lo.sle m ∧ m.sle hi)"},
+  {"func": "Clamp", "spec": "SpecClamp"},
+  {"func": "ClampAll", "spec": "SpecClampAll"},
+  {"func": "HasDuplicate", "post": "ret = .bool true → ∃ (i j : Nat) (hi : i < xs.length) (hj : j < xs.length), i < j ∧ xs[i] = xs[j]"},
+  {"func": "BubbleSort", "spec": "SpecBubbleSortSorted"},
+  {"func": "BubbleSort", "name": "BubbleSort_perm", "post": "∃ ys : List (BitVec 64), s'.heap[a_ref]? = some (.arr (ys.map (.int 64))) ∧ ys.Perm a"}
+]

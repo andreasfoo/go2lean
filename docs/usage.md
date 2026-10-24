@@ -92,9 +92,13 @@ go2lean prove   [-workspace out] -goals goals.json | -func F -post P  [-llm clau
 `prove` states, for each goal, the function's contract as a Lean theorem
 (every run that ends returns without panicking, in a state satisfying the
 postcondition, for every input) and proves it, kernel only. A goal is a
-function and a postcondition in Lean over the parameters, `ret` and `s'`
-(`examples/proofs/goals.json`); goals are proved in order, each with the
-earlier ones as contracts at its calls. Loop-free functions are proved
+function and a postcondition: in Lean over the parameters, `ret` and `s'`
+(`"post"`), or one of the function's `go2lean:spec` functions (`"spec"`),
+which is then run in the model on the arguments and the result, so the
+theorem is about the same property the search checks
+(`examples/proofs/goals.json`, `examples/loops/goals.json`). Goals are
+proved in order, each with the earlier ones as contracts at its calls; a
+goal's `"name"` names its theorem. Loop-free functions are proved
 with no proof text; a function with loops needs an invariant per loop.
 With `-llm`, an agent writes them: it answers with invariants and a proof,
 Lean checks, and its errors go back for up to `-rounds` attempts

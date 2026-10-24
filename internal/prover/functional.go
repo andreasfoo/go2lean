@@ -26,7 +26,16 @@ import (
 // before it as contracts.
 type Goal struct {
 	Func string `json:"func"`
-	Post string `json:"post"`
+	// Name is the theorem's name; default the spec's name, or Func_spec.
+	Name string `json:"name,omitempty"`
+	Post string `json:"post,omitempty"`
+	// Spec names a `go2lean:spec` function of Func to take as the
+	// postcondition instead of Post: the spec, run in the model on the
+	// arguments and the result from the state the run ends in, returns
+	// true whenever it returns (SpecPost). The theorem is then about the
+	// same property the search checks, with no translation by hand.
+	Spec    string `json:"spec,omitempty"`
+	SpecFid int    `json:"-"` // the spec's model id, set by the caller (SpecPost)
 	// Prelude holds definitions and lemmas the proof uses (invariants),
 	// written before the theorem; Proof is its tactic block (default:
 	// wp_auto with the earlier goals' contracts).
@@ -85,8 +94,33 @@ func statement(abi *contract.ABI, fid int, name, post, prog string) (string, err
 		}
 	}
 	binders = append(binders, "(s : HState Val)")
+	if post == "" {
+		return "", fmt.Errorf("%s: no postcondition", abi.GoFunc)
+	}
 	return fmt.Sprintf("theorem %s %s\n    %s :\n    _root_.Go2Lean.GoSSA.WP.wpFun %s or0 h0 %d [%s]\n      (fun ret s' => %s) s",
 		name, strings.Join(binders, " "), strings.Join(hyps, " "), prog, fid, strings.Join(args, ", "), post), nil
+}
+
+// SpecPost is the postcondition a Go spec gives (Goal.Spec): the spec's
+// run on the arguments, then the result (when the function has one), from
+// the state the function's run ended in, returns true if it ends. module
+// is the model's Lean module and sid the spec's model id.
+func SpecPost(abi *contract.ABI, module string, sid int) (string, error) {
+	st, err := statement(abi, 0, "_", "True", "prog")
+	if err != nil {
+		return "", err
+	}
+	// The argument list of the statement, then ret.
+	i := strings.Index(st, " 0 [")
+	j := strings.Index(st, "]\n")
+	args := st[i+4 : j]
+	if len(abi.Results) == 1 {
+		if args != "" {
+			args += ", "
+		}
+		args += "ret"
+	}
+	return fmt.Sprintf("_root_.Go2Lean.GoSSA.WP.wpFun _root_.%s.prog or0 h0 %d [%s] (fun r _ => r = .bool true) s'", module, sid, args), nil
 }
 
 // reserved are the names the statement binds itself and the Lean keywords
@@ -111,7 +145,15 @@ func binderNames(abi *contract.ABI) []string {
 }
 
 // TheoremName is the name of a goal's theorem.
-func TheoremName(fn string) string { return ident.ReplaceAllString(fn, "_") + "_spec" }
+func TheoremName(g Goal) string {
+	switch {
+	case g.Name != "":
+		return ident.ReplaceAllString(g.Name, "_")
+	case g.Spec != "":
+		return ident.ReplaceAllString(g.Spec, "_")
+	}
+	return ident.ReplaceAllString(g.Func, "_") + "_spec"
+}
 
 // File is a written FunctionalFile: its path relative to the Lean project,
 // and for each goal the lines (1-based, inclusive) of its check.
@@ -147,7 +189,13 @@ def h0 : Havoc Val := fun _ _ => .unit
 
 `, report.LeanModule, report.Package, ident.ReplaceAllString(contract.PackageKey(report.Package), "_"))
 	seen := map[int]bool{}
-	for _, id := range fids {
+	lookups := append([]int{}, fids...)
+	for _, g := range goals {
+		if g.Spec != "" {
+			lookups = append(lookups, g.SpecFid)
+		}
+	}
+	for _, id := range lookups {
 		if !seen[id] {
 			seen[id] = true
 			fmt.Fprintf(&b, "theorem prog_f%[1]d : prog.funcs[%[1]d]? = some f%[1]d := rfl\n", id)
@@ -158,8 +206,12 @@ def h0 : Havoc Val := fun _ _ => .unit
 		proof := g.Proof
 		if proof == "" {
 			proof = AutoProof(fids[i], before)
+			if g.Spec != "" {
+				// What wp_auto leaves at each return is the spec's run.
+				proof += fmt.Sprintf("\n  all_goals (apply wpFun_of_wpPt prog_f%[1]d; wp_auto prog_f%[1]d [f%[1]d])", g.SpecFid)
+			}
 		}
-		st, err := statement(abis[i], fids[i], TheoremName(g.Func), g.Post, "_root_."+report.LeanModule+".prog")
+		st, err := statement(abis[i], fids[i], TheoremName(g), g.Post, "_root_."+report.LeanModule+".prog")
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +219,7 @@ def h0 : Havoc Val := fun _ _ => .unit
 			fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(g.Prelude))
 		}
 		fmt.Fprintf(&b, "\n%s := by\n%s\n", st, proof)
-		before = append(before, TheoremName(g.Func))
+		before = append(before, TheoremName(g))
 	}
 	ns := "Go2Lean.Proofs.Functional." + ident.ReplaceAllString(contract.PackageKey(report.Package), "_")
 	fmt.Fprintf(&b, "\nend %s\n", ns)
@@ -181,8 +233,8 @@ def h0 : Havoc Val := fun _ _ => .unit
 			return nil, err
 		}
 		st = strings.Replace(st, "theorem _ ", "example ", 1)
-		st = strings.Replace(st, " or0 h0 ", fmt.Sprintf(" %[1]s.or0 %[1]s.h0 ", ns), 1)
-		ex := fmt.Sprintf("%s :=\n  @%s.%s %s\n", st, ns, TheoremName(g.Func), strings.Join(binderNames(abis[i]), " "))
+		st = strings.ReplaceAll(st, " or0 h0 ", fmt.Sprintf(" %[1]s.or0 %[1]s.h0 ", ns))
+		ex := fmt.Sprintf("%s :=\n  @%s.%s %s\n", st, ns, TheoremName(g), strings.Join(binderNames(abis[i]), " "))
 		b.WriteString("\n")
 		start := strings.Count(b.String(), "\n") + 1
 		b.WriteString(ex)
@@ -190,7 +242,7 @@ def h0 : Havoc Val := fun _ _ => .unit
 	}
 	b.WriteString("\nend Check\n\n")
 	for _, g := range goals {
-		fmt.Fprintf(&b, "#print axioms %s.%s\n", ns, TheoremName(g.Func))
+		fmt.Fprintf(&b, "#print axioms %s.%s\n", ns, TheoremName(g))
 	}
 	f.Rel = filepath.Join("Proofs", "Functional_"+ident.ReplaceAllString(contract.PackageKey(report.Package), "_")+".lean")
 	path := filepath.Join(leanDir, f.Rel)
@@ -240,7 +292,7 @@ func CheckGoals(leanDir string, f *File, goals []Goal, budget time.Duration) ([]
 	errLines := errorLines(text, rel)
 	var rs []GoalResult
 	for i, g := range goals {
-		name := TheoremName(g.Func)
+		name := TheoremName(g)
 		r := GoalResult{Func: g.Func, Theorem: name}
 		ax := axiomsOf(text, name)
 		checked := true

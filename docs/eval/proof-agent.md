@@ -1,12 +1,14 @@
 # The proof agent on loops
 
-The first run of `go2lean prove -llm`, in which an LLM writes the loop
+Two runs of `go2lean prove -llm`, in which an LLM writes the loop
 invariants and proofs of functional theorems that go2lean states
-([#22](https://github.com/andreasfoo/go2lean/issues/22)).
+([#22](https://github.com/andreasfoo/go2lean/issues/22)): the first on
+single loops, the second on nested loops, a call in a loop, and Go specs
+as postconditions.
 
 ## Setup
 
-- **Targets**: `examples/invariants`, four functions with one loop each,
+- **Targets** (first run): `examples/invariants`, four functions with one loop each,
   written for this run, none with a hand proof anywhere in the repository:
   `CountPositive` (a count between 0 and the length), `IndexOf` (-1, or an
   index whose element is the one sought), `AllNonNeg` (true only if no
@@ -23,7 +25,7 @@ invariants and proofs of functional theorems that go2lean states
   when read again outside the namespace the answer wrote in.
 - **LLM**: the claude CLI's default model (`-llm claude-code`), no tools.
 
-## Results
+## Single loops (`examples/invariants`)
 
 | function | rounds | time | prelude, proof (lines) |
 |---|---|---|---|
@@ -46,11 +48,39 @@ run added `--effort high` and a paragraph on how a proof goes (walk every
 block of each path from the header; return or back edge); its first-round
 errors were of the same kinds, and Lean's errors were enough to fix them.
 
+## Harder loops, Go specs as postconditions (`examples/loops`)
+
+The second run, with the same LLM and settings (`-rounds 8`), on functions
+written for it: `ClampAll` (a loop calling `Clamp`), `HasDuplicate`
+(nested loops), `BubbleSort` (nested loops writing the slice). Three
+goals take a `go2lean:spec` as the postcondition: the spec runs in the
+model on the arguments and the result, so the theorem is the property the
+search checks, and the agent proves the spec's own loop too. The prompt
+also carried the first run's proofs as examples.
+
+| goal | postcondition | rounds | time | prelude, proof (lines) |
+|---|---|---|---|---|
+| `Clamp_range` | Lean | none (`wp_auto`) | | |
+| `SpecClamp` | Go spec | none (`wp_auto`) | | |
+| `SpecClampAll` | Go spec, a loop | 2 | 10 min | 204, 14 |
+| `HasDuplicate_spec` | Lean | 2 | 7 min | 130, 13 |
+| `SpecBubbleSortSorted` | Go spec, a loop | 2 | 27 min | 433, 17 |
+| `BubbleSort_perm` | Lean (`List.Perm`) | 2 | 12 min | 154, 8 |
+
+All six are proved, kernel only (`examples/loops/proofs.json`, checked
+again in CI). Two of the four failed first rounds were go2lean's: the
+check on the answer read the word "prefix" in a comment as a syntax
+command, and the agent, which sees only its own goal, reused the names
+of another goal's prelude. Both are fixed (comments are not read; the
+prompt lists the names the file already declares).
+
 ## Reading
 
 The invariants are what a person would write: `CountPositive`'s says the
 index starts at -1 (go/ssa's range loops do) and the count stays between
 0 and the index plus one; `Fill`'s, that the elements up to the index are
 `v` and the slice keeps its length. The proofs follow the worked examples
-closely, so the examples carry most of the method; functions unlike them
-(nested loops, calls inside loops, maps) are the next test.
+closely, so the examples carry most of the method. The second run shows
+it reaches past them: nested loops, a call through a contract inside a
+loop, and a sort's sortedness and permutation, each in two rounds; the
+cost is the agent's time (up to half an hour for a goal), not Lean's.

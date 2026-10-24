@@ -106,13 +106,16 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 		var proved []string
 		for j := 0; j < i; j++ {
 			if rs[j].Proved {
-				proved = append(proved, prover.TheoremName(goals[j].Func))
+				proved = append(proved, prover.TheoremName(goals[j]))
 			}
 		}
 		feedback := ""
 		for round := 1; round <= opts.Rounds; round++ {
 			user := provePrompt(opts.Library, string(model), fids[i], goals[i].Func, goalStatement(goals[i], abis[i], fids[i]), proved, feedback)
-			base := filepath.Join(logDir, fmt.Sprintf("%s-round-%d", goals[i].Func, round))
+			if taken := declared(goals, i); len(taken) > 0 {
+				user += "\n\nNames other goals' preludes already declare in the file (choose others): " + strings.Join(taken, ", ") + "\n"
+			}
+			base := filepath.Join(logDir, fmt.Sprintf("%s-round-%d", prover.TheoremName(goals[i]), round))
 			os.WriteFile(base+".prompt.md", []byte(user), 0o644)
 			start := time.Now()
 			resp, err := llm.Complete(ctx, proveSystem, user)
@@ -125,7 +128,7 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 				perr = vetProof(prelude + "\n" + proof)
 			}
 			if perr != nil {
-				fmt.Fprintf(out, "  %s round %d (%s): %v\n", goals[i].Func, round, time.Since(start).Round(time.Second), perr)
+				fmt.Fprintf(out, "  %s round %d (%s): %v\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second), perr)
 				feedback = "Your answer was not used: " + perr.Error()
 				continue
 			}
@@ -138,10 +141,10 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 			}
 			os.WriteFile(base+".lean.log", []byte(text), 0o644)
 			if rs[i].Proved {
-				fmt.Fprintf(out, "  %s round %d (%s): proved\n", goals[i].Func, round, time.Since(start).Round(time.Second))
+				fmt.Fprintf(out, "  %s round %d (%s): proved\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second))
 				break
 			}
-			fmt.Fprintf(out, "  %s round %d (%s): %s\n", goals[i].Func, round, time.Since(start).Round(time.Second), firstLine(rs[i].Error))
+			fmt.Fprintf(out, "  %s round %d (%s): %s\n", prover.TheoremName(goals[i]), round, time.Since(start).Round(time.Second), firstLine(rs[i].Error))
 			feedback = "Lean rejected it. Your text in the file, with line numbers:\n\n" +
 				numbered(leanDir, f.Rel, goals[i]) + "\nLean's errors:\n\n" + prover.Errors(text, f.Rel, 12000)
 			if rs[i].Error != "" && !strings.Contains(feedback, "error") {
@@ -158,9 +161,25 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 	return rs, nil
 }
 
+var declRe = regexp.MustCompile(`(?m)^(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+)*(?:def|abbrev|theorem|lemma|structure|inductive|instance)\s+([^\s:({\[]+)`)
+
+// declared are the names the preludes of the goals other than i declare.
+func declared(goals []prover.Goal, i int) []string {
+	var out []string
+	for j, g := range goals {
+		if j == i {
+			continue
+		}
+		for _, m := range declRe.FindAllStringSubmatch(g.Prelude, -1) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
 // goalStatement is the theorem a prompt shows for goal g.
 func goalStatement(g prover.Goal, abi *contract.ABI, fid int) string {
-	st, err := prover.Statement(abi, fid, prover.TheoremName(g.Func), g.Post)
+	st, err := prover.Statement(abi, fid, prover.TheoremName(g), g.Post)
 	if err != nil {
 		return err.Error()
 	}
@@ -224,14 +243,23 @@ func parseProof(resp string) (prelude, proof string, err error) {
 	return prelude, strings.Join(lines, "\n"), nil
 }
 
-// forbidden are the commands and terms an answer may not use: they add
-// axioms or trust the compiler, change how the statement parses, or step
-// out of the namespace the answer is written in.
-var forbidden = regexp.MustCompile(`(?m)\b(sorry|admit|axiom|axioms|native_decide|ofReduceBool|implemented_by|extern|unsafe|notation|infix|infixl|infixr|prefix|postfix|macro|macro_rules|syntax|elab|elab_rules|declare_syntax_cat|run_cmd|run_tac|run_elab|initialize|builtin_initialize|export)\b|^\s*(namespace|section|end|open\s+.*\s+renaming|#exit)\b|_root_`)
+// forbidden are what an answer may not use: terms that add axioms or
+// trust the compiler, anywhere; commands that change how the statement
+// parses, run code at elaboration, or step out of the namespace the answer
+// is written in, where a command starts. Comments are not read.
+var (
+	forbiddenTerm = regexp.MustCompile(`\b(sorry|admit|axiom|native_decide|ofReduceBool|implemented_by|extern|unsafe)\b|_root_`)
+	forbiddenCmd  = regexp.MustCompile(`(?m)^\s*(@\[[^\]]*\]\s*)?((local|scoped|private)\s+)?(notation|infix|infixl|infixr|prefix|postfix|macro|macro_rules|syntax|elab|elab_rules|declare_syntax_cat|run_cmd|run_tac|run_elab|initialize|builtin_initialize|export|namespace|section|end|#exit)\b|(?m)^\s*open\s.*\brenaming\b`)
+	lineComment   = regexp.MustCompile(`--[^\n]*`)
+	blockComment  = regexp.MustCompile(`(?s)/-.*?-/`)
+)
 
 func vetProof(text string) error {
-	if m := forbidden.FindString(text); m != "" {
-		return fmt.Errorf("the answer uses %q, which is not allowed", strings.TrimSpace(m))
+	code := lineComment.ReplaceAllString(blockComment.ReplaceAllString(text, " "), "")
+	for _, re := range []*regexp.Regexp{forbiddenTerm, forbiddenCmd} {
+		if m := re.FindString(code); m != "" {
+			return fmt.Errorf("the answer uses %q, which is not allowed", strings.TrimSpace(m))
+		}
 	}
 	return nil
 }
@@ -244,7 +272,7 @@ func numbered(leanDir, rel string, g prover.Goal) string {
 		return ""
 	}
 	lines := strings.Split(string(b), "\n")
-	name := "theorem " + prover.TheoremName(g.Func) + " "
+	name := "theorem " + prover.TheoremName(g) + " "
 	at := -1
 	for k, l := range lines {
 		if strings.HasPrefix(l, name) {
