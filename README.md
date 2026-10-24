@@ -43,7 +43,8 @@ Lean finds the inputs; `go test` is the judge.
   distinguish confirmed findings from spurious or inconclusive results.
 - **Concurrency bugs** — deadlocks, goroutine leaks and data races, found in
   the model and confirmed by `go test` (with `-race`, and the model's
-  schedule replayed when Go's scheduler does not take it).
+  schedule replayed when Go's scheduler does not take it); for small
+  configurations, a certificate that none occurs under any schedule.
 - **Optional spec-writing agent** — read source, propose and repair Go specs,
   run the pipeline, and report the verdicts. The basic pipeline needs no API key.
 

@@ -3138,8 +3138,8 @@ def accesses : Op → List Val → List (Val × Nat)
   | .appendSlice _, [s, t] => [(objOf t, 0), (objOf s, 1)]
   | .copySlice, [d, t] => [(objOf t, 0), (objOf d, 1)]
   | .bytesToStr, [b] => [(objOf b, 0)]
-  | .conc .atomicLoad, [p] => [(p, 2)]
-  | .conc .atomicStore, [p, _] => [(p, 3)]
+  | .conc .atomicLoad, [p] => [(p, 2), (p, 4)]
+  | .conc .atomicStore, [p, _] => [(p, 5), (p, 3)]
   | _, _ => []
 
 instance : Dialect Op Val Oracle where

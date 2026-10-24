@@ -3320,12 +3320,9 @@ func (t *fnState) call(x *ssa.Call) error {
 	if hasResult {
 		return t.havoc(x, "call "+name, "unmodeled-call", "")
 	}
-	if callee != nil && callee.Pkg != nil && callee.Pkg.Pkg.Path() == "sync" {
-		// Lock, Unlock, Wait: no concurrency is modelled, so a
-		// single-goroutine run loses nothing.
-		t.issue("call to %s ignored (single goroutine)", name)
-		return nil
-	}
+	// The sync operations the concurrent machine models are lowered before
+	// this (conc.go); one that reaches here (sync.Map, sync.Pool) is not
+	// modelled, so ignoring it is an under-approximation like any other.
 	t.assume("call to %s ignored (no result, effects not modelled)", name)
 	return nil
 }

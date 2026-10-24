@@ -152,3 +152,36 @@ func CountHits() int {
 	wg.Wait()
 	return hits
 }
+
+// stats counts writes atomically.
+type stats struct {
+	writes uint64
+}
+
+// SnapshotRacy counts a write atomically in one goroutine and copies the
+// stats plainly in another. Bug: a data race on writes (an atomic write and
+// a plain read are not ordered).
+func SnapshotRacy() uint64 {
+	st := &stats{}
+	done := make(chan bool)
+	go func() {
+		atomic.AddUint64(&st.writes, 1)
+		done <- true
+	}()
+	snap := *st
+	<-done
+	return snap.writes
+}
+
+// SnapshotAtomic is SnapshotRacy reading atomically. Race-free.
+func SnapshotAtomic() uint64 {
+	st := &stats{}
+	done := make(chan bool)
+	go func() {
+		atomic.AddUint64(&st.writes, 1)
+		done <- true
+	}()
+	n := atomic.LoadUint64(&st.writes)
+	<-done
+	return n
+}

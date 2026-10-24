@@ -1,9 +1,10 @@
-# Concurrency in the model (C1, C2)
+# Concurrency in the model (C1 to C3)
 
-Status, 2026-10-23: the machine, the frontend lowering and the replay stage checks
-are built (C1a), `context`, timers and `sync.Cond` (C1b), and the
-deterministic replay of the model's schedule (C1c), and data races (C2). "Built" below lists what landed and how it differs from the
-plan; the rest of the page is the plan. What other
+Status, 2026-10-24: the machine, the frontend lowering and the replay
+stage checks are built (C1a), `context`, timers and `sync.Cond` (C1b), the
+deterministic replay of the model's schedule (C1c), data races (C2), and
+the enumeration of every schedule for a certificate (C3). "Built" below
+lists what landed and how it differs from the plan; the rest of the page is the plan. What other
 projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 [related-work.md](related-work.md).
 
@@ -73,7 +74,9 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   the panic kind `data_race`, naming the location and both goroutines.
 - `sync/atomic`'s functions are `atomicLoad`/`atomicStore`, which acquire
   and release their location: no race between atomics, and an atomic
-  publishes the writes before it.
+  publishes the writes before it. An atomic access is also checked against
+  plain ones (since C3: an atomic add and a plain read of the same field
+  race, as `go test -race` says).
 - Package variables written by a function other than `init`, in a package
   that starts goroutines, are cells every goroutine shares (as the
   sync-holding ones of C1a), starting at their zero value or at a constant
@@ -90,24 +93,68 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   its `RWMutex`, a package counter) next to their race-free twins (mutex,
   atomic, channel hand-over, `RLock`).
 
+## Built (C3)
+
+- The exhaustive engine enumerates schedules: for each input whose run
+  drew from the schedule site, it reruns the input under every schedule,
+  depth first. Each draw records how many choices it had (the ready
+  goroutines, or a `select`'s ready cases; `ConcState.arity`), a schedule
+  is the prefix of choices forced through the havoc function (the first
+  option after it), and the next one advances the last draw with an
+  untried option.
+- What it certifies: a goroutine runs atomically between two
+  synchronisation points, so the choices at those points are every
+  interleaving of race-free code; the accesses in between are checked by
+  C2's race detector, which reports any two unordered ones. An input whose
+  schedules all ran, none out of fuel and with no other havoc read, is
+  certified for every schedule: a property that held on every such input
+  is `exhausted`, where before it was `exhausted_havoc` (sampled
+  schedules).
+- Bounds: 2000 schedules per input and 10,000 per property (and the
+  search budget); an input past them counts as sampled, as before, and
+  the summary says how many. There is no partial-order reduction yet, so
+  a function with many goroutines or a large input domain (`Sum` over
+  slices, `BumpAll`) stays sampled; a test or a GoKer kernel (one input)
+  is where it pays. A schedule that spins a goroutine out of fuel (a
+  polling loop) is one Go's scheduler does not keep taking: no finding,
+  no certificate.
+- The concurrent machine's fields of the run state (schedule, choice
+  counts, race detector) are one sub-structure, `ConcState`, so the
+  sequential interpreter's state stays small for the prover; the prover
+  is not tried on a function whose schedules were enumerated.
+- A certificate is only as good as the model under it, and certifying
+  every schedule made two gaps visible on GoKer, where every kernel has a
+  bug: istio 8214 races an atomic add with a plain read of the struct,
+  which C2 did not check (now it does, and the race is confirmed), and
+  istio 8144 calls `sync.Map`, whose calls were dropped as harmless "in a
+  single goroutine", a note from before C1 that recorded no assumption
+  (now an assumption: `exhausted_assuming`). Both were `exhausted_havoc`
+  before, so the sampled-schedule status had hidden them.
+- `examples/conc`: of its 27 properties that hold, 23 are now
+  `exhausted` (2 before, the rest `exhausted_havoc`); `Sum`, `BumpAll`,
+  `Poll` (a ticker: a schedule spins) and `cache.put` stay sampled.
+  `SnapshotRacy` (an atomic add against a plain copy) is a race,
+  `SnapshotAtomic` its race-free twin.
+
 ## GoKer
 
 `scripts/goker.sh <gobench> <out>` on all 103 kernels (GoBench at
 2e91eb1), each kernel's test function as the target, default search
-budget, 3 kernels at a time, 2026-10-23, with C2. The kernels are the
+budget, 3 kernels at a time, 2026-10-24, with C3. The kernels are the
 ground truth: each blocking kernel has a blocking bug its test can
 trigger; most non-blocking ones have a data race.
 
 | | blocking (68) | non-blocking (35) |
 |---|---|---|
-| bug found by the model, confirmed by `go test` | **58** (20 deadlocks, 37 leaks, 1 data race) | **25** (22 data races, 2 `closed_channel`, 1 nil dereference) |
-| found by the model, refuted by `go test` (spurious) | 2 | 3 |
-| nothing found | 8 | 7 (holds) |
+| bug found by the model, confirmed by `go test` | **59** (20 deadlocks, 37 leaks, 1 double unlock, 1 data race) | **26** (23 data races, 2 `closed_channel`, 1 nil dereference) |
+| found by the model, refuted by `go test` (spurious) | 1 | 3 |
+| nothing found | 8 | 6 (holds) |
 
 How it grew: blocking 35 with C1a alone (no `context`, timers or `Cond`;
 16 kernels got stuck on a channel the model did not know), 53 with C1b,
 when 6 findings stayed unreproduced by Go's scheduler, 59 with C1c (the
-replay of the model's schedule); non-blocking 6 before C2. A confirmed
+replay of the model's schedule); non-blocking 6 before C2, 25 with C2,
+26 with C3's atomic accesses (istio 8214). A confirmed
 finding is the real kernel deadlocking, leaking, panicking or racing,
 not the model. About 6 blocking ones (cockroach 7504, 10214, 16167, istio
 16224, serving 2137, and, depending on the run, cockroach 1462, etcd 5509
@@ -120,16 +167,18 @@ varies.
   4 kernels the race is the first bug the model meets, before the leak it
   reported with C1 (moby 27782, istio 8967, kubernetes 79631, 88331), and
   etcd 3077 (C1c's unreproduced deadlock) and etcd 8194 (C1c's spurious
-  slice bound) turn out to be races. Missed: `sync.Map` (istio 8144), a
-  package map built by its initializer (istio 16742), and istio 8214.
+  slice bound) turn out to be races, and istio 8214 (an atomic add
+  against a plain read) since atomics are accesses. Missed: `sync.Map`
+  (istio 8144, now an assumption) and a package map built by its
+  initializer (istio 16742).
 - Spurious, each rejected by the replay stage: `recover` (etcd 7443
   recovers its send on a closed channel), unmodelled `os/exec` and a
   callback (moby 18412, serving 6472), a data race the model's
   sequentially consistent steps turn into a panic before the race
-  detector sees it (kubernetes 13058), and hugo 3251: the model's
-  `sync_fatal` (a mutex from a map the model does not know) stands in for
-  the kernel's real deadlock, which shows up in one run often but not
-  always under load; confirmed in the earlier runs and alone.
+  detector sees it (kubernetes 13058). Hugo 3251 is counted confirmed
+  here but moves between runs: the model's `sync_fatal` (a mutex from a
+  map the model does not know) stands in for the kernel's real deadlock,
+  which shows up in one real run often but not always under load.
 - Not found: `fmt` calling a `String` method that takes a read lock
   (cockroach 6181), `io.ReadFull` (grpc 1275), `cond.Wait` passed as a
   func value (kubernetes 11298), a sync-holding package variable set by

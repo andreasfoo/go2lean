@@ -427,10 +427,29 @@ def describeBlocked (gs : Array Gor) : String :=
     | [] => none
   String.intercalate "; " parts
 
-def schedChoice (p : Prog) (h : Havoc Val) (s : HState Val) : Nat × HState Val :=
+/-- The next schedule choice, among `arity` options (recorded, so the
+exhaustive engine can enumerate every schedule). -/
+def schedChoice (p : Prog) (h : Havoc Val) (s : HState Val) (arity : Nat) : Nat × HState Val :=
   match p.schedSite with
-  | some site => let (v, s) := s.take h site; (valNat v, s)
+  | some site =>
+    let (v, s) := s.take h site
+    (valNat v, { s with conc.arity := s.conc.arity.push arity })
   | none => (0, s)
+
+/-- How many ways goroutine `i`'s pending operation can fire: the ready
+cases of a `select`, else one. -/
+def fireArity (heap : Heap Val) (gs : Array Gor) (i : Nat) : Nat :=
+  match gs[i]? >>= pendingSync with
+  | some (.select sends _, args) =>
+    let cases := selectCases sends args
+    let ready := (cases.zipIdx).countP fun ((send, ch, v), k) =>
+      let r := if send then fireSend heap gs i ch v (selectResult heap cases k false .unit)
+        else fireRecv heap gs i ch fun x ok => selectResult heap cases k ok x
+      match r with
+      | .blocked => false
+      | _ => true
+    max ready 1
+  | _ => 1
 
 /-- Run goroutine `i` (now able to move) to its next scheduling point. -/
 def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) (s : HState Val)
@@ -457,7 +476,7 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
                 .ok (gs.push { frames := [entryFrame callee (bound ++ args.map (f.env[·]!))], daemon := callee.daemon }, s)
               | none => .error .modelStuck
           | .sync .. =>
-            let (c, s) := schedChoice p h s
+            let (c, s) := schedChoice p h s (fireArity s.heap gs i)
             match fire s.heap gs i c with
             | .done gs heap => .ok (gs, { s with heap })
             | .blocked => .error .modelStuck
@@ -552,10 +571,10 @@ def locKey : Val → Option (Nat × List Nat)
   | _ => none
 
 def syncGet (s : HState Val) (k : Nat × List Nat) : Array Nat :=
-  ((s.syncVC.find? (·.1 == k)).map (·.2)).getD #[]
+  ((s.conc.syncVC.find? (·.1 == k)).map (·.2)).getD #[]
 
 def syncSet (s : HState Val) (k : Nat × List Nat) (v : Array Nat) : HState Val :=
-  { s with syncVC := (k, v) :: s.syncVC.filter (·.1 != k) }
+  { s with conc.syncVC := (k, v) :: s.conc.syncVC.filter (·.1 != k) }
 
 /-- The object a fired operation synchronises on: its first argument, or
 the case a select took. -/
@@ -574,26 +593,27 @@ def syncObj (g : Gor) (name : String) : Option (Nat × List Nat) :=
 def overlaps (a b : Nat × List Nat) : Bool :=
   a.1 == b.1 && (a.2.isPrefixOf b.2 || b.2.isPrefixOf a.2)
 
-/-- Goroutine `g` with clock `vc` reads or writes `k`: the race it makes, or
-the shadow state with the access added. -/
-def checkAccess (s : HState Val) (vc : Array Nat) (g : Nat) (k : Nat × List Nat) (write : Bool) :
+/-- Goroutine `g` with clock `vc` reads or writes `k` (atomically or not):
+the race it makes, or the shadow state with the access added. Two atomic
+accesses never race. -/
+def checkAccess (s : HState Val) (vc : Array Nat) (g : Nat) (k : Nat × List Nat) (write atomic : Bool) :
     Except String (HState Val) :=
-  let unordered := fun (h c : Nat) => h != g && c > vcGet vc h
-  let race := s.shadow.findSome? fun (k', w, rs) =>
+  let unordered := fun (h c : Nat) (a : Bool) => h != g && c > vcGet vc h && !(atomic && a)
+  let race := s.conc.shadow.findSome? fun (k', w, rs) =>
     if !overlaps k k' then none else
     let byWrite := match w with
-      | some (h, c) => if unordered h c then some (h, "wrote") else none
+      | some (h, c, a) => if unordered h c a then some (h, "wrote") else none
       | none => none
-    let byRead := if write then rs.findSome? fun (h, c) => if unordered h c then some (h, "read") else none else none
+    let byRead := if write then rs.findSome? fun (h, c, a) => if unordered h c a then some (h, "read") else none else none
     byWrite <|> byRead
   match race with
   | some (h, what) =>
     .error s!"data race on object {k.1} at {k.2}: goroutine {g} {if write then "writes" else "reads"} it, goroutine {h} {what} it, neither ordered before the other"
   | none =>
     let clk := vcGet vc g
-    let (w, rs) := ((s.shadow.find? (·.1 == k)).map (·.2)).getD (none, [])
-    let entry := if write then (some (g, clk), []) else (w, (g, clk) :: rs.filter (·.1 != g))
-    .ok { s with shadow := (k, entry) :: s.shadow.filter (·.1 != k) }
+    let (w, rs) := ((s.conc.shadow.find? (·.1 == k)).map (·.2)).getD (none, [])
+    let entry := if write then (some (g, clk, atomic), []) else (w, (g, clk, atomic) :: rs.filter (·.1 != g))
+    .ok { s with conc.shadow := (k, entry) :: s.conc.shadow.filter (·.1 != k) }
 
 /-- After goroutine `i` stepped from `gs` to `gs'` (firing `name`, completing
 `partners`): its synchronisation, then its accesses, in order. -/
@@ -622,11 +642,11 @@ def raceStep (gs gs' : Array Gor) (i : Nat) (name : String) (partners : List Nat
         | 2 => go rest (vcJoin vc (syncGet s k)) s
         | 3 => go rest (vcTick vc i) (syncSet s k (vcJoin (syncGet s k) vc))
         | _ =>
-          match checkAccess s vc i k (kind == 1) with
+          match checkAccess s vc i k (kind == 1 || kind == 5) (kind ≥ 4) with
           | .ok s => go rest vc s
           | .error e => .error e
-  match go s.acc.toList (vcOf gs' i) s with
-  | .ok (vc, s) => .ok (gs'.modify i fun g => { g with vc }, { s with acc := #[] })
+  match go s.conc.acc.toList (vcOf gs' i) s with
+  | .ok (vc, s) => .ok (gs'.modify i fun g => { g with vc }, { s with conc.acc := #[] })
   | .error e => .error e
 
 /-- Schedule until no goroutine can move. `outOfFuel` when the steps run out
@@ -650,14 +670,14 @@ def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
         else (.panic .deadlock, { s with panicAt := some (describeBlocked gs) })
       | none => (.panic .modelStuck, s)
     else
-      let (c, s) := schedChoice p h s
+      let (c, s) := schedChoice p h s cands.length
       let i := cands[c % cands.length]!
       -- The case a select takes: stepGor draws the same choice from `s`.
-      let name := (selectTaken s.heap gs i (schedChoice p h s).1).getD (pendingName gs[i]!)
-      match stepGor p or h gs i { s with acc := #[] } stepFuel with
+      let name := (selectTaken s.heap gs i (schedChoice p h s 1).1).getD (pendingName gs[i]!)
+      match stepGor p or h gs i { s with conc.acc := #[] } stepFuel with
       | (.ok (gs', s), _) =>
         let partners := completedBy gs gs' i
-        let s := { s with sched := s.sched.push (i, name, partners) }
+        let s := { s with conc.sched := s.conc.sched.push (i, name, partners) }
         match raceStep gs gs' i name partners s with
         | .ok (gs', s) => schedule p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0)
         | .error e => (.panic .dataRace, { s with panicAt := some e })
