@@ -41,13 +41,27 @@ def wpPtN (n : Nat) (pt : Pt) (Q : Val → HState Val → Prop) (env : Env Val) 
     | (.panic _, _) => False
     | (.outOfFuel, _) => True
 
+/-- Partial correctness of a call: running function `f` on `args` from
+state `s`, with any fuel, runs out of fuel or returns a value satisfying
+`Q`; it never panics (a callee the model gets stuck in included: the
+caller's fallback block is not followed). -/
+def wpFun (f : Nat) (args : List Val) (Q : Val → HState Val → Prop) (s : HState Val) : Prop :=
+  ∀ fuel, match runFunc p or hv false f args s fuel with
+    | (.ok v, s') => Q v s'
+    | (.panic _, _) => False
+    | (.outOfFuel, _) => True
+
 /-- What a block's terminator requires once its instructions ran, with the
-successors under fuel bound `n`. A call makes the point unprovable for now:
-callee contracts are the next step. -/
+successors under fuel bound `n`. A call requires the callee's partial
+correctness with the rest of the block's continuation as postcondition: a
+contract proved for the callee (`wpFun_of_wpPt`) discharges it. -/
 def wpTermN (n : Nat) (fid : Nat) (fn : GoSSA.Func) (b : Nat) (t : Term)
     (Q : Val → HState Val → Prop) (env : Env Val) (s : HState Val) : Prop :=
   match t with
   | .ret v => Q env[v]! { s with exit := some (fn.name, b) }
+  | .call f args dst next nargs _ =>
+    wpFun p or hv f (args.map (env[·]!)) (fun v s' =>
+      wpPtN p or hv n ⟨fid, next⟩ Q (enter fn next (env.set! dst v) nargs) s') s
   | .jump b' args => wpPtN p or hv n ⟨fid, b'⟩ Q (enter fn b' env args) s
   | .br c t ta f fa =>
     match Dialect.toBool (Op := GoSSA.Op) env[c]! with
@@ -130,7 +144,48 @@ theorem wpPtN_of_block {n fid b : Nat} {fn : GoSSA.Func} {blk : GoSSA.Block}
         | some bv =>
           rw [hc] at h
           cases bv <;> (dsimp only at h ⊢; unfold wpPtN at h; simp only [hf] at h; exact h m hm)
+      | call f args dst next nargs fb =>
+        rw [ht] at h
+        dsimp only at h ⊢
+        unfold wpFun at h
+        have hc := h m
+        rcases hr : runFunc p or hv false f (args.map (env'[·]!)) s' m with ⟨r', s''⟩
+        rw [hr] at hc
+        cases r' with
+        | ok v =>
+          dsimp only at hc ⊢
+          unfold wpPtN at hc; simp only [hf] at hc
+          exact hc m hm
+        | panic k => exact hc.elim
+        | outOfFuel => simp
       | _ => rw [ht] at h; exact h.elim
+
+/-- A callee's partial correctness from its entry block is its contract
+for every call: `wpFun` on the arguments, bound to its parameters. -/
+theorem wpFun_of_wpPt {f : Nat} {fn : GoSSA.Func} (hf : p.funcs[f]? = some fn)
+    {args : List Val} {Q : Val → HState Val → Prop} {s : HState Val}
+    (h : wpPt p or hv ⟨f, fn.entry⟩ Q (bindParams (Array.replicate fn.nvals default) fn.params args) s) :
+    wpFun p or hv f args Q s := by
+  intro fuel
+  unfold wpPt at h; simp only [hf] at h
+  cases fuel with
+  | zero => simp [runFunc]
+  | succ m =>
+    have hm := h m
+    simp only [runFunc, hf]
+    exact hm
+
+/-- A weaker postcondition. -/
+theorem wpFun_mono {f : Nat} {args : List Val} {Q Q' : Val → HState Val → Prop} {s : HState Val}
+    (hq : ∀ v s', Q v s' → Q' v s') (h : wpFun p or hv f args Q s) : wpFun p or hv f args Q' s := by
+  intro fuel
+  have := h fuel
+  rcases hr : runFunc p or hv false f args s fuel with ⟨r, s'⟩
+  rw [hr] at this
+  cases r with
+  | ok v => exact hq v s' this
+  | panic k => exact this.elim
+  | outOfFuel => simp
 
 /-- Unfold one block without a fuel bound (for code before the first loop). -/
 theorem wpPt_of_block {fid b : Nat} {fn : GoSSA.Func} {blk : GoSSA.Block}

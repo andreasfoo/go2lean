@@ -33,19 +33,20 @@ theorem prog_f0 : prog.funcs[0]? = some f0 := rfl
 theorem prog_f1 : prog.funcs[1]? = some f1 := rfl
 theorem prog_f2 : prog.funcs[2]? = some f2 := rfl
 theorem prog_f3 : prog.funcs[3]? = some f3 := rfl
+theorem prog_f4 : prog.funcs[4]? = some f4 := rfl
 
 /-- Unfold the instructions and terminator of the block in the goal. -/
 macro "wp_simp" : tactic => `(tactic| simp [wpBlockN, wpTermN, execInstrs, enter, bindParams,
-    f0, f1, f2, f3,
+    f0, f1, f2, f3, f4,
     Dialect.denote, Dialect.toBool, Dialect.assumption, Go2Lean.GoSSA.assumption, denote,
     Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds,
     Array.size_setIfInBounds, Array.getElem?_replicate, Array.size_replicate])
 
 /-! ## `Max2`: no loop -/
 
-theorem max2_correct (a b : BitVec 64) :
+theorem max2_correct (a b : BitVec 64) (s : HState Val) :
     wp ⟨3, 0⟩ (fun v _ => ∃ m, v = .int 64 m ∧ b.sle m ∧ a.sle m)
-      (bindParams (Array.replicate 3 default) [0, 1] [.int 64 a, .int 64 b]) {} := by
+      (bindParams (Array.replicate 3 default) [0, 1] [.int 64 a, .int 64 b]) s := by
   apply wpPt_of_block prog_f3 rfl
   intro n
   wp_simp
@@ -64,6 +65,37 @@ theorem max2_correct (a b : BitVec 64) :
       simp only [BitVec.sle, BitVec.slt, decide_eq_true_eq, decide_eq_false_iff_not,
         Option.some.injEq] at *; grind
   · simp_all
+
+/-! ## `Max3`: calls, through `Max2`'s contract -/
+
+/-- `Max2`'s contract for a call: from any state, with any two integers. -/
+theorem max2_spec (a b : BitVec 64) (s : HState Val) :
+    wpFun prog or0 h0 3 [.int 64 a, .int 64 b]
+      (fun v _ => ∃ m, v = .int 64 m ∧ b.sle m ∧ a.sle m) s :=
+  wpFun_of_wpPt prog_f3 (max2_correct a b s)
+
+theorem max3_correct (a b c : BitVec 64) :
+    wp ⟨4, 0⟩ (fun v _ => ∃ m, v = .int 64 m ∧ a.sle m ∧ b.sle m ∧ c.sle m)
+      (bindParams (Array.replicate 5 default) [0, 1, 2] [.int 64 a, .int 64 b, .int 64 c]) {} := by
+  apply wpPt_of_block prog_f4 rfl
+  intro n
+  wp_simp
+  apply wpFun_mono _ (max2_spec a b _)
+  rintro v s1 ⟨m1, rfl, hb1, ha1⟩
+  cases n with
+  | zero => exact wpPtN_zero prog_f4
+  | succ n =>
+    apply wpPtN_of_block prog_f4 rfl
+    wp_simp
+    apply wpFun_mono _ (max2_spec m1 c _)
+    rintro v s2 ⟨m2, rfl, hc2, hm2⟩
+    cases n with
+    | zero => exact wpPtN_zero prog_f4
+    | succ n =>
+      apply wpPtN_of_block prog_f4 rfl
+      wp_simp
+      simp only [BitVec.sle, decide_eq_true_eq] at *
+      exact ⟨by omega, by omega, hc2⟩
 
 /-! ## `CountUp`: one loop -/
 
@@ -535,5 +567,6 @@ theorem insertionSort_correct (xs : List (BitVec 64)) (len : BitVec 64) (hlen : 
 #print axioms countUp_correct
 #print axioms max_correct
 #print axioms insertionSort_correct
+#print axioms max3_correct
 
 end Go2Lean.Proofs.Functional

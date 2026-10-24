@@ -99,7 +99,10 @@ translation sound).
    step), writes to the slice (`heapStore_arr`), and a spec of sortedness
    and `List.Perm` (each swap is `List.set_set_perm`), about 250 lines of
    which the block walking is mechanical and the list reasoning is three
-   small lemmas.
+   small lemmas. Calls go through contracts: a call's weakest
+   precondition is the callee's (`wpFun`), discharged by the callee's own
+   theorem (`wpFun_of_wpPt`), so a caller is proved without unfolding its
+   callees.
 3. **The existing prover** (`no_panic` by `simp` and `bv_decide`): move the
    closing step to `grind` where it applies, keeping `bv_decide` for
    bit-level goals; a `grind` proof needs only the kernel.
