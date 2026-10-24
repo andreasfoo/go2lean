@@ -85,7 +85,7 @@ confirmed fuzzed_go2leanfuzz_fuzzroundtrip_sequence
 confirmed globals_at_nopanic
 exhausted globals_blank_nopanic
 exhausted globals_blank_specblankiszero
-exhausted globals_defaultgen_nopanic
+proved globals_defaultgen_nopanic
 exhausted globals_same_nopanic
 exhausted globals_same_specsamefieldwise
 exhausted_assuming globals_setgenfortest_nopanic
@@ -148,7 +148,7 @@ confirmed list_sum_specsumsingleton
 exhausted loops_bubblesort_nopanic
 exhausted mut=4/13 loops_bubblesort_specbubblesortsorted
 proved loops_clamp_nopanic
-exhausted mut=4/4 loops_clamp_specclamp
+proved mut=4/4 loops_clamp_specclamp
 none loops_clampall_nopanic
 none mut=6/7 loops_clampall_specclampall
 exhausted loops_hasduplicate_nopanic
@@ -164,9 +164,9 @@ exhausted maps_registry_put_newregistry_nopanic
 exhausted maps_sum_nopanic
 exhausted mut=2/8 maps_sum_specsumnonnegative
 proved oob_clamp_nopanic
-exhausted mut=4/4 oob_clamp_specclamp
+proved mut=4/4 oob_clamp_specclamp
 exhausted mut=2/4 oob_clamp_specclampidempotent
-exhausted mut=4/4 oob_clamp_specclampidentity
+proved mut=4/4 oob_clamp_specclampidentity
 confirmed oob_last_nopanic
 none mut=0/7 oob_last_speclastempty
 none mut=6/7 oob_last_speclastislast

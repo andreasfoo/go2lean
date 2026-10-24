@@ -167,6 +167,12 @@ type File struct {
 // abis are the goals' functions' ABIs and fids their model ids, whose
 // lookup equations the proofs use.
 func FunctionalFile(leanDir string, report *contract.ModelReport, goals []Goal, abis []*contract.ABI, fids []int) (*File, error) {
+	rel := filepath.Join("Proofs", "Functional_"+ident.ReplaceAllString(contract.PackageKey(report.Package), "_")+".lean")
+	return FunctionalFileAt(leanDir, rel, report, goals, abis, fids)
+}
+
+// FunctionalFileAt is FunctionalFile at the path rel of the Lean project.
+func FunctionalFileAt(leanDir, rel string, report *contract.ModelReport, goals []Goal, abis []*contract.ABI, fids []int) (*File, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, `import Go2Lean.Proof.Simp
 import Go2Lean.Proof.Tactic
@@ -244,7 +250,7 @@ def h0 : Havoc Val := fun _ _ => .unit
 	for _, g := range goals {
 		fmt.Fprintf(&b, "#print axioms %s.%s\n", ns, TheoremName(g))
 	}
-	f.Rel = filepath.Join("Proofs", "Functional_"+ident.ReplaceAllString(contract.PackageKey(report.Package), "_")+".lean")
+	f.Rel = rel
 	path := filepath.Join(leanDir, f.Rel)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -274,6 +280,10 @@ func LoopProof(heads []int) string {
 // that used a failed theorem) and no Lean.ofReduceBool.
 func CheckGoals(leanDir string, f *File, goals []Goal, budget time.Duration) ([]GoalResult, string, error) {
 	rel := f.Rel
+	// The library is built once per workspace: checks run in parallel.
+	if err := buildLemmas(leanDir); err != nil {
+		return nil, "", err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "lake", "lean", rel)
