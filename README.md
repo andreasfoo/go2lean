@@ -45,6 +45,9 @@ Lean finds the inputs; `go test` is the judge.
   the model and confirmed by `go test` (with `-race`, and the model's
   schedule replayed when Go's scheduler does not take it); for small
   configurations, a certificate that none occurs under any schedule.
+- **Functional proofs** — `go2lean prove` states a function's contract from a
+  postcondition and proves it for every input, checked by Lean's kernel; loop
+  invariants are written by the optional agent or by hand.
 - **Optional spec-writing agent** — read source, propose and repair Go specs,
   run the pipeline, and report the verdicts. The basic pipeline needs no API key.
 

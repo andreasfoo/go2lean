@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -19,7 +20,8 @@ type LLM interface {
 	Complete(ctx context.Context, system, user string) (string, error)
 }
 
-// New builds an LLM from a spec: "claude" or "mock:<file-or-dir>". A mock
+// New builds an LLM from a spec: "claude", "claude-code" (the claude CLI,
+// with its own login) or "mock:<file-or-dir>". A mock
 // directory holds round-1.md, round-2.md, ...; a mock file answers every call.
 // cfg applies to "claude" only.
 func New(spec string, cfg ClaudeConfig) (LLM, error) {
@@ -29,10 +31,16 @@ func New(spec string, cfg ClaudeConfig) (LLM, error) {
 			return NewClaude(), nil
 		}
 		return NewClaudeWith(cfg), nil
+	case spec == "claude-code":
+		effort := ""
+		if cfg.Thinking {
+			effort = "high"
+		}
+		return &ClaudeCode{Model: cfg.Model, Effort: effort}, nil
 	case strings.HasPrefix(spec, "mock:"):
 		return &Mock{Path: strings.TrimPrefix(spec, "mock:")}, nil
 	}
-	return nil, fmt.Errorf("unknown llm %q (want claude or mock:<path>)", spec)
+	return nil, fmt.Errorf("unknown llm %q (want claude, claude-code or mock:<path>)", spec)
 }
 
 // Mock replays scripted responses.
@@ -58,4 +66,41 @@ func (m *Mock) Complete(_ context.Context, _, _ string) (string, error) {
 		return "", fmt.Errorf("mock response for call %d: %w", m.calls, err)
 	}
 	return string(b), nil
+}
+
+// ClaudeCode answers through the claude CLI (`claude -p`), with no tools
+// and the given system prompt in place of its own: a completion, on the
+// CLI's login rather than an API key.
+type ClaudeCode struct {
+	Model  string
+	Effort string // --effort: low, medium, high, xhigh, max; empty: the CLI's default
+}
+
+func (c *ClaudeCode) Name() string {
+	if c.Model == "" {
+		return "claude-code"
+	}
+	return "claude-code:" + c.Model
+}
+
+func (c *ClaudeCode) Complete(ctx context.Context, system, user string) (string, error) {
+	args := []string{"-p", "--tools", "", "--system-prompt", system, "--no-session-persistence", "--output-format", "text"}
+	if c.Model != "" {
+		args = append(args, "--model", c.Model)
+	}
+	if c.Effort != "" {
+		args = append(args, "--effort", c.Effort)
+	}
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Stdin = strings.NewReader(user)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("claude -p: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return "", fmt.Errorf("claude -p: empty answer")
+	}
+	return string(out), nil
 }

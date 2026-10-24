@@ -54,9 +54,12 @@ tactics (`Go2Lean.Proof.Tactic`): `wp_auto` proves a loop-free function
 with no hand-written step (`Max2`, and `Max3` given `Max2`'s contract),
 and `wp_step` takes one block inside a loop proof. `go2lean prove`
 states the theorem from a postcondition (integer, bool and integer-slice
-parameters) and proves loop-free functions with no proof text. Still
-missing: loop invariants (the agent's part, #22), postconditions taken
-from Go specs, and termination (the theorems are about runs that end).
+parameters) and proves loop-free functions with no proof text; with
+`-llm`, an agent writes loop invariants and proofs under the kernel's
+check (four single-loop functions of `examples/invariants`, each in two or
+three rounds: `docs/eval/proof-agent.md`). Still missing: postconditions
+taken from Go specs, harder loops for the agent (nested, with calls), and
+termination (the theorems are about runs that end).
 
 ## 2. Under-approximations are not tracked mechanically
 

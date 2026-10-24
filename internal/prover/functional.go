@@ -25,9 +25,13 @@ import (
 // proof applies at a call: goals are proved in order, each with the ones
 // before it as contracts.
 type Goal struct {
-	Func  string `json:"func"`
-	Post  string `json:"post"`
-	Proof string `json:"proof,omitempty"` // tactic block; default: wp_auto with the earlier goals' contracts
+	Func string `json:"func"`
+	Post string `json:"post"`
+	// Prelude holds definitions and lemmas the proof uses (invariants),
+	// written before the theorem; Proof is its tactic block (default:
+	// wp_auto with the earlier goals' contracts).
+	Prelude string `json:"prelude,omitempty"`
+	Proof   string `json:"proof,omitempty"`
 }
 
 // GoalResult is what Lean made of a goal.
@@ -42,6 +46,12 @@ type GoalResult struct {
 // hypotheses that tie a slice parameter to the heap, and the conclusion.
 // name is the theorem's name and fid the function's model id.
 func Statement(abi *contract.ABI, fid int, name, post string) (string, error) {
+	return statement(abi, fid, name, post, "prog")
+}
+
+// statement spells the program as prog: FunctionalFile names it in full,
+// so that nothing a prelude defines can stand in for the model.
+func statement(abi *contract.ABI, fid int, name, post, prog string) (string, error) {
 	if abi.Method != "" || abi.Ctor != nil || abi.Variadic {
 		return "", fmt.Errorf("%s: methods, constructor-built receivers and variadic functions are not supported", abi.GoFunc)
 	}
@@ -75,8 +85,8 @@ func Statement(abi *contract.ABI, fid int, name, post string) (string, error) {
 		}
 	}
 	binders = append(binders, "(s : HState Val)")
-	return fmt.Sprintf("theorem %s %s\n    %s :\n    wpFun prog or0 h0 %d [%s]\n      (fun ret s' => %s) s",
-		name, strings.Join(binders, " "), strings.Join(hyps, " "), fid, strings.Join(args, ", "), post), nil
+	return fmt.Sprintf("theorem %s %s\n    %s :\n    _root_.Go2Lean.GoSSA.WP.wpFun %s or0 h0 %d [%s]\n      (fun ret s' => %s) s",
+		name, strings.Join(binders, " "), strings.Join(hyps, " "), prog, fid, strings.Join(args, ", "), post), nil
 }
 
 // reserved are the names the statement binds itself and the Lean keywords
@@ -85,14 +95,36 @@ var reserved = map[string]bool{"s": true, "ret": true, "or0": true, "h0": true, 
 	"at": true, "by": true, "do": true, "end": true, "fun": true, "have": true, "in": true, "let": true,
 	"match": true, "show": true, "then": true, "with": true, "from": true, "where": true, "open": true}
 
+// binderNames are the statement's binders and hypotheses, in order.
+func binderNames(abi *contract.ABI) []string {
+	var names, hyps []string
+	for _, p := range abi.Params {
+		x := p.Go
+		if p.Kind == contract.ABISlice {
+			names = append(names, x, x+"_len", x+"_ref")
+			hyps = append(hyps, "h_"+x+"_len", "h_"+x+"_ref", "h_"+x)
+		} else {
+			names = append(names, x)
+		}
+	}
+	return append(append(names, "s"), hyps...)
+}
+
 // TheoremName is the name of a goal's theorem.
 func TheoremName(fn string) string { return ident.ReplaceAllString(fn, "_") + "_spec" }
 
+// File is a written FunctionalFile: its path relative to the Lean project,
+// and for each goal the lines (1-based, inclusive) of its check.
+type File struct {
+	Rel    string
+	Checks [][2]int
+}
+
 // FunctionalFile writes the theorems of the goals, in order, into one file
 // of the workspace's Lean project and returns its path relative to leanDir.
-// stmts are the goals' statements (Statement); funcs the model ids the
-// goals' functions are, whose lookup equations the proofs use.
-func FunctionalFile(leanDir string, report *contract.ModelReport, goals []Goal, stmts []string, fids []int) (string, error) {
+// abis are the goals' functions' ABIs and fids their model ids, whose
+// lookup equations the proofs use.
+func FunctionalFile(leanDir string, report *contract.ModelReport, goals []Goal, abis []*contract.ABI, fids []int) (*File, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, `import Go2Lean.Proof.Simp
 import Go2Lean.Proof.Tactic
@@ -106,6 +138,7 @@ open Go2Lean.SSA Go2Lean.GoSSA Go2Lean.GoSSA.WP
 open %[1]s
 
 set_option maxHeartbeats 4000000
+set_option linter.unusedVariables false
 
 namespace Go2Lean.Proofs.Functional.%[3]s
 
@@ -126,20 +159,45 @@ def h0 : Havoc Val := fun _ _ => .unit
 		if proof == "" {
 			proof = AutoProof(fids[i], before)
 		}
-		fmt.Fprintf(&b, "\n%s := by\n%s\n", stmts[i], proof)
+		st, err := statement(abis[i], fids[i], TheoremName(g.Func), g.Post, "_root_."+report.LeanModule+".prog")
+		if err != nil {
+			return nil, err
+		}
+		if g.Prelude != "" {
+			fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(g.Prelude))
+		}
+		fmt.Fprintf(&b, "\n%s := by\n%s\n", st, proof)
 		before = append(before, TheoremName(g.Func))
 	}
-	b.WriteString("\n")
+	ns := "Go2Lean.Proofs.Functional." + ident.ReplaceAllString(contract.PackageKey(report.Package), "_")
+	fmt.Fprintf(&b, "\nend %s\n", ns)
+	// Each theorem again, read outside the namespace the preludes write
+	// in: the types in the statement are the core's and the model's.
+	b.WriteString("\nsection Check\nopen Go2Lean.SSA Go2Lean.GoSSA\n")
+	f := &File{}
+	for i, g := range goals {
+		st, err := statement(abis[i], fids[i], "_", g.Post, report.LeanModule+".prog")
+		if err != nil {
+			return nil, err
+		}
+		st = strings.Replace(st, "theorem _ ", "example ", 1)
+		st = strings.Replace(st, " or0 h0 ", fmt.Sprintf(" %[1]s.or0 %[1]s.h0 ", ns), 1)
+		ex := fmt.Sprintf("%s :=\n  @%s.%s %s\n", st, ns, TheoremName(g.Func), strings.Join(binderNames(abis[i]), " "))
+		b.WriteString("\n")
+		start := strings.Count(b.String(), "\n") + 1
+		b.WriteString(ex)
+		f.Checks = append(f.Checks, [2]int{start, start + strings.Count(ex, "\n") - 1})
+	}
+	b.WriteString("\nend Check\n\n")
 	for _, g := range goals {
-		fmt.Fprintf(&b, "#print axioms %s\n", TheoremName(g.Func))
+		fmt.Fprintf(&b, "#print axioms %s.%s\n", ns, TheoremName(g.Func))
 	}
-	fmt.Fprintf(&b, "\nend Go2Lean.Proofs.Functional.%s\n", ident.ReplaceAllString(contract.PackageKey(report.Package), "_"))
-	rel := filepath.Join("Proofs", "Functional_"+ident.ReplaceAllString(contract.PackageKey(report.Package), "_")+".lean")
-	path := filepath.Join(leanDir, rel)
+	f.Rel = filepath.Join("Proofs", "Functional_"+ident.ReplaceAllString(contract.PackageKey(report.Package), "_")+".lean")
+	path := filepath.Join(leanDir, f.Rel)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
+		return nil, err
 	}
-	return rel, os.WriteFile(path, []byte(b.String()), 0o644)
+	return f, os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // AutoProof is the proof of a loop-free function's goal: walk it with
@@ -162,7 +220,8 @@ func LoopProof(heads []int) string {
 // CheckGoals runs Lean on a FunctionalFile and reads, per goal, whether its
 // theorem was proved by the kernel alone: no sorry (a failed proof, or one
 // that used a failed theorem) and no Lean.ofReduceBool.
-func CheckGoals(leanDir, rel string, goals []Goal, budget time.Duration) ([]GoalResult, string, error) {
+func CheckGoals(leanDir string, f *File, goals []Goal, budget time.Duration) ([]GoalResult, string, error) {
+	rel := f.Rel
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "lake", "lean", rel)
@@ -178,12 +237,21 @@ func CheckGoals(leanDir, rel string, goals []Goal, budget time.Duration) ([]Goal
 	if err != nil && !errors.Is(err, context.Canceled) && !strings.Contains(text, "error") {
 		return nil, text, fmt.Errorf("lean: %v: %s", err, firstError(text))
 	}
+	errLines := errorLines(text, rel)
 	var rs []GoalResult
-	for _, g := range goals {
+	for i, g := range goals {
 		name := TheoremName(g.Func)
 		r := GoalResult{Func: g.Func, Theorem: name}
 		ax := axiomsOf(text, name)
+		checked := true
+		for _, l := range errLines {
+			if i < len(f.Checks) && l >= f.Checks[i][0] && l <= f.Checks[i][1] {
+				checked = false
+			}
+		}
 		switch {
+		case !checked:
+			r.Error = "the theorem does not have the stated type outside its namespace (a prelude redefined a name the statement uses)"
 		case ax == "":
 			r.Error = "not checked: " + firstError(text)
 		case strings.Contains(ax, "sorryAx"):
@@ -196,6 +264,48 @@ func CheckGoals(leanDir, rel string, goals []Goal, budget time.Duration) ([]Goal
 		rs = append(rs, r)
 	}
 	return rs, text, nil
+}
+
+// Errors are Lean's error messages on the file at rel, each with the lines
+// that follow it up to the next message, at most limit bytes in all.
+func Errors(text, rel string, limit int) string {
+	var b strings.Builder
+	in := false
+	for _, l := range strings.Split(text, "\n") {
+		head := strings.Contains(l, ".lean:") && (strings.Contains(l, ": error") || strings.Contains(l, ": warning") || strings.Contains(l, ": info"))
+		if head {
+			in = strings.Contains(l, ": error") && strings.Contains(l, filepath.Base(rel))
+		}
+		if strings.HasPrefix(l, "'") && strings.Contains(l, "axioms") {
+			in = false
+		}
+		if in {
+			if b.Len()+len(l) > limit {
+				b.WriteString("[...]\n")
+				break
+			}
+			b.WriteString(l)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// errorLines are the lines of the file at rel that Lean reported errors on.
+func errorLines(text, rel string) []int {
+	var out []int
+	base := filepath.Base(rel)
+	for _, l := range strings.Split(text, "\n") {
+		i := strings.Index(l, base+":")
+		if i < 0 || !strings.Contains(l, ": error") {
+			continue
+		}
+		var n int
+		if _, err := fmt.Sscanf(l[i+len(base)+1:], "%d:", &n); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // axiomsOf is what `#print axioms` printed for the theorem (the list may
