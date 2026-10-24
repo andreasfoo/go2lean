@@ -40,14 +40,16 @@ proof answers.
 
 Since 2026-10-23 functional properties are proved by hand for a first set
 of functions, loops and slice reads included (`lean/Proofs/Functional.lean`,
-checked in CI by `scripts/proofs.sh`): `Max2`, `CountUp`, `Max` and
-`InsertionSort` of `examples/proofs`, each for every input, kernel only;
+checked in CI by `scripts/proofs.sh`): `Max2`, `CountUp`, `Max`,
+`InsertionSort` and `Max3` of `examples/proofs`, each for every input,
+kernel only;
 the sort's spec is that the slice ends sorted and a permutation of what it
 held, through nested loops and writes to the slice. They rest on
 `Go2Lean.Proof.WP`, a partial-correctness weakest precondition read off the
 interpreter with a cut-point rule for loops (an inner loop is proved by
-induction on its fuel inside the outer loop's step). Still missing: calls
-(callee contracts), the automation that would let the pipeline write
+induction on its fuel inside the outer loop's step), and calls through
+the callee's contract (`wpFun`: `Max3` calls `Max2` twice and is proved
+from `Max2`'s theorem, not by unfolding it). Still missing: the automation that would let the pipeline write
 these proofs (block walking is mechanical; loop invariants are the agent's
 part), and termination (the theorems are about runs that end).
 

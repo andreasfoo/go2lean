@@ -42,3 +42,8 @@ func InsertionSort(a []int) {
 		}
 	}
 }
+
+// Max3 returns the largest of a, b and c, through Max2.
+func Max3(a, b, c int) int {
+	return Max2(Max2(a, b), c)
+}
