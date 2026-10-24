@@ -1,0 +1,56 @@
+# The proof agent on loops
+
+The first run of `go2lean prove -llm`, in which an LLM writes the loop
+invariants and proofs of functional theorems that go2lean states
+([#22](https://github.com/andreasfoo/go2lean/issues/22)).
+
+## Setup
+
+- **Targets**: `examples/invariants`, four functions with one loop each,
+  written for this run, none with a hand proof anywhere in the repository:
+  `CountPositive` (a count between 0 and the length), `IndexOf` (-1, or an
+  index whose element is the one sought), `AllNonNeg` (true only if no
+  element is negative) and `Fill` (every element of the slice set). The
+  goals are `examples/invariants/goals.json`.
+- **What the agent gets**: the library (`WP.lean`, `Tactic.lean`,
+  `Simp.lean`), the hand proofs of other functions as worked examples
+  (`lean/Proofs/Functional.lean`), the package's model, and the statement.
+  It answers with a prelude (invariants, lemmas) and a proof. go2lean
+  writes the statement, checks the answer (no `sorry`, axioms, syntax
+  extensions or namespace commands), runs Lean, and feeds the errors back.
+- **What counts as proved**: `#print axioms` lists only `propext`,
+  `Classical.choice` and `Quot.sound`, and the theorem has the stated type
+  when read again outside the namespace the answer wrote in.
+- **LLM**: the claude CLI's default model (`-llm claude-code`), no tools.
+
+## Results
+
+| function | rounds | time | prelude, proof (lines) |
+|---|---|---|---|
+| `CountPositive` | 3 | 5 min | 62, 14 |
+| `IndexOf` | 3 | 8 min | 90, 20 |
+| `AllNonNeg` | 2 | 6 min | 9, 82 |
+| `Fill` | 3 | 6 min | 87, 15 |
+
+All four are proved, kernel only, in 2 or 3 rounds (25 minutes in all,
+about a minute of each round Lean's). The proofs are in
+`examples/invariants/proofs.json` and CI checks them again without the
+agent (`scripts/proofs.sh`).
+
+A first run, with the CLI's default effort and no guide to the shape of a
+proof in the system prompt, proved neither of the two goals it reached in
+four rounds each. Its errors were of one kind: a block on a path left
+unwalked before the back edge, and terms in another normal form than
+`simp` leaves (`(i + 1).toNat` against `(i.toNat + 1) % 2^64`). The second
+run added `--effort high` and a paragraph on how a proof goes (walk every
+block of each path from the header; return or back edge); its first-round
+errors were of the same kinds, and Lean's errors were enough to fix them.
+
+## Reading
+
+The invariants are what a person would write: `CountPositive`'s says the
+index starts at -1 (go/ssa's range loops do) and the count stays between
+0 and the index plus one; `Fill`'s, that the elements up to the index are
+`v` and the slice keeps its length. The proofs follow the worked examples
+closely, so the examples carry most of the method; functions unlike them
+(nested loops, calls inside loops, maps) are the next test.

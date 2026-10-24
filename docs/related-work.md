@@ -104,8 +104,10 @@ translation sound).
    theorem (`wpFun_of_wpPt`), so a caller is proved without unfolding its
    callees. The mechanical part is now tactics (`wp_step`, `wp_auto`):
    a loop-free function, calls included, is proved by `wp_auto` alone,
-   and what a loop proof still needs by hand is its invariant and the
-   arithmetic and list facts that keep it.
+   and what a loop proof still needs is its invariant and the
+   arithmetic and list facts that keep it, which an agent now writes
+   under the kernel's check (`go2lean prove -llm`, docs/eval/proof-agent.md):
+   the statement is go2lean's, never the agent's.
 3. **The existing prover** (`no_panic` by `simp` and `bv_decide`): move the
    closing step to `grind` where it applies, keeping `bv_decide` for
    bit-level goals; a `grind` proof needs only the kernel.

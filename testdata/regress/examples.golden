@@ -132,6 +132,10 @@ confirmed inputs_role_nopanic
 exhausted inputs_text_nopanic
 exhausted mut=2/2 inputs_text_spectextshorter
 confirmed inputs_weight_nopanic
+exhausted invariants_allnonneg_nopanic
+exhausted invariants_countpositive_nopanic
+exhausted invariants_fill_nopanic
+exhausted invariants_indexof_nopanic
 exhausted jsonc_quote_nopanic
 confirmed jsonc_quote_specquoteplain
 exhausted jsonc_reload_nopanic

@@ -8,10 +8,11 @@
 
 What it is: a bounded, search-based bug finder (random search steered by the program's
 constants, exhaustive search of small domains), not a symbolic executor;
-the pipeline proves over all inputs only `no_panic` of integer and bool
-functions; functional properties of loops over slices are proved by hand
-so far (`lean/Proofs/Functional.lean`: up to insertion sort, sorted and a
-permutation, for every slice). 28 ground-truth packages run in CI (247 properties, each outcome
+the pipeline proves over all inputs `no_panic` of integer and bool
+functions, and the postconditions `go2lean prove` is given: loop-free
+functions alone, loops with invariants an agent writes
+(`examples/invariants`) or by hand (`lean/Proofs/Functional.lean`: up to
+insertion sort, sorted and a permutation, for every slice). 29 ground-truth packages run in CI (251 properties, each outcome
 pinned, including every spec's mutation score). The design is in
 [docs/design.md](../docs/design.md); the Go semantics modelled, and how
 faithfully, in [docs/semantics.md](../docs/semantics.md); what it does not
