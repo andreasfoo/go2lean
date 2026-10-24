@@ -141,7 +141,9 @@ turned race detection on in CI) on other code, and nothing on this test.
    return without closing the batch it was armed for, and four of the
    batcher's tests deadlocked in the model; the replay stage left them
    `inconclusive` (the schedule did not reproduce). Diagnosed after the
-   run, fixed separately.
+   run, fixed since: channels and maps became heap pointers with C1, and
+   the rule that a `make`d one is non-nil (docs/history.md) did not
+   follow them; `examples/conc` has `LazyClose`.
 4. **Results of unmodelled calls**: `time.Now` (four breaker tests) and
    `(*time.Timer).Stop` (`Batcher.submitWork`) are havoc, and the model
    picks values Go does not give; all five refuted by the replay stage

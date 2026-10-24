@@ -449,7 +449,8 @@ inductive Op where
   | ite
   /-- encoding/json.Valid on a byte slice -/
   | jsonValid
-  /-- Is it known whether this func/map/channel/interface value is nil? -/
+  /-- Is it known whether this func/map/channel/interface value is nil? A
+  heap object the program made (a channel, a map) is not. -/
   | nilKnown
   /-- Is this error value one whose identity the model knows: nil, a
   sentinel (`.boxed` with the tag of `*errors.errorString`) or another boxed
@@ -1060,7 +1061,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | _ => .panic .modelStuck
   | .reflectIsZero, [.boxed _ v] =>
     match isZeroVal v with | some b => .ok (.bool b) | none => .panic .modelStuck
-  | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil => true | _ => false))
+  | .nilKnown, [x] => .ok (.bool (match x with | .boxed .. | .opaqueNil | .ptr .. => true | _ => false))
   | .ite, [.bool c, a, b] => .ok (if c then a else b)
   | .reIn ids, [x] => .ok (.bool (match x with | .boxed _ (.int _ id) => ids.contains id.toNat | _ => false))
   | .errKnown, [x] => .ok (.bool (match x with | .boxed .. | .err false => true | _ => false))
