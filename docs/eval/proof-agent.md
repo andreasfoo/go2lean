@@ -74,6 +74,32 @@ command, and the agent, which sees only its own goal, reused the names
 of another goal's prelude. Both are fixed (comments are not read; the
 prompt lists the names the file already declares).
 
+## Loop paths and Lean tools
+
+Two changes, measured by running both packages again from scratch (the
+saved proofs of the package being proved are not in the prompt):
+
+- **Loop paths**: go2lean lists, from the control-flow graph, the paths
+  from each loop header (to its back edge, another header, or a return),
+  so that no block on a path is left unwalked.
+- **Lean tools** (`-lean-tools`, the default with `-llm claude-code`): the
+  agent gets [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) on the
+  workspace's Lean project (code checking, goal states, diagnostics; its
+  network search tools are off) and a complete file to check its answer
+  in, the goals before it stated with `sorry`. It checks its prelude and
+  proof itself before answering; go2lean's own check is unchanged.
+
+| run | `examples/invariants` (4 goals) | `examples/loops` (4 goals) |
+|---|---|---|
+| before (above) | 11 rounds, 25 min | 8 rounds, 57 min |
+| loop paths | | 7 rounds, 44 min |
+| loop paths and Lean tools | 4 rounds (each first), 12 min, 2–8 tool turns a goal | 4 rounds (each first), 31 min, 4–18 tool turns a goal |
+
+With the tools every goal is proved by the first answer: the errors the
+earlier runs fed back over rounds (normal forms after `simp`, a missed
+block, a type mismatch) are now found and fixed by the agent in its own
+turns, in seconds each instead of a round of go2lean's.
+
 ## Reading
 
 The invariants are what a person would write: `CountPositive`'s says the

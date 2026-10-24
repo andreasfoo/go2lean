@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,6 +75,13 @@ func (m *Mock) Complete(_ context.Context, _, _ string) (string, error) {
 type ClaudeCode struct {
 	Model  string
 	Effort string // --effort: low, medium, high, xhigh, max; empty: the CLI's default
+	// MCPConfig, when set, is an --mcp-config file whose servers' tools
+	// named in AllowedTools the model may call (the built-in tools stay
+	// off), for up to MaxTurns turns.
+	MCPConfig    string
+	AllowedTools []string
+	MaxTurns     int
+	LastTurns    int
 }
 
 func (c *ClaudeCode) Name() string {
@@ -84,12 +92,18 @@ func (c *ClaudeCode) Name() string {
 }
 
 func (c *ClaudeCode) Complete(ctx context.Context, system, user string) (string, error) {
-	args := []string{"-p", "--tools", "", "--system-prompt", system, "--no-session-persistence", "--output-format", "text"}
+	args := []string{"-p", "--tools", "", "--system-prompt", system, "--no-session-persistence", "--output-format", "json"}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
 	}
 	if c.Effort != "" {
 		args = append(args, "--effort", c.Effort)
+	}
+	if c.MCPConfig != "" {
+		args = append(args, "--mcp-config", c.MCPConfig, "--strict-mcp-config", "--allowedTools", strings.Join(c.AllowedTools, ","))
+		if c.MaxTurns > 0 {
+			args = append(args, "--max-turns", fmt.Sprint(c.MaxTurns))
+		}
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Stdin = strings.NewReader(user)
@@ -99,8 +113,59 @@ func (c *ClaudeCode) Complete(ctx context.Context, system, user string) (string,
 	if err != nil {
 		return "", fmt.Errorf("claude -p: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	if strings.TrimSpace(string(out)) == "" {
-		return "", fmt.Errorf("claude -p: empty answer")
+	var res struct {
+		Result   string  `json:"result"`
+		IsError  bool    `json:"is_error"`
+		Subtype  string  `json:"subtype"`
+		NumTurns int     `json:"num_turns"`
+		Cost     float64 `json:"total_cost_usd"`
 	}
-	return string(out), nil
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", fmt.Errorf("claude -p: unreadable answer: %v", err)
+	}
+	c.LastTurns = res.NumTurns
+	if res.IsError || strings.TrimSpace(res.Result) == "" {
+		return "", fmt.Errorf("claude -p: no answer (%s, %d turns)", res.Subtype, res.NumTurns)
+	}
+	return res.Result, nil
+}
+
+// Turns is the number of turns the last answer took (tool calls included).
+func (c *ClaudeCode) Turns() int { return c.LastTurns }
+
+// LeanTools are the lean-lsp-mcp tools the proof agent may call: checking
+// code and reading goals and diagnostics in the workspace's Lean project.
+// The search tools that call out to the network are left off.
+var LeanTools = []string{"lean_run_code", "lean_goal", "lean_term_goal", "lean_multi_attempt",
+	"lean_diagnostic_messages", "lean_hover_info", "lean_local_search", "lean_file_outline", "lean_declaration_file"}
+
+// WithLeanTools gives a claude-code LLM lean-lsp-mcp (the binary at bin) on
+// the Lean project at leanDir; the config is written to cfgPath. Other
+// LLMs are returned as they are.
+func WithLeanTools(llm LLM, bin, leanDir, cfgPath string) (LLM, error) {
+	cc, ok := llm.(*ClaudeCode)
+	if !ok {
+		return llm, nil
+	}
+	disabled := "lean_leansearch,lean_loogle,lean_leanfinder,lean_state_search,lean_hammer_premise,lean_build"
+	cfg := map[string]any{"mcpServers": map[string]any{"lean": map[string]any{
+		"command": bin,
+		"args":    []string{"--lean-project-path", leanDir, "--disable-tools", disabled},
+		"env":     map[string]string{"PATH": os.Getenv("PATH")},
+	}}}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
+		return nil, err
+	}
+	c := *cc
+	c.MCPConfig = cfgPath
+	c.AllowedTools = nil
+	for _, t := range LeanTools {
+		c.AllowedTools = append(c.AllowedTools, "mcp__lean__"+t)
+	}
+	c.MaxTurns = 60
+	return &c, nil
 }
