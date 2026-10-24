@@ -250,3 +250,33 @@ func BumpAll() int {
 	defer tally.Unlock()
 	return tally.n
 }
+
+// lazy holds a channel made on first use.
+type lazy struct {
+	mu sync.Mutex
+	ch chan int
+}
+
+// LazyClose makes l's channel on first use, and a second goroutine closes
+// it if it was made. Race-free and never blocks: the channel exists when
+// the second goroutine looks, so it is closed before the final receive.
+func LazyClose() bool {
+	l := &lazy{}
+	l.mu.Lock()
+	if l.ch == nil {
+		l.ch = make(chan int, 1)
+	}
+	l.mu.Unlock()
+	done := make(chan bool)
+	go func() {
+		l.mu.Lock()
+		if l.ch != nil {
+			close(l.ch)
+		}
+		l.mu.Unlock()
+		done <- true
+	}()
+	<-done
+	_, ok := <-l.ch
+	return ok
+}

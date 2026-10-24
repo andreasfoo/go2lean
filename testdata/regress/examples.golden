@@ -46,6 +46,7 @@ confirmed conc_first_nopanic
 exhausted_havoc conc_firstbuffered_nopanic
 exhausted_havoc conc_gen_nopanic
 exhausted_havoc conc_handoff_nopanic
+exhausted_havoc conc_lazyclose_nopanic
 exhausted_havoc conc_lockedcount_nopanic
 confirmed conc_lostwakeup_nopanic
 exhausted conc_newqueue_nopanic
