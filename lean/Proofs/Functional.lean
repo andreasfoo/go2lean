@@ -30,12 +30,13 @@ local notation "wp" => wpPt prog or0 h0
 local notation "wpN" => wpPtN prog or0 h0
 
 theorem prog_f0 : prog.funcs[0]? = some f0 := rfl
+theorem prog_f1 : prog.funcs[1]? = some f1 := rfl
 theorem prog_f2 : prog.funcs[2]? = some f2 := rfl
 theorem prog_f3 : prog.funcs[3]? = some f3 := rfl
 
 /-- Unfold the instructions and terminator of the block in the goal. -/
 macro "wp_simp" : tactic => `(tactic| simp [wpBlockN, wpTermN, execInstrs, enter, bindParams,
-    f0, f2, f3,
+    f0, f1, f2, f3,
     Dialect.denote, Dialect.toBool, Dialect.assumption, Go2Lean.GoSSA.assumption, denote,
     Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds,
     Array.size_setIfInBounds, Array.getElem?_replicate, Array.size_replicate])
@@ -263,8 +264,276 @@ theorem max_correct (xs : List (BitVec 64)) (len : BitVec 64) (hlen : len.toInt 
           have : j = 0 := by simp at hj1; omega
           subst this; exact Int.le_refl _
 
+/-! ## `InsertionSort`: nested loops writing the slice -/
+
+/-- `ys[0..n)` ascending, as signed integers. -/
+def SortedTo (ys : List (BitVec 64)) (n : Nat) : Prop :=
+  ∀ a b (ha : a < ys.length) (hb : b < ys.length), a < b → b < n → ys[a].toInt ≤ ys[b].toInt
+
+/-- The inner loop's invariant on the list, with `J` and `I` as naturals. -/
+def InnerOK (ys : List (BitVec 64)) (J I : Nat) : Prop :=
+  SortedTo ys J ∧
+  (∀ a b (ha : a < ys.length) (hb : b < ys.length), J ≤ a → a < b → b ≤ I → ys[a].toInt ≤ ys[b].toInt) ∧
+  (∀ a b (ha : a < ys.length) (hb : b < ys.length), a < J → J < b → b ≤ I → ys[a].toInt ≤ ys[b].toInt)
+
+theorem innerOK_entry {ys : List (BitVec 64)} {I : Nat} (h : SortedTo ys I) : InnerOK ys I I := by
+  refine ⟨h, ?_, ?_⟩
+  · intro a b ha hb h1 h2 h3; omega
+  · intro a b ha hb h1 h2 h3; omega
+
+theorem innerOK_exit {ys : List (BitVec 64)} {J I : Nat} (_hI : I < ys.length) (hJI : J ≤ I)
+    (h : InnerOK ys J I)
+    (hstop : J = 0 ∨ ∃ (h1 : J - 1 < ys.length) (h2 : J < ys.length), ys[J - 1].toInt ≤ ys[J].toInt) :
+    SortedTo ys (I + 1) := by
+  obtain ⟨p1, p2, p3⟩ := h
+  intro a b ha hb hab hbI
+  by_cases hbJ : b < J
+  · exact p1 a b ha hb hab hbJ
+  by_cases haJ : J ≤ a
+  · exact p2 a b ha hb haJ hab (by omega)
+  -- a < J ≤ b
+  by_cases hbJ' : J < b
+  · exact p3 a b ha hb (by omega) hbJ' (by omega)
+  have hb' : b = J := by omega
+  subst hb'
+  rcases hstop with h0 | ⟨h1, h2, hle⟩
+  · omega
+  · -- ys[a] ≤ ys[J-1] ≤ ys[J]
+    have : ys[a].toInt ≤ ys[b - 1].toInt := by
+      by_cases hae : a = b - 1
+      · subst hae; exact Int.le_refl _
+      · exact p1 a (b - 1) ha h1 (by omega) (by omega)
+    exact Int.le_trans this hle
+
+set_option linter.deprecated false in
+theorem innerOK_swap {ys : List (BitVec 64)} {J I : Nat} (hJ : 1 ≤ J) (hJI : J ≤ I)
+    (hI : I < ys.length) (h : InnerOK ys J I)
+    (hgt : ys[J].toInt < ys[J - 1].toInt) :
+    InnerOK ((ys.set (J - 1) ys[J]).set J ys[J - 1]) (J - 1) I := by
+  obtain ⟨p1, p2, p3⟩ := h
+  refine ⟨?_, ?_, ?_⟩
+  · intro a b ha hb hab hbJ
+    simp only [List.length_set] at ha hb
+    simp only [List.getElem_set]
+    rw [if_neg (by omega), if_neg (by omega), if_neg (by omega), if_neg (by omega)]
+    exact p1 a b ha hb hab (by omega)
+  · intro a b ha hb haJ hab hbI
+    simp only [List.length_set] at ha hb
+    simp only [List.getElem_set]
+    by_cases ha1 : a = J - 1
+    · subst ha1
+      rw [if_neg (by omega), if_pos rfl]
+      by_cases hb1 : b = J
+      · subst hb1; rw [if_pos rfl]; exact Int.le_of_lt hgt
+      · rw [if_neg (by omega), if_neg (by omega)]
+        exact p2 J b (by omega) hb (Nat.le_refl _) (by omega) hbI
+    · by_cases haJ' : a = J
+      · subst haJ'
+        rw [if_pos rfl, if_neg (by omega), if_neg (by omega)]
+        exact p3 (a - 1) b (by omega) (by simpa using hb) (by omega) (by omega) hbI
+      · rw [if_neg (by omega), if_neg (by omega), if_neg (by omega), if_neg (by omega)]
+        exact p2 a b ha hb (by omega) hab hbI
+  · intro a b ha hb haJ hbJ hbI
+    simp only [List.length_set] at ha hb
+    simp only [List.getElem_set]
+    rw [if_neg (by omega), if_neg (by omega)]
+    by_cases hb1 : b = J
+    · subst hb1; rw [if_pos rfl]
+      by_cases hae : a = b - 1
+      · omega
+      · exact p1 a (b - 1) (by simpa using ha) (by omega) (by omega) (by omega)
+    · rw [if_neg (by omega), if_neg (by omega)]
+      exact p3 a b ha hb (by omega) (by omega) hbI
+
+/-- At the outer header (block 1, `i` is value 1). -/
+def sortOuter (xs : List (BitVec 64)) (len : BitVec 64) (env : Env Val) (s : HState Val) : Prop :=
+  env.size = 32 ∧ env[0]? = some (.slice 1 0 len len) ∧
+  ∃ (ys : List (BitVec 64)) (i : BitVec 64), s.heap[1]? = some (.arr (ys.map (.int 64))) ∧
+    ys.Perm xs ∧ env[1]? = some (.int 64 i) ∧ 1 ≤ i.toInt ∧ i.toInt ≤ max len.toInt 1 ∧
+    SortedTo ys i.toNat
+
+/-- At the inner header (block 4, `j` is value 2), inside round `i`. -/
+def sortInner (xs : List (BitVec 64)) (len i : BitVec 64) (env : Env Val) (s : HState Val) : Prop :=
+  env.size = 32 ∧ env[0]? = some (.slice 1 0 len len) ∧ env[1]? = some (.int 64 i) ∧
+  1 ≤ i.toInt ∧ i.toInt < len.toInt ∧
+  ∃ (ys : List (BitVec 64)) (j : BitVec 64), s.heap[1]? = some (.arr (ys.map (.int 64))) ∧
+    ys.Perm xs ∧ env[2]? = some (.int 64 j) ∧ 0 ≤ j.toInt ∧ j.toInt ≤ i.toInt ∧
+    InnerOK ys j.toNat i.toNat
+
+abbrev sortPost (xs : List (BitVec 64)) : Val → HState Val → Prop :=
+  fun _ s => ∃ ys : List (BitVec 64), s.heap[1]? = some (.arr (ys.map (.int 64))) ∧
+    ys.Perm xs ∧ SortedTo ys ys.length
+
+
+set_option maxHeartbeats 4000000 in
+/-- One round of the outer loop, given the outer header for less fuel. -/
+theorem sort_step (xs : List (BitVec 64)) (len : BitVec 64) (hlen : len.toInt = xs.length)
+    (hL : len.toInt < 2 ^ 63) :
+    ∀ n env s, sortOuter xs len env s →
+      (∀ env' s', sortOuter xs len env' s' → wpN n ⟨1, 1⟩ (sortPost xs) env' s') →
+      wpN (n + 1) ⟨1, 1⟩ (sortPost xs) env s := by
+  intro n env s hI ih
+  obtain ⟨hsz, h0, ys, i, hh, hp, h1, hi1, hi2, hsorted⟩ := hI
+  obtain ⟨_, e0⟩ := Array.getElem?_eq_some_iff.mp h0
+  obtain ⟨_, e1⟩ := Array.getElem?_eq_some_iff.mp h1
+  have hylen : ys.length = xs.length := hp.length_eq
+  apply wpPtN_of_block prog_f1 rfl
+  wp_simp
+  simp [e0, e1, hsz]
+  cases hc : i.slt len
+  · -- exit: i ≥ len, block 3 returns
+    simp only [BitVec.slt, decide_eq_false_iff_not, Int.not_lt] at hc
+    dsimp only
+    cases n with
+    | zero => exact wpPtN_zero prog_f1
+    | succ n =>
+      apply wpPtN_of_block prog_f1 rfl
+      wp_simp
+      refine ⟨ys, hh, hp, fun a b ha hb hab _ => hsorted a b ha hb hab ?_⟩
+      have := toNat_of_toInt_nonneg (i := i) (by omega)
+      omega
+  · -- body: block 2 jumps to the inner header with j := i
+    simp only [BitVec.slt, decide_eq_true_eq] at hc
+    dsimp only
+    have hin : (i.toNat : Int) = i.toInt := toNat_of_toInt_nonneg (by omega)
+    -- leaving the inner loop: block 6 adds 1 to i and goes back to the outer header
+    have leave : ∀ k, k ≤ n → ∀ (env' : Env Val) (s' : HState Val) (zs : List (BitVec 64)) (J : Nat),
+        env'.size = 32 → env'[0]? = some (.slice 1 0 len len) → env'[1]? = some (.int 64 i) →
+        s'.heap[1]? = some (.arr (zs.map (.int 64))) → zs.Perm xs → J ≤ i.toNat →
+        InnerOK zs J i.toNat →
+        (J = 0 ∨ ∃ (h1 : J - 1 < zs.length) (h2 : J < zs.length), zs[J - 1].toInt ≤ zs[J].toInt) →
+        wpN (k + 1) ⟨1, 6⟩ (sortPost xs) env' s' := by
+      intro k hk env' s' zs J ksz k0 k1 kh kp kJ hok hstop
+      obtain ⟨_, g1⟩ := Array.getElem?_eq_some_iff.mp k1
+      have hzlen : zs.length = xs.length := kp.length_eq
+      apply wpPtN_of_block prog_f1 rfl
+      wp_simp
+      simp [g1, ksz]
+      apply wpPtN_le hk (ih _ _ _)
+      have hi1' : (i + 1#64).toInt = i.toInt + 1 := by
+        rw [BitVec.toInt_add_of_not_saddOverflow] <;> simp [BitVec.saddOverflow] <;> omega
+      have hi1n : (i + 1#64).toNat = i.toNat + 1 := by
+        have := toNat_of_toInt_nonneg (i := i + 1#64) (by omega); omega
+      refine ⟨by simp [ksz], by simp [ksz]; exact (Array.getElem?_eq_some_iff.mp k0).2, zs, i + 1#64, kh, kp, by simp [ksz],
+        by omega, by omega, ?_⟩
+      rw [hi1n]
+      exact innerOK_exit (by omega) kJ hok hstop
+    cases n with
+    | zero => exact wpPtN_zero prog_f1
+    | succ n =>
+      apply wpPtN_of_block prog_f1 rfl
+      wp_simp
+      -- the inner loop, by induction on its fuel
+      have inner : ∀ M, M ≤ n → ∀ env s, sortInner xs len i env s →
+          wpN M ⟨1, 4⟩ (sortPost xs) env s := by
+        intro M
+        induction M using Nat.strongRecOn with
+        | ind M ihm =>
+        intro hMn env s hJ
+        obtain ⟨jsz, j0, j1, ji1, ji2, zs, j, jh, jp, j2, jj0, jji, hok⟩ := hJ
+        obtain ⟨_, f0⟩ := Array.getElem?_eq_some_iff.mp j0
+        obtain ⟨_, f2⟩ := Array.getElem?_eq_some_iff.mp j2
+        have hzlen : zs.length = xs.length := jp.length_eq
+        have hjn : (j.toNat : Int) = j.toInt := toNat_of_toInt_nonneg (by omega)
+        have hJi : j.toNat ≤ i.toNat := by omega
+        cases M with
+        | zero => exact wpPtN_zero prog_f1
+        | succ M1 =>
+        apply wpPtN_of_block prog_f1 rfl
+        wp_simp
+        simp [f2, jsz]
+        cases hj : (0#64).slt j
+        · -- j ≤ 0: leave
+          simp only [BitVec.slt, decide_eq_false_iff_not, Int.not_lt] at hj
+          dsimp only
+          cases M1 with
+          | zero => exact wpPtN_zero prog_f1
+          | succ M2 =>
+            apply leave M2 (by omega) _ _ zs j.toNat (by simp [jsz]) (by simp [jsz]; exact f0)
+              (by simp [jsz]; exact (Array.getElem?_eq_some_iff.mp j1).2) jh jp hJi hok
+            left; simp at hj; omega
+        · -- j > 0: block 7 compares a[j-1] with a[j]
+          simp only [BitVec.slt, decide_eq_true_eq] at hj
+          simp at hj
+          dsimp only
+          have hj0 : 1 ≤ j.toNat := by omega
+          have hju : j.ult len = true := ult_of_toInt (by omega) (by omega)
+          have hj1i : (j - 1#64).toInt = j.toInt - 1 := by
+            rw [BitVec.toInt_sub_of_not_ssubOverflow] <;> simp [BitVec.ssubOverflow] <;> omega
+          have hj1n : (j - 1#64).toNat = j.toNat - 1 := by
+            have := toNat_of_toInt_nonneg (i := j - 1#64) (by omega); omega
+          have hj1u : (j - 1#64).ult len = true := ult_of_toInt (by omega) (by omega)
+          have hjx : j.toNat < zs.length := by omega
+          have hj1x : j.toNat - 1 < zs.length := by omega
+          have lj := heapLoad_arr (k := j.toNat) (by decide) jh (by simpa using hjx)
+          have lj1 := heapLoad_arr (k := j.toNat - 1) (by decide) jh (by simpa using hj1x)
+          have hk : (18446744073709551615 + j.toNat) % 18446744073709551616 = j.toNat - 1 := by
+            have := j.isLt; omega
+          cases M1 with
+          | zero => exact wpPtN_zero prog_f1
+          | succ M2 =>
+          apply wpPtN_of_block prog_f1 rfl
+          wp_simp
+          simp [jsz, f0, f2, dp_indexAddr hju, dp_indexAddr hj1u, hk, lj, lj1]
+          cases hgt : zs[j.toNat].slt zs[j.toNat - 1]
+          · -- a[j-1] ≤ a[j]: leave
+            simp only [BitVec.slt, decide_eq_false_iff_not, Int.not_lt] at hgt
+            dsimp only
+            cases M2 with
+            | zero => exact wpPtN_zero prog_f1
+            | succ M3 =>
+              apply leave M3 (by omega) _ _ zs j.toNat (by simp [jsz]) (by simp [jsz]; exact f0)
+                (by simp [jsz]; exact (Array.getElem?_eq_some_iff.mp j1).2) jh jp hJi hok
+              right; exact ⟨hj1x, hjx, hgt⟩
+          · -- swap in block 5 and go round with j - 1
+            simp only [BitVec.slt, decide_eq_true_eq] at hgt
+            dsimp only
+            have st1 := heapStore_arr (r := 1) (k := j.toNat - 1) (by decide) jh
+              (by simpa using hj1x) (.int 64 zs[j.toNat])
+            have jh1 : (s.heap.setIfInBounds 1 (.arr ((zs.map (.int 64)).set (j.toNat - 1)
+                (.int 64 zs[j.toNat]))))[1]? =
+                some (.arr ((zs.map (.int 64)).set (j.toNat - 1) (.int 64 zs[j.toNat]))) := by
+              simp [Array.getElem?_setIfInBounds]
+              exact (Array.getElem?_eq_some_iff.mp jh).1
+            have st2 := heapStore_arr (r := 1) (k := j.toNat) (by decide) jh1
+              (by simpa using hjx) (.int 64 zs[j.toNat - 1])
+            cases M2 with
+            | zero => exact wpPtN_zero prog_f1
+            | succ M3 =>
+            apply wpPtN_of_block prog_f1 rfl
+            wp_simp
+            simp [jsz, f0, f2, dp_indexAddr hju, dp_indexAddr hj1u, hk, lj, lj1, st1, st2]
+            apply ihm M3 (by omega) (by omega)
+            refine ⟨by simp [jsz], by simp [jsz]; exact f0, by simp [jsz]; exact (Array.getElem?_eq_some_iff.mp j1).2, ji1, ji2,
+              (zs.set (j.toNat - 1) zs[j.toNat]).set j.toNat zs[j.toNat - 1], j - 1#64, ?_, ?_,
+              by simp [jsz], by omega, by omega, ?_⟩
+            · simp [List.map_set, Array.getElem?_setIfInBounds]
+              exact (Array.getElem?_eq_some_iff.mp jh).1
+            · exact (List.set_set_perm hj1x hjx).trans jp
+            · rw [hj1n]
+              exact innerOK_swap hj0 hJi (by omega) hok hgt
+      apply inner n (Nat.le_refl _)
+      refine ⟨by simp [hsz], by simp [hsz]; exact e0, by simp [hsz]; exact e1, hi1, hc, ys, i, hh, hp,
+        by simp [hsz, e1], by omega, by omega, innerOK_entry hsorted⟩
+
+/-- `InsertionSort` leaves the slice sorted, and a permutation of what it
+held, for every slice of 64-bit integers. -/
+theorem insertionSort_correct (xs : List (BitVec 64)) (len : BitVec 64) (hlen : len.toInt = xs.length)
+    (s : HState Val) (hs : s.heap[1]? = some (.arr (xs.map (.int 64)))) :
+    wp ⟨1, 0⟩ (sortPost xs) (bindParams (Array.replicate 32 default) [0] [.slice 1 0 len len]) s := by
+  have hL : len.toInt < 2 ^ 63 := by have := @BitVec.toInt_lt 64 len; simpa using this
+  apply wpPt_of_block prog_f1 rfl
+  intro k
+  wp_simp
+  apply wpPtN_of_wpPt
+  apply wpPt_loop prog_f1 (sortOuter xs len) (sort_step xs len hlen hL)
+  refine ⟨by simp, by simp, xs, 1, hs, List.Perm.refl _, by simp, by simp, ?_, ?_⟩
+  · simp; omega
+  · intro a b ha hb hab hb1; simp at hb1; omega
+
 #print axioms max2_correct
 #print axioms countUp_correct
 #print axioms max_correct
+#print axioms insertionSort_correct
 
 end Go2Lean.Proofs.Functional
