@@ -261,15 +261,22 @@ where each blocked goroutine waits. Fuel counts every goroutine's steps; an
 unfair schedule that spins runs out of fuel and is moot.
 
 What a certificate means for a concurrent function: the exhaustive engine
-enumerates inputs, and the schedule is a havoc site, so its certificate is
-`exhausted_havoc` (sampled schedules), not a statement about every
-interleaving.
+enumerates inputs and, for each, every schedule (C3): the choices at each
+synchronisation point (which ready goroutine moves, which ready `select`
+case fires). A goroutine runs atomically between two such points, and the
+race detector below checks the accesses in between, so `exhausted` means
+no deadlock, leak, misuse panic or data race under any interleaving of
+the inputs tried. Past 2000 schedules for an input (10,000 for a
+property) or when a schedule runs out of fuel, the schedules were
+sampled and the certificate is `exhausted_havoc`.
 
 Data races (C2): the machine keeps a vector clock per goroutine and per
 synchronisation object. Every synchronisation operation joins the clocks
 of the goroutines taking part with the object's, both ways; a spawn
 orders the parent's past with the child; `sync/atomic` operations acquire
-and release their location. This over-approximates Go's happens-before (a
+and release their location, and are accesses too: an atomic access never
+races with another atomic one, but does with an unordered plain one (an
+atomic add against a plain copy of the struct). This over-approximates Go's happens-before (a
 buffered send is ordered with every receive on its channel, two readers of
 a `RWMutex` with each other), so a race the model reports is one Go's
 memory model has, and some are missed. Each step's heap accesses (loads

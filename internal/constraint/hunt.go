@@ -111,7 +111,9 @@ type searchResult struct {
 	Reason      string                     `json:"reason"`
 	MaxLen      int                        `json:"max_len"`
 	HavocSites  int                        `json:"havoc_sites"`
-	HavocRead   int                        `json:"havoc_read"` // exhaustive inputs whose run read a havoc value
+	HavocRead   int                        `json:"havoc_read"`        // exhaustive inputs whose run read a havoc value
+	Schedules   int                        `json:"schedules"`         // exhaustive runs under enumerated schedules (C3)
+	SchedSample int                        `json:"schedules_sampled"` // inputs with more schedules than the engine runs
 	BudgetHit   bool                       `json:"budget_hit"`
 	StuckSites  map[string]int             `json:"stuck_sites"` // where the model got stuck, by count
 	SpecExits   map[string]int             `json:"spec_exits"`  // spec return block -> trials that left through it
@@ -665,6 +667,12 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 				_, checked := exitCounts(specExits, res.SpecExits)
 				domain += fmt.Sprintf("; %d of them got past the spec's guards", checked)
 			}
+			if res.Schedules > 0 {
+				domain += fmt.Sprintf("; every schedule of each (%d runs)", res.Schedules)
+				if res.SchedSample > 0 {
+					domain = strings.Replace(domain, "every schedule of each", fmt.Sprintf("every schedule of each, but %d inputs had too many and were sampled", res.SchedSample), 1)
+				}
+			}
 			status := contract.ProofExhausted
 			if res.HavocRead > 0 {
 				// Havoc values are sampled, not enumerated: no certificate
@@ -680,7 +688,9 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 			pr := &contract.ProofResult{Property: prop.ID, Status: status, Fuel: opts.Fuel, Tactic: "exhaustive", Domain: domain, Assumptions: res.Assumptions}
 			// Specs are not attempted yet: composing target and spec makes the
 			// generic case split blow up (minutes, then no proof).
-			if opts.Prove && status == contract.ProofExhausted && prop.Kind == contract.KindNoPanic && prover.Eligible(abi) {
+			// The prover runs the sequential interpreter: not for a function
+			// that synchronises (its schedules were enumerated instead).
+			if opts.Prove && status == contract.ProofExhausted && prop.Kind == contract.KindNoPanic && res.Schedules == 0 && prover.Eligible(abi) {
 				// A certificate for the sample; try one for every input.
 				p, why := prove(leanDir, report, prop, abi, fid, sid, opts)
 				if p != nil {

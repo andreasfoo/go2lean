@@ -728,7 +728,7 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
     ("havoc", Json.arr havoc.toArray), ("probes", Json.arr probes.toArray),
     ("assumptions", Json.arr (s.assumed.map Json.str)),
     ("model_output", modelOutput o ret), ("panic_at", (s.panicAt.map Json.str).getD Json.null),
-    ("schedule", Json.arr (s.sched.map fun (g, op, ps) =>
+    ("schedule", Json.arr (s.conc.sched.map fun (g, op, ps) =>
       Json.mkObj [("g", (g : Json)), ("op", Json.str op), ("partners", Json.arr (ps.toArray.map (fun (j : Nat) => (j : Json))))]))]
 
 /-- The block a postcondition's spec returned from, when the spec ran to
@@ -1134,12 +1134,37 @@ def enumArgs (extra : List Nat) (maxLen : Nat) (pool : List (List Nat)) (gens : 
     (table : TypeTable := #[]) (allowNil : Bool := true) : List (Heap Val → List Val × Heap Val) :=
   enumGen.enumList extra maxLen pool table enumTop allowNil gens
 
+/-- `h` with the schedule site's draws forced: the first ones to `pre`, the
+rest to 0 (the first ready goroutine, the first ready case). -/
+def forceSched (h : Havoc Val) (site : Nat) (pre : Array Nat) : Havoc Val := fun st it =>
+  if st == site then .int 64 (BitVec.ofNat 64 (pre[it]?.getD 0)) else h st it
+
+/-- The schedule after one whose draws took `choices`, each below its
+`arity`: the last draw with an untried option, advanced, and nothing after
+it; none when every schedule has run (depth first). -/
+def nextSched (choices arity : Array Nat) : Option (Array Nat) := Id.run do
+  let mut j := min choices.size arity.size
+  while j > 0 do
+    j := j - 1
+    if choices[j]! + 1 < arity[j]! then
+      return some ((choices.extract 0 j).push (choices[j]! + 1))
+  return none
+
+/-- The most schedules the exhaustive engine runs for one input, and for
+one property over all its inputs; past them an input's schedules count as
+sampled (no certificate for every interleaving). -/
+def schedLimit : Nat := 2000
+def schedTotal : Nat := 10000
+
 /-- Try every input in the small domain. Prints a counterexample line, or
 `{"found": false, "exhaustive": true, ...}` when the whole domain holds, or
 `"exhaustive": false` when the domain exceeds `limit`. Havoc sites (if any)
 are not enumerated; they take seed-derived values (three per input), and
 `havoc_read` counts the inputs whose run read one; `assumptions` lists the
-under-approximations the runs took. -/
+under-approximations the runs took. The schedule of a concurrent run is
+enumerated (C3): every interleaving, up to `schedLimit` per input and
+`schedTotal` in all; an input whose schedules all ran, none out of fuel,
+reads no havoc through them. -/
 def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (maxLen limit fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
     (allowNil : Bool := true) (budgetMs : Nat := 0) : IO Unit := do
@@ -1159,6 +1184,8 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut fuelOuts := 0
   let mut moots := 0
   let mut havocRuns := 0
+  let mut schedRuns := 0
+  let mut schedSampled := 0
   -- The under-approximations any input's run took: a domain that held
   -- through one of them is no certificate for what it left out.
   let mut assumed : Array String := #[]
@@ -1173,7 +1200,8 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       IO.println (Json.mkObj [("found", false), ("exhaustive", false), ("reason", "budget"),
         ("domain", n), ("limit", limit), ("checked", (i : Nat))]).compress
       return
-    let (o, s, ret) := check p or h prop args fuel heap [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
+    let alts := [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
+    let (o, s, ret) := check p or h prop args fuel heap alts
     if o.refutes prop then
       let j := report or heap gens args i 0 o s ret p.siteOrigin
       if s.log.size == 0 then
@@ -1184,9 +1212,47 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
-    if s.log.size > 0 then havocRuns := havocRuns + 1
     for a in s.assumed do
       if !assumed.contains a && assumed.size < 32 then assumed := assumed.push a
+    match p.schedSite with
+    | some site =>
+      if s.conc.arity.isEmpty || o.refutes prop then
+        if s.log.size > 0 then havocRuns := havocRuns + 1
+      else
+        -- Every schedule of this input, depth first.
+        let mut pre : Option (Array Nat) := some #[]
+        let mut runs := 0
+        let mut complete := true
+        let mut other := false
+        while true do
+          let some pf := pre | break
+          if runs ≥ schedLimit || schedRuns + runs ≥ schedTotal ||
+              (budgetMs > 0 && (← IO.monoMsNow) - start > budgetMs) then
+            complete := false
+            break
+          let hs := forceSched h site pf
+          let (o', s', ret') := check p or hs prop args fuel heap (alts.map (forceSched · site pf))
+          runs := runs + 1
+          if o'.refutes prop then
+            let j := report or heap gens args i 0 o' s' ret' p.siteOrigin
+            if s'.log.all (·.1 == site) then
+              IO.println j.compress
+              return
+            else if fallback.isNone then
+              fallback := some j
+          -- A schedule that spins one goroutine out of fuel is one Go's
+          -- scheduler does not keep taking: no finding, but no certificate.
+          if let .outOfFuel := o' then complete := false
+          if o'.moot prop then complete := false
+          if s'.log.any (·.1 != site) then other := true
+          for a in s'.assumed do
+            if !assumed.contains a && assumed.size < 32 then assumed := assumed.push a
+          let choices := (Array.range s'.conc.arity.size).map fun k => pf[k]?.getD 0
+          pre := nextSched choices s'.conc.arity
+        schedRuns := schedRuns + runs
+        if !complete then schedSampled := schedSampled + 1
+        if !complete || other then havocRuns := havocRuns + 1
+    | none => if s.log.size > 0 then havocRuns := havocRuns + 1
     i := i + 1
   if let some j := fallback then
     IO.println (j.setObjVal! "havoc_dependent" true).compress
@@ -1194,6 +1260,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
     ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
     ("havoc_sites", p.havocWidths.size), ("havoc_read", havocRuns),
+    ("schedules", schedRuns), ("schedules_sampled", schedSampled),
     ("assumptions", Json.arr (assumed.map Json.str)),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 

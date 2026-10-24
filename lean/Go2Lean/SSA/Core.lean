@@ -122,9 +122,11 @@ class Dialect (Op : Type) (Val Oracle : outParam Type) where
   `range` over a map the model knows nothing about runs zero times): the
   run records it, so a result that went through it is not a certificate. -/
   assumption : Heap Val → Op → List Val → Option String := fun _ _ _ => none
-  /-- The heap locations an op reads (0) or writes (1), and the atomic
-  locations it acquires (2) or releases (3): the concurrent machine's race
-  detector (C2) checks them against happens-before. -/
+  /-- The heap locations an op reads (0) or writes (1), the atomic
+  locations it acquires (2) or releases (3), and its atomic reads (4) and
+  writes (5): the concurrent machine's race detector (C2) checks them
+  against happens-before (two atomic accesses never race; an atomic and a
+  plain one can). -/
   accesses : Op → List Val → List (Val × Nat) := fun _ _ => []
 
 inductive Instr (Op : Type) where
@@ -241,6 +243,26 @@ structure Prog (Op : Type) where
 /-- Havoc oracle: site → iteration → value. -/
 abbrev Havoc (Val : Type) := Nat → Nat → Val
 
+/-- What the concurrent machine (`Go2Lean.GoConc`) records during a run. -/
+structure ConcState (Val : Type) where
+  /-- The schedule, one entry per step: the goroutine that moved, the
+  operation it fired ("" when it only ran code: a goroutine that just
+  started, or whose operation a partner completed) and the goroutines whose
+  operations it completed (a rendezvous). The replay stage replays it. -/
+  sched : Array (Nat × String × List Nat) := #[]
+  /-- How many choices each draw of the schedule site had, in order (the
+  ready goroutines, or a `select`'s ready cases): the exhaustive engine
+  enumerates schedules by it. -/
+  arity : Array Nat := #[]
+  /-- The heap accesses of the ops run, when `execInstrs` tracks them,
+  checked for data races after each step. -/
+  acc : Array (Val × Nat) := #[]
+  /-- The race detector's state: the vector clock of each synchronisation
+  object (by heap location) and, per location, its last write and the reads
+  since (goroutine, clock, whether the access was atomic). -/
+  syncVC : List ((Nat × List Nat) × Array Nat) := []
+  shadow : List ((Nat × List Nat) × Option (Nat × Nat × Bool) × List (Nat × Nat × Bool)) := []
+
 /-- Run-time bookkeeping for havoc: how often each site fired and which
 values were handed out, so a counterexample can report them. -/
 structure HState (Val : Type) where
@@ -262,19 +284,9 @@ structure HState (Val : Type) where
   /-- Where the run panicked: the function, block and op (or terminator),
   set by the first panic, for diagnosing a counterexample. -/
   panicAt : Option String := none
-  /-- The concurrent machine's schedule, one entry per step: the goroutine
-  that moved, the operation it fired ("" when it only ran code: a goroutine
-  that just started, or whose operation a partner completed) and the
-  goroutines whose operations it completed (a rendezvous). M3 replays it. -/
-  sched : Array (Nat × String × List Nat) := #[]
-  /-- The heap accesses of the ops run, when `execInstrs` tracks them (the
-  concurrent machine, which checks them for data races after each step). -/
-  acc : Array (Val × Nat) := #[]
-  /-- The race detector's state: the vector clock of each synchronisation
-  object (by heap location) and, per location, its last write and the reads
-  since (goroutine, clock). -/
-  syncVC : List ((Nat × List Nat) × Array Nat) := []
-  shadow : List ((Nat × List Nat) × Option (Nat × Nat) × List (Nat × Nat)) := []
+  /-- The concurrent machine's state (schedule, race detector): one field,
+  so the sequential interpreter's state updates stay small for the prover. -/
+  conc : ConcState Val := {}
 
 namespace HState
 
@@ -313,7 +325,7 @@ def execInstrs (or : Oracle) (h : Havoc Val) (track : Bool) :
     let s := match Dialect.assumption s.heap o vals with
       | some note => s.assume note
       | none => s
-    let s := if track then { s with acc := s.acc ++ (Dialect.accesses o vals).toArray } else s
+    let s := if track then { s with conc.acc := s.conc.acc ++ (Dialect.accesses o vals).toArray } else s
     match Dialect.denote or s.heap o vals with
     | .ok (v, heap) => execInstrs or h track rest (env.set! dst v) { s with heap := heap }
     | .panic .modelStuck =>
