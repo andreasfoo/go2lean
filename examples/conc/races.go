@@ -185,3 +185,38 @@ func SnapshotAtomic() uint64 {
 	<-done
 	return n
 }
+
+// AddInside counts one worker into a WaitGroup from inside the worker.
+// Bug: Add is concurrent with Wait (Wait may find the counter at zero and
+// return before the worker ran, and go test -race reports the misuse).
+func AddInside() int {
+	var wg sync.WaitGroup
+	n := int64(0)
+	start := make(chan bool)
+	go func() {
+		<-start
+		wg.Add(1)
+		atomic.AddInt64(&n, 1)
+		wg.Done()
+	}()
+	close(start)
+	wg.Add(1)
+	go func() { wg.Done() }()
+	wg.Wait()
+	return int(atomic.LoadInt64(&n))
+}
+
+// AddBefore is AddInside with every Add before the goroutines start.
+// Race-free.
+func AddBefore() int {
+	var wg sync.WaitGroup
+	n := int64(0)
+	wg.Add(2)
+	go func() {
+		atomic.AddInt64(&n, 1)
+		wg.Done()
+	}()
+	go func() { wg.Done() }()
+	wg.Wait()
+	return int(atomic.LoadInt64(&n))
+}

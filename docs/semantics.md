@@ -276,7 +276,11 @@ of the goroutines taking part with the object's, both ways; a spawn
 orders the parent's past with the child; `sync/atomic` operations acquire
 and release their location, and are accesses too: an atomic access never
 races with another atomic one, but does with an unordered plain one (an
-atomic add against a plain copy of the struct). This over-approximates Go's happens-before (a
+atomic add against a plain copy of the struct). A `WaitGroup` carries Go's
+own race annotations: an `Add` that raises the counter from zero reads a
+location of the group, a `Wait` that finds it above zero writes it, so an
+`Add` concurrent with a `Wait` races (`Add` called inside the goroutine it
+counts). This over-approximates Go's happens-before (a
 buffered send is ordered with every receive on its channel, two readers of
 a `RWMutex` with each other), so a race the model reports is one Go's
 memory model has, and some are missed. Each step's heap accesses (loads

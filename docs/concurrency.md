@@ -136,6 +136,23 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   `SnapshotRacy` (an atomic add against a plain copy) is a race,
   `SnapshotAtomic` its race-free twin.
 
+## Built since C3 (C1 leftovers)
+
+- External test packages (`package x_test`): with `-tests` their tests are
+  targets too; the replay stage builds them through their directory's
+  package and writes the PoC in package `x_test`. GoKer's syncthing 5795,
+  a kernel written as one, is now confirmed.
+- `WaitGroup` races: an `Add` concurrent with a `Wait`, as Go's race
+  detector reports it (semantics.md §6). `examples/conc`: `AddInside` (a
+  race), `AddBefore` (race-free).
+- A test that reached `t.Error` (or any method of `*testing.T` through its
+  embedded `common`) got stuck in the model: go/ssa takes `&t.common`
+  first, and the test handle is opaque. Its fields are a placeholder now,
+  as the calls on it are ignored; 17 of go-cache's tests that were never
+  explored now run (docs/eval/conc.md, tool issue 5).
+- Where a run gets stuck is named by function and block, in the
+  concurrent machine too.
+
 ## GoKer
 
 `scripts/goker.sh <gobench> <out>` on all 103 kernels (GoBench at
@@ -146,15 +163,17 @@ trigger; most non-blocking ones have a data race.
 
 | | blocking (68) | non-blocking (35) |
 |---|---|---|
-| bug found by the model, confirmed by `go test` | **59** (20 deadlocks, 37 leaks, 1 double unlock, 1 data race) | **26** (23 data races, 2 `closed_channel`, 1 nil dereference) |
+| bug found by the model, confirmed by `go test` | **60** (21 deadlocks, 37 leaks, 1 double unlock, 1 data race) | **27** (24 data races, 2 `closed_channel`, 1 nil dereference) |
 | found by the model, refuted by `go test` (spurious) | 1 | 3 |
-| nothing found | 8 | 6 (holds) |
+| nothing found | 7 | 5 (holds) |
 
 How it grew: blocking 35 with C1a alone (no `context`, timers or `Cond`;
 16 kernels got stuck on a channel the model did not know), 53 with C1b,
 when 6 findings stayed unreproduced by Go's scheduler, 59 with C1c (the
 replay of the model's schedule); non-blocking 6 before C2, 25 with C2,
-26 with C3's atomic accesses (istio 8214). A confirmed
+26 with C3's atomic accesses (istio 8214), 27 with `WaitGroup` races
+(cockroach 4407); blocking 60 with external test packages (syncthing
+5795). A confirmed
 finding is the real kernel deadlocking, leaking, panicking or racing,
 not the model. About 6 blocking ones (cockroach 7504, 10214, 16167, istio
 16224, serving 2137, and, depending on the run, cockroach 1462, etcd 5509
@@ -182,11 +201,10 @@ varies.
 - Not found: `fmt` calling a `String` method that takes a read lock
   (cockroach 6181), `io.ReadFull` (grpc 1275), `cond.Wait` passed as a
   func value (kubernetes 11298), a sync-holding package variable set by
-  `init` (moby 29733), an external test package `package x_test`
-  (syncthing 5795), and three whose trials all run out of fuel (grpc 862,
-  istio 18454, kubernetes 58107: polling loops). Non-blocking: a
-  `WaitGroup` misuse (cockroach 4407), a channel misuse (grpc 1687) and
-  two testing-library bugs (serving 4908, 6171).
+  `init` (moby 29733), and three whose trials all run out of fuel (grpc
+  862, istio 18454, kubernetes 58107: polling loops). Non-blocking: a
+  channel misuse (grpc 1687) and two testing-library bugs (serving 4908,
+  6171).
 
 ## Why
 
