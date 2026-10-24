@@ -519,6 +519,9 @@ type ModelFunc struct {
 	// SequenceFor names the function this `go2lean:sequence` spec drives
 	// over its input event sequence (the spec itself is the target).
 	SequenceFor string `json:"sequence_for,omitempty"`
+	// LoopHeaders are the blocks of the model's function that loops come
+	// back to: a proof needs an invariant at each (go2lean prove).
+	LoopHeaders []int `json:"loop_headers,omitempty"`
 	// Consts are the integer literals in the body (two's-complement bit
 	// patterns as decimal strings); the engines seed their value pools with them.
 	Consts []string `json:"consts,omitempty"`

@@ -85,7 +85,17 @@ go2lean poc     [-workspace out] -counterexample id [more ids...]   one go test 
 go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, hunt, poc (./... allowed)
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
                 [-repairs n] [-report] <package>
+go2lean prove   [-workspace out] -goals goals.json | -func F -post P  <package>
 ```
+
+`prove` states, for each goal, the function's contract as a Lean theorem
+(every run that ends returns without panicking, in a state satisfying the
+postcondition, for every input) and proves it, kernel only. A goal is a
+function and a postcondition in Lean over the parameters, `ret` and `s'`
+(`examples/proofs/goals.json`); goals are proved in order, each with the
+earlier ones as contracts at its calls. Loop-free functions are proved
+with no proof text; a function with loops is reported as needing an
+invariant per loop ([#22](https://github.com/andreasfoo/go2lean/issues/22)).
 
 ## On a real module
 

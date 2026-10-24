@@ -1,0 +1,4 @@
+[
+  {"func": "Max2", "post": "∃ m, ret = .int 64 m ∧ a.sle m ∧ b.sle m"},
+  {"func": "Max3", "post": "∃ m, ret = .int 64 m ∧ a.sle m ∧ b.sle m ∧ c.sle m"}
+]

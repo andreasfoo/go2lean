@@ -37,6 +37,8 @@ func main() {
 		err = cmdAgent(os.Args[2:])
 	case "fuzz":
 		err = cmdFuzz(os.Args[2:])
+	case "prove":
+		err = cmdProve(os.Args[2:])
 	case "summary":
 		err = cmdSummary(os.Args[2:])
 	case "llvm":
@@ -61,6 +63,8 @@ func usage() {
   go2lean poc     [-workspace out] -counterexample id   replay stage: realise and verify in Go
   go2lean run     [-workspace out] <package>      all of the above
   go2lean fuzz    [-workspace out] [-fuzztime 30s] [-spec-file f] <package>   the package's specs as go test -fuzz targets
+  go2lean prove   [-workspace out] -goals f.json | -func F -post P  <package>
+                                                  state functional theorems (wpFun contracts) and prove them
   go2lean rank    [-workspace out]                 order confirmed verdicts by how plausible their input is (tiers 1-4)
   go2lean summary [-workspace out]                 all verdicts and proofs of a workspace as Markdown
   go2lean agent   [-workspace out] [-llm claude|mock:<file>] <package>
