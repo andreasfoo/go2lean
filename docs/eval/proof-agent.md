@@ -20,9 +20,12 @@ as postconditions.
   It answers with a prelude (invariants, lemmas) and a proof. go2lean
   writes the statement, checks the answer (no `sorry`, axioms, syntax
   extensions or namespace commands), runs Lean, and feeds the errors back.
-- **What counts as proved**: `#print axioms` lists only `propext`,
-  `Classical.choice` and `Quot.sound`, and the theorem has the stated type
-  when read again outside the namespace the answer wrote in.
+- **What counts as proved** (in these runs): `#print axioms` lists only
+  `propext`, `Classical.choice` and `Quot.sound`, and the theorem has the
+  stated type when read again outside the namespace the answer wrote in.
+  Since then the verdict is Lean's comparator's, and the statements are
+  stronger; every proof here was redone under them
+  ([proof-trust](proof-trust.md)).
 - **LLM**: the claude CLI's default model (`-llm claude-code`), no tools.
 
 ## Single loops (`examples/invariants`)

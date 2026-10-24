@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "homoglyph",
+    "post": "False",
+    "prelude": "theorem hоmoglyph : True := trivial",
+    "proof": "  exact sorry",
+    "attack": "A theorem whose name differs from the goal's by a Cyrillic letter, proved of True; the goal's own is left open."
+  }
+]

@@ -8,10 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/andreasfoo/go2lean/internal/sandbox"
 )
 
 // LLM is the one call the agent makes. Implementations: Claude (the
@@ -139,18 +142,47 @@ func (c *ClaudeCode) Turns() int { return c.LastTurns }
 var LeanTools = []string{"lean_run_code", "lean_goal", "lean_term_goal", "lean_multi_attempt",
 	"lean_diagnostic_messages", "lean_hover_info", "lean_local_search", "lean_file_outline", "lean_declaration_file"}
 
-// WithLeanTools gives a claude-code LLM lean-lsp-mcp (the binary at bin) on
-// the Lean project at leanDir; the config is written to cfgPath. Other
-// LLMs are returned as they are.
+// WithLeanTools gives a claude-code LLM lean-lsp-mcp (the binary at bin)
+// on a disposable copy of the Lean project at leanDir, made next to
+// cfgPath (where the config is written). The server runs confined
+// (sandbox.Confine): it, and the Lean code the agent sends it, can write
+// only that copy and read only the toolchain, the core library and the
+// server's own installation; no network. Other LLMs are returned as they
+// are.
 func WithLeanTools(llm LLM, bin, leanDir, cfgPath string) (LLM, error) {
 	cc, ok := llm.(*ClaudeCode)
 	if !ok {
 		return llm, nil
 	}
+	work := filepath.Join(filepath.Dir(cfgPath), "lean-tools")
+	if err := os.RemoveAll(work); err != nil {
+		return nil, err
+	}
+	if err := copyLeanProject(leanDir, work); err != nil {
+		return nil, err
+	}
+	work, err := filepath.Abs(work)
+	if err != nil {
+		return nil, err
+	}
+	ro := sandbox.LeanReadOnly()
+	if real, err := filepath.EvalSymlinks(bin); err == nil {
+		// A venv's script, its interpreter and the interpreter's home
+		// (uv installs both under the user's data directory).
+		ro = append(ro, filepath.Dir(bin), filepath.Dir(filepath.Dir(filepath.Dir(real))))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		ro = append(ro, filepath.Join(home, ".local", "share", "uv"))
+	}
+	prefix, err := sandbox.Confine(ro, []string{work}, work)
+	if err != nil {
+		return nil, err
+	}
 	disabled := "lean_leansearch,lean_loogle,lean_leanfinder,lean_state_search,lean_hammer_premise,lean_build"
+	argv := append(prefix, bin, "--lean-project-path", work, "--disable-tools", disabled)
 	cfg := map[string]any{"mcpServers": map[string]any{"lean": map[string]any{
-		"command": bin,
-		"args":    []string{"--lean-project-path", leanDir, "--disable-tools", disabled},
+		"command": argv[0],
+		"args":    argv[1:],
 		"env":     map[string]string{"PATH": os.Getenv("PATH")},
 	}}}
 	b, err := json.MarshalIndent(cfg, "", "  ")
@@ -168,4 +200,40 @@ func WithLeanTools(llm LLM, bin, leanDir, cfgPath string) (LLM, error) {
 	}
 	c.MaxTurns = 60
 	return &c, nil
+}
+
+// copyLeanProject copies a workspace's Lean project for the agent's tools:
+// its sources and built modules (with their traces' outputs), not its
+// executables or proof files.
+func copyLeanProject(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			switch rel {
+			case "Proofs", filepath.Join(".lake", "build", "bin"):
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(target, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, b, 0o644); err != nil {
+			return err
+		}
+		// Keep the times lake's traces were taken at.
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(target, info.ModTime(), info.ModTime())
+	})
 }

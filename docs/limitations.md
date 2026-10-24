@@ -5,69 +5,46 @@ Written from an outside review (2026-10-21); each item names what exists, the
 gap, and the planned work. The README and the design doc should not claim
 more than this page allows.
 
-## 1. No proofs in the pipeline yet
+## 1. Proofs cover a narrow class of functions
 
-The design promises two outputs: a confirmed PoC, or a Lean theorem
-(`proved` / `bounded_proved`). What exists:
+The design promises two outputs: a confirmed PoC, or a Lean theorem. Most
+properties still end in a bounded search, and `exhausted` is a search, not
+a proof: `go2lean-search` (compiled Lean, the same interpreter that finds
+counterexamples) computes it, and no kernel checks it.
 
-- One hand-written proof, `lean/Proofs/OobClampIdentity.lean`, for one
-  function. The `bv_decide` engine (M1b) is not in the pipeline, and the next
-  harder case (`SpecClampIdempotent`) does not go through yet.
-- The "exhausted" certificates are computed by `go2lean-search`, compiled Lean
-  running the same `denote` interpreter that finds counterexamples. The Lean
-  kernel checks none of them. Their trust base is the model's semantics, the
-  Lean compiler and the enumeration code.
-- `bv_decide` itself checks its LRAT certificate through `ofReduceBool`, so
-  it also trusts the compiler. Only proofs by kernel-checked tactics (`omega`,
-  `bv_omega`, `simp`, `decide` on tiny domains) avoid that.
+What is proved, and how ([trust](trust.md) for the exact claims):
 
-So today Lean is a bit-exact interpreter plus a search loop, and all
-confidence in a finding comes from `go test`. What Lean adds over the same
-model written in Go is a semantics that can also be the subject of a
-theorem; that path is not walked yet.
+- **`no_panic` of integer and bool functions**, in the pipeline: a
+  bounded theorem by case split and `bv_decide`, with the trust base read
+  from `#print axioms` (`kernel`, or `compiler` when `bv_decide`'s
+  certificate check uses `Lean.ofReduceBool`). One fixed oracle, runs
+  within a fuel.
+- **`no_panic` and specs of loop-free functions** (integers, bools,
+  strings, integer slices), in the pipeline, by `wp_auto`.
+- **Postconditions given to `go2lean prove`**, loops included, with
+  invariants an agent or a person writes.
 
-Since 2026-10-22 the pipeline proves part of it (design §5.3, rung 3): for
-a `no_panic` property of a function whose parameters are integers and
-bools, the spec & search stage writes a theorem over every input and records `proved` with its
-trust base read from `#print axioms` (`kernel`, or `compiler` when
-`Lean.ofReduceBool` appears). On the example packages 7 of the 13 eligible
-properties that held are proved, all `kernel`. Everything else is still
-what this section says: postconditions, functions taking slices, strings,
-pointers or interfaces, and the LLVM line get bounded searches only, and
-`exhausted` remains a name for a search, not a proof. The theorem is about
-the model; how faithfully the model follows Go is §5's question, which no
-proof answers.
+The second and third are the function's contract for every input, every
+value the model does not know, and every run that ends. They are judged
+by Lean's comparator against go2lean's own statement, in a sandbox, with a
+certificate.
 
-Since 2026-10-23 functional properties are proved by hand for a first set
-of functions, loops and slice reads included (`lean/Proofs/Functional.lean`,
-checked in CI by `scripts/proofs.sh`): `Max2`, `CountUp`, `Max`,
-`InsertionSort` and `Max3` of `examples/proofs`, each for every input,
-kernel only;
-the sort's spec is that the slice ends sorted and a permutation of what it
-held, through nested loops and writes to the slice. They rest on
-`Go2Lean.Proof.WP`, a partial-correctness weakest precondition read off the
-interpreter with a cut-point rule for loops (an inner loop is proved by
-induction on its fuel inside the outer loop's step), and calls through
-the callee's contract (`wpFun`: `Max3` calls `Max2` twice and is proved
-from `Max2`'s theorem, not by unfolding it). The block walking is
-tactics (`Go2Lean.Proof.Tactic`): `wp_auto` proves a loop-free function
-with no hand-written step (`Max2`, and `Max3` given `Max2`'s contract),
-and `wp_step` takes one block inside a loop proof. `go2lean prove`
-states the theorem from a postcondition (integer, bool and integer-slice
-parameters) and proves loop-free functions with no proof text; with
-`-llm`, an agent writes loop invariants and proofs under the kernel's
-check: four single-loop functions, then nested loops, a call in a loop
-and bubble sort (sorted, and a permutation), each in two or three rounds,
-and in one with Lean tools for the agent (`docs/eval/proof-agent.md`). A Go spec can be the postcondition: it runs
-in the model on the arguments and the result, so the theorem is the
-property the search checks. Inputs: integers, bools, strings and slices
-of integers, nil slices and the empty string by companion theorems;
-a non-nil slice is taken with capacity equal to its length, so a
-function whose behaviour depends on spare capacity (`append` into it) is
-not covered for such slices, which the search does generate. Still
-missing: termination (the theorems are about runs that end, and a spec
-that does not end satisfies any), spare capacity, and parameters of other
-kinds (structs, pointers, maps).
+The hand proofs (`lean/Proofs/Functional.lean`) are the agent's worked
+examples. CI checks them by `#print axioms`, not by the judge.
+
+Missing:
+
+- **Termination.** The theorems are about runs that end; a spec that does
+  not end satisfies any.
+- **Spare capacity.** A slice is taken with capacity equal to its length,
+  so `append` into spare capacity is not covered, though the search
+  generates it.
+- **Other parameter kinds:** structs, pointers, maps, methods.
+- **The LLVM line.**
+
+Every theorem is about the model; how faithfully the model follows Go is
+§5's question. The differential checks of proved properties bear on it,
+but no proof answers it.
 
 ## 2. Under-approximations are not tracked mechanically
 

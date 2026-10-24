@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "extern",
+    "post": "False",
+    "prelude": "@[extern \"lean_nat_dec_eq\"] def weird (a b : Nat) : Bool := false\ntheorem bad : weird 1 1 = true := by native_decide",
+    "proof": "  exact absurd bad (by decide)",
+    "attack": "native_decide on an @[extern] function whose C code disagrees with its Lean body. (Lean's interpreter has no native code for an answer's own extern, so native_decide fails at elaboration; were it compiled, the proof would still rest on native_decide's axiom.)"
+  }
+]

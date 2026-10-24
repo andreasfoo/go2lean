@@ -13,8 +13,11 @@ through the callees' contracts.
 - `wp_auto hf [fN] using c₁, …`: walk every path of a loop-free function,
   splitting on branches and applying a contract `cᵢ` (a `wpFun` theorem) at
   each call, then close what is left with `simp` and `grind`. A contract's
-  postcondition of the form `∃ x, v = e x ∧ P` is destructured so that the
-  walk goes on with `e x` for the result. -/
+  postcondition of the form `∃ x, v = e x ∧ P` (or, as go2lean prove states
+  it, `s.assumed = #[] ∧ ∃ x, v = e x ∧ P`) is destructured so that the
+  walk goes on with `e x` for the result; a contract's hypothesis that the
+  state at the call has taken no under-approximation is closed from the
+  caller's. -/
 
 namespace Go2Lean.GoSSA.WP
 
@@ -55,8 +58,13 @@ macro_rules
         | (apply wpFun_mono
            rotate_left
            ($contract:tactic)
-           intro _ _ hq
-           try (rcases hq with ⟨_, hv, _⟩; subst hv)))
+           all_goals first
+             | (intro _ _ hq
+                first
+                  | (rcases hq with ⟨_, _, hv, _⟩; subst hv)
+                  | (rcases hq with ⟨_, hv, _⟩; subst hv)
+                  | skip)
+             | (simp [*]; done)))
       all_goals (try simp only [BitVec.sle, BitVec.slt, BitVec.ule, BitVec.ult, decide_eq_true_eq,
         decide_eq_false_iff_not, Option.some.injEq, Val.int.injEq] at *)
       all_goals (try grind)))

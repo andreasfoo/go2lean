@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "hidden_sorry",
+    "post": "False",
+    "prelude": "theorem helper : False := sorryAx False false",
+    "proof": "  exact helper.elim",
+    "attack": "sorry under another name: sorryAx in a helper."
+  }
+]

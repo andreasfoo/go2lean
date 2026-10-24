@@ -699,7 +699,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 					p, why = prove(leanDir, report, prop, abi, fid, sid, opts)
 				}
 				if p == nil && wpEligible(report, prop, abi, fid, sid) {
-					p, why = proveWP(leanDir, report, prop, abi, fid, sid, opts)
+					p, why = proveWP(root, ws, leanDir, report, prop, abi, fid, sid, opts)
 				}
 				if p != nil {
 					pr = p
@@ -822,11 +822,11 @@ func prove(leanDir string, report *contract.ModelReport, prop *contract.Property
 }
 
 // wpEligible says whether proveWP applies: a no_panic or spec property of a
-// function whose parameters a statement covers, which reads no havoc value,
-// and which, with its spec, has no loop and makes no call (wp_auto walks
+// function whose parameters a statement covers and which, with its spec,
+// has no loop and makes no call (wp_auto walks
 // loop-free code; a loop needs an invariant, a call a contract).
 func wpEligible(report *contract.ModelReport, prop *contract.Property, abi *contract.ABI, fid, sid int) bool {
-	if prop.Kind != contract.KindNoPanic && prop.Kind != contract.KindPostcondition || len(abi.Havoc) > 0 {
+	if prop.Kind != contract.KindNoPanic && prop.Kind != contract.KindPostcondition {
 		return false
 	}
 	if prop.Kind == contract.KindPostcondition && sid < 0 {
@@ -842,9 +842,12 @@ func wpEligible(report *contract.ModelReport, prop *contract.Property, abi *cont
 }
 
 // proveWP states the property as the function's contract (no panic, or the
-// spec returns true) and proves it with wp_auto: for every input and every
-// run that ends, checked by the kernel alone.
-func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Property, abi *contract.ABI,
+// spec returns true) and proves it with wp_auto: for every input, every
+// oracle and havoc value, and every run that ends, checked by the kernel
+// alone. Lean's check of the file in the workspace is the first pass; the
+// proof judge (prover.Judge) decides: it holds the theorems to the
+// statements go2lean writes and replays them in Lean's kernel.
+func proveWP(root string, ws contract.Workspace, leanDir string, report *contract.ModelReport, prop *contract.Property, abi *contract.ABI,
 	fid, sid int, opts SearchOptions) (*contract.ProofResult, string) {
 	g := prover.Goal{Func: abi.GoFunc, Name: "holds", Post: "True"}
 	if prop.Kind == contract.KindPostcondition {
@@ -859,8 +862,9 @@ func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Proper
 	goals := append([]prover.Goal{g}, prover.Companions(g, abi)...)
 	var abis []*contract.ABI
 	var fids []int
-	for range goals {
-		abis, fids = append(abis, abi), append(fids, fid)
+	var all []int
+	for i := range goals {
+		abis, fids, all = append(abis, abi), append(fids, fid), append(all, i)
 	}
 	rel := filepath.Join("Proofs", "WP_"+prop.ID+".lean")
 	f, err := prover.FunctionalFileAt(leanDir, rel, report, goals, abis, fids)
@@ -872,7 +876,9 @@ func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Proper
 		budget = 120 * time.Second
 	}
 	start := time.Now()
-	rs, _, err := prover.CheckGoals(leanDir, f, goals, budget)
+	// Lean's check in the workspace first: most attempts fail (a havoc
+	// value wp_auto cannot reason about), and it costs less than the judge.
+	rs, _, err := prover.CheckGoals(leanDir, report.LeanModule, f, goals, budget)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -881,9 +887,24 @@ func proveWP(leanDir string, report *contract.ModelReport, prop *contract.Proper
 			return nil, r.Theorem + ": " + r.Error
 		}
 	}
+	dir := filepath.Join(ws.Root, "judge", fmt.Sprintf("%s-%d", prop.ID, time.Now().UnixNano()))
+	certs, err := prover.Judge(prover.JudgeInput{Root: root, WSLean: leanDir, Dir: dir,
+		Report: report, Goals: goals, ABIs: abis, Fids: fids, Candidates: all, Budget: 4 * budget})
+	if err != nil {
+		return nil, "judge: " + err.Error()
+	}
+	for i, g := range goals {
+		if certs[i] == nil {
+			return nil, prover.TheoremName(g) + ": not proved (" + prover.JudgeError(dir) + ")"
+		}
+	}
+	domain := fmt.Sprintf("every input (all %d parameters; slices and strings of any length, nil and empty included, with capacity equal to length); every oracle and havoc value; every run that ends (partial correctness) and takes no under-approximation", len(abi.Params))
+	if u := prover.Uncovered(abi); len(u) > 0 {
+		domain = strings.Replace(domain, "nil and empty included", fmt.Sprintf("nil and empty not covered (%d slice and string parameters)", len(u)), 1)
+	}
 	return &contract.ProofResult{Property: prop.ID, Status: contract.ProofProved, Tactic: "wp_auto",
-		Domain:   fmt.Sprintf("every input (all %d parameters; slices and strings of any length, nil and empty included, with capacity equal to length); every run that ends (partial correctness)", len(abi.Params)),
-		LeanFile: filepath.Join("lean", rel), TimeMs: time.Since(start).Milliseconds(), Trust: prover.TrustKernel}, ""
+		Domain: domain, LeanFile: filepath.Join("lean", rel), TimeMs: time.Since(start).Milliseconds(),
+		Trust: prover.TrustKernel, Certificate: certs[0]}, ""
 }
 
 // stuckNote names the most frequent site at which the model got stuck.

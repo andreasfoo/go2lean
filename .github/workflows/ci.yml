@@ -41,6 +41,14 @@ jobs:
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
+      # The proof judge and replay run code in bubblewrap.
+      - name: Install bubblewrap (unprivileged user namespaces)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces by AppArmor.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --unshare-all --die-with-parent true
+
       - name: go vet
         run: go vet ./...
 
@@ -78,9 +86,6 @@ jobs:
       - name: strings, strconv and utf8 models against Go
         run: DEPS=1 PKG=testdata/stdaudit scripts/json-diff.sh "$RUNNER_TEMP/std-audit" 6 | tail -5
 
-      - name: Functional proofs (lean/Proofs/Functional.lean)
-        run: scripts/proofs.sh "$RUNNER_TEMP/proofs"
-
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -96,4 +101,69 @@ jobs:
             ${{ runner.temp }}/num-diff/*.log
             ${{ runner.temp }}/url-diff/*.log
             ${{ runner.temp }}/misc-diff/*.log
+          if-no-files-found: ignore
+
+  # Proofs and the proof judge (docs/trust.md): the judge runs Lean's
+  # comparator in bubblewrap, and Lean text an agent wrote runs only there.
+  proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cache the Lean toolchain and the core build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            ~/.cache/go2lean
+            lean/.lake
+          key: lean-${{ hashFiles('lean/lean-toolchain') }}-${{ hashFiles('lean/lakefile.toml', 'lean/Go2Lean/**/*.lean', 'lean/Go2Lean.lean') }}
+          restore-keys: lean-${{ hashFiles('lean/lean-toolchain') }}-
+
+      - name: Install elan
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install bubblewrap (unprivileged user namespaces)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces by AppArmor.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --unshare-all --die-with-parent true
+
+      - name: Build the Lean core
+        working-directory: lean
+        run: lake build
+
+      - name: Proved properties against the real Go code
+        run: go test ./examples/proofs ./examples/invariants ./examples/loops ./examples/strloops
+
+      - name: Functional proofs, judged (lean/Proofs/Functional.lean, examples/*/proofs.json)
+        run: scripts/proofs.sh "$RUNNER_TEMP/proofs"
+
+      - name: Red-team corpus of the proof judge (testdata/redteam)
+        run: scripts/redteam.sh "$RUNNER_TEMP/redteam" 4
+
+      - name: Semantic mutants of the proved functions (testdata/mutants.txt)
+        run: scripts/mutants.sh "$RUNNER_TEMP/mutants" 4
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-logs
+          path: |
+            ${{ runner.temp }}/proofs/*.log
+            ${{ runner.temp }}/redteam/*.log
+            ${{ runner.temp }}/redteam/verdicts.txt
+            ${{ runner.temp }}/mutants/*.log
+            ${{ runner.temp }}/mutants/verdicts.txt
           if-no-files-found: ignore

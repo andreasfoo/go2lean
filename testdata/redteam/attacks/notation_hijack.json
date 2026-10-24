@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "notation_hijack",
+    "post": "False",
+    "prelude": "macro_rules | `($a ∧ $b) => `(Or $a $b)",
+    "proof": "  apply wpFun_of_wpPt prog_f0\n  wp_auto prog_f0 [f0]",
+    "attack": "A macro rule that reads ∧ as ∨, so the statement's conjunction with the postcondition becomes a disjunction."
+  }
+]

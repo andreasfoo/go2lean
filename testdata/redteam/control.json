@@ -1,0 +1,7 @@
+[
+  {
+    "func": "Max2",
+    "name": "control",
+    "post": "∃ m, ret = .int 64 m ∧ a.sle m ∧ b.sle m"
+  }
+]

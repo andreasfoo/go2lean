@@ -201,21 +201,34 @@ var (
 	lemmasErr = map[string]error{}
 )
 
-func buildLemmas(leanDir string) error {
+func buildLemmas(leanDir string) error { return buildTrusted(leanDir, "") }
+
+// BuildTrusted builds the proof library and the model module in the
+// workspace's Lean project, before any text an agent wrote is read there.
+func BuildTrusted(leanDir, module string) error { return buildTrusted(leanDir, module) }
+
+// buildTrusted builds the proof library and, unless empty, the model
+// module in the workspace's Lean project, once per process.
+func buildTrusted(leanDir, module string) error {
 	lemmasMu.Lock()
 	defer lemmasMu.Unlock()
-	if err, done := lemmasErr[leanDir]; done {
+	key := leanDir + "\x00" + module
+	if err, done := lemmasErr[key]; done {
 		return err
 	}
 	var err error
 	// From leanDir, not with -d: elan picks the toolchain from the
 	// lean-toolchain file of the current directory (CI has no default).
-	cmd := exec.Command("lake", "build", "Go2Lean.Proof.Simp", "Go2Lean.Proof.Tactic")
+	args := []string{"build", "Go2Lean.Proof.Simp", "Go2Lean.Proof.Tactic"}
+	if module != "" {
+		args = append(args, "+"+module)
+	}
+	cmd := exec.Command("lake", args...)
 	cmd.Dir = leanDir
 	if out, e := cmd.CombinedOutput(); e != nil {
-		err = fmt.Errorf("lake build Go2Lean.Proof.Simp Go2Lean.Proof.Tactic: %s", firstError(string(out)))
+		err = fmt.Errorf("lake %s: %s", strings.Join(args, " "), firstError(string(out)))
 	}
-	lemmasErr[leanDir] = err
+	lemmasErr[key] = err
 	return err
 }
 
@@ -236,16 +249,23 @@ func axiomLine(s string) string {
 	return strings.Join(strings.Fields(rest), " ")
 }
 
+// firstError is the first line of s that reports an error, else its first
+// line (a message stays on one line), at most 300 bytes.
 func firstError(s string) string {
+	first := ""
 	for _, l := range strings.Split(s, "\n") {
+		if first == "" && strings.TrimSpace(l) != "" {
+			first = l
+		}
 		if strings.Contains(l, "error") {
-			if len(l) > 300 {
-				l = l[:300]
-			}
-			return strings.TrimSpace(l)
+			first = l
+			break
 		}
 	}
-	return strings.TrimSpace(s)
+	if len(first) > 300 {
+		first = first[:300]
+	}
+	return strings.TrimSpace(first)
 }
 
 // Closure lists the model ids the run of the given functions may enter

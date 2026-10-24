@@ -86,12 +86,18 @@ go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, h
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
                 [-repairs n] [-report] <package>
 go2lean prove   [-workspace out] -goals goals.json | -func F -post P  [-llm claude-code|claude|mock:<path>]
-                [-rounds n] [-lean-tools] [-out proofs.json] <package>
+                [-rounds n] [-lean-tools] [-paranoid] [-out proofs.json] <package>
 ```
 
 `prove` states, for each goal, the function's contract as a Lean theorem
-(every run that ends returns without panicking, in a state satisfying the
-postcondition, for every input) and proves it, kernel only. A goal is a
+(for every input, every value the model does not know, and every run that
+ends: no panic, no under-approximation, a final state satisfying the
+postcondition) and proves it. A proof counts only when Lean's comparator
+accepts it in a project of its own against go2lean's statement, with
+Lean's standard axioms only, replayed by Lean's kernel and (`-paranoid`,
+the default) every independent checker bundled with Lean; each proved
+goal gets a certificate (`<workspace>/judge/.../results.json`). What a
+proof asserts, and what it rests on: [trust](trust.md). A goal is a
 function and a postcondition: in Lean over the parameters, `ret` and `s'`
 (`"post"`), or one of the function's `go2lean:spec` functions (`"spec"`),
 which is then run in the model on the arguments and the result, so the
@@ -111,7 +117,11 @@ Lean checks, and its errors go back for up to `-rounds` attempts
 (`claude-code` runs the `claude` CLI on its own login; with
 [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) on `PATH`, e.g.
 `uv tool install lean-lsp-mcp`, it also checks its answers in Lean itself
-before giving them, `-lean-tools`, on by default). `-out` saves the
+before giving them, `-lean-tools`, on by default). Lean text an agent
+writes runs only in [bubblewrap](https://github.com/containers/bubblewrap)
+(no network, nothing writable outside a scratch copy), so `prove` needs
+`bwrap`; `GO2LEAN_LEAN_SANDBOX=off` runs it unconfined, and the
+certificates say so. `-out` saves the
 proofs that worked, which `prove -goals` checks again without the agent
 ([results](eval/proof-agent.md)).
 

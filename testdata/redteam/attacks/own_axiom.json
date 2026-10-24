@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "own_axiom",
+    "post": "False",
+    "prelude": "axiom cheat : False",
+    "proof": "  exact cheat.elim",
+    "attack": "An axiom of the answer's own."
+  }
+]

@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/prover"
+	"github.com/andreasfoo/go2lean/internal/sandbox"
 )
 
 func TestParseProof(t *testing.T) {
@@ -100,9 +103,25 @@ func TestLoopPaths(t *testing.T) {
 
 func TestWithLeanTools(t *testing.T) {
 	cfg := t.TempDir() + "/mcp.json"
-	llm, err := WithLeanTools(&ClaudeCode{Effort: "high"}, "/bin/lean-lsp-mcp", "/ws/lean", cfg)
+	src := t.TempDir()
+	os.MkdirAll(src+"/Proofs", 0o755)
+	os.WriteFile(src+"/lakefile.toml", []byte("x"), 0o644)
+	os.WriteFile(src+"/Proofs/P.lean", []byte("x"), 0o644)
+	llm, err := WithLeanTools(&ClaudeCode{Effort: "high"}, "/bin/lean-lsp-mcp", src, cfg)
+	if errors.Is(err, sandbox.ErrNoBwrap) {
+		t.Skip(err)
+	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The tools get a copy of the project, without its proof files, and
+	// run confined.
+	work := filepath.Dir(cfg) + "/lean-tools"
+	if _, err := os.Stat(work + "/lakefile.toml"); err != nil {
+		t.Error(err)
+	}
+	if _, err := os.Stat(work + "/Proofs"); err == nil {
+		t.Error("the copy has the proof files")
 	}
 	cc := llm.(*ClaudeCode)
 	if cc.MCPConfig != cfg || cc.Effort != "high" || cc.MaxTurns == 0 {
@@ -114,7 +133,8 @@ func TestWithLeanTools(t *testing.T) {
 		}
 	}
 	b, err := os.ReadFile(cfg)
-	if err != nil || !strings.Contains(string(b), "/ws/lean") || !strings.Contains(string(b), "lean_loogle") {
+	if err != nil || !strings.Contains(string(b), work) || strings.Contains(string(b), src) || !strings.Contains(string(b), "lean_loogle") ||
+		!sandbox.Unconfined() && !strings.Contains(string(b), `"command": "bwrap"`) {
 		t.Errorf("config %s (%v)", b, err)
 	}
 	// Other LLMs are left as they are.

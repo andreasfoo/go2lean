@@ -292,7 +292,32 @@ type ProofResult struct {
 	// Lean's standard axioms) or "compiler" (also Lean.ofReduceBool, which
 	// bv_decide's certificate check uses).
 	Trust string `json:"trust,omitempty"`
-	Error string `json:"error,omitempty"`
+	// Certificate is the proof judge's record, for a proof it accepted.
+	Certificate *ProofCertificate `json:"certificate,omitempty"`
+	Error       string            `json:"error,omitempty"`
+}
+
+// ProofCertificate is the proof judge's record of one accepted theorem:
+// what was proved, against which sources, and how to check it again.
+type ProofCertificate struct {
+	Theorem   string `json:"theorem"` // full name
+	Func      string `json:"func"`
+	Toolchain string `json:"toolchain"`
+	// CoreSHA256 hashes the core library's sources the judge built from
+	// (repo.CoreFiles, in order, with their names and lengths).
+	CoreSHA256 string `json:"core_sha256"`
+	// ModelSHA256 is the model file's hash, as the compile stage wrote it.
+	ModelSHA256 string `json:"model_sha256"`
+	// StatementSHA256 hashes the theorem's statement as go2lean wrote it in
+	// the challenge; ChallengeSHA256 and SolutionSHA256 the files judged.
+	StatementSHA256 string   `json:"statement_sha256"`
+	ChallengeSHA256 string   `json:"challenge_sha256"`
+	SolutionSHA256  string   `json:"solution_sha256"`
+	Axioms          []string `json:"permitted_axioms"`
+	Judge           string   `json:"judge"`
+	// Sandbox is "bwrap", or "off" when GO2LEAN_LEAN_SANDBOX=off.
+	Sandbox string `json:"sandbox"`
+	Dir     string `json:"dir"` // the judge's project: run Judge there again
 }
 
 // ModelGap is feedback from M3/M2 to M1: a place where the model's
@@ -576,10 +601,13 @@ type XCall struct {
 // ModelReport is M1's summary of one package, read by M2 to decide what to
 // attack and how.
 type ModelReport struct {
-	Package    string      `json:"package"`
-	Frontend   string      `json:"frontend"`
-	LeanModule string      `json:"lean_module"` // e.g. Go2Lean.Generated.gossa.overflow
-	LeanFile   string      `json:"lean_file"`   // relative to the workspace
+	Package    string `json:"package"`
+	Frontend   string `json:"frontend"`
+	LeanModule string `json:"lean_module"` // e.g. Go2Lean.Generated.gossa.overflow
+	LeanFile   string `json:"lean_file"`   // relative to the workspace
+	// LeanSHA256 is the hash of the model file as the compile stage wrote
+	// it: the proof judge copies the file only if it still matches.
+	LeanSHA256 string      `json:"lean_sha256,omitempty"`
 	Funcs      []ModelFunc `json:"funcs"`
 	Havoc      []ABIHavoc  `json:"havoc,omitempty"` // program-wide havoc sites
 	// Dependency marks a package modelled only for its callers (-deps).
