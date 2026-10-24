@@ -56,10 +56,13 @@ and `wp_step` takes one block inside a loop proof. `go2lean prove`
 states the theorem from a postcondition (integer, bool and integer-slice
 parameters) and proves loop-free functions with no proof text; with
 `-llm`, an agent writes loop invariants and proofs under the kernel's
-check (four single-loop functions of `examples/invariants`, each in two or
-three rounds: `docs/eval/proof-agent.md`). Still missing: postconditions
-taken from Go specs, harder loops for the agent (nested, with calls), and
-termination (the theorems are about runs that end).
+check: four single-loop functions, then nested loops, a call in a loop
+and bubble sort (sorted, and a permutation), each in two or three rounds
+(`docs/eval/proof-agent.md`). A Go spec can be the postcondition: it runs
+in the model on the arguments and the result, so the theorem is the
+property the search checks. Still missing: termination (the theorems are
+about runs that end, and a spec that does not end satisfies any), and
+parameters beyond integers, bools and integer slices.
 
 ## 2. Under-approximations are not tracked mechanically
 

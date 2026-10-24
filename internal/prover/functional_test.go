@@ -50,3 +50,29 @@ func TestAxiomsOf(t *testing.T) {
 		t.Errorf("C: got %q", a)
 	}
 }
+
+func TestSpecPost(t *testing.T) {
+	abi := &contract.ABI{GoFunc: "p.Clamp", Params: []contract.ABIParam{
+		{Go: "v", Kind: contract.ABIInt, Width: 64},
+		{Go: "xs", Kind: contract.ABISlice, ElemWidth: 64},
+	}, Results: []contract.ABIResult{{GoType: "int"}}}
+	post, err := SpecPost(abi, "M", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "_root_.Go2Lean.GoSSA.WP.wpFun _root_.M.prog or0 h0 9 [.int 64 v, .slice xs_ref 0 xs_len xs_len, ret] (fun r _ => r = .bool true) s'"
+	if post != want {
+		t.Errorf("got  %s\nwant %s", post, want)
+	}
+	// No result: the spec takes the parameters only.
+	abi.Results = nil
+	if post, _ := SpecPost(abi, "M", 9); strings.Contains(post, "ret]") {
+		t.Errorf("no result, yet ret passed: %s", post)
+	}
+	if n := TheoremName(Goal{Func: "F", Spec: "SpecF"}); n != "SpecF" {
+		t.Errorf("name %s", n)
+	}
+	if n := TheoremName(Goal{Func: "F"}); n != "F_spec" {
+		t.Errorf("name %s", n)
+	}
+}

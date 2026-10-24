@@ -145,6 +145,13 @@ none mut=4/4 jsonc_roundtrip_specroundtripkeeps
 exhausted list_len_nopanic
 exhausted list_sum_nopanic
 confirmed list_sum_specsumsingleton
+exhausted loops_bubblesort_nopanic
+exhausted mut=4/13 loops_bubblesort_specbubblesortsorted
+proved loops_clamp_nopanic
+exhausted mut=4/4 loops_clamp_specclamp
+none loops_clampall_nopanic
+none mut=6/7 loops_clampall_specclampall
+exhausted loops_hasduplicate_nopanic
 confirmed magic_decode_nopanic
 exhausted maps_counter_add_newcounter_nopanic
 confirmed maps_counter_share_newcounter_nopanic

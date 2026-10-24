@@ -60,9 +60,19 @@ func cmdProve(args []string) error {
 	}
 	ids := map[string]int{}
 	loops := map[string][]int{}
+	specFor := map[string]string{}
 	for _, f := range report.Funcs {
 		ids[f.Name] = f.ID
 		loops[f.Name] = f.LoopHeaders
+		specFor[f.Name] = f.SpecFor
+	}
+	names := map[string]bool{}
+	for _, g := range goals {
+		n := prover.TheoremName(g)
+		if names[n] {
+			return fmt.Errorf("prove: two goals are named %s: give one a \"name\"", n)
+		}
+		names[n] = true
 	}
 	var abis []*contract.ABI
 	var fids []int
@@ -79,7 +89,24 @@ func cmdProve(args []string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := prover.Statement(abi, id, prover.TheoremName(g.Func), g.Post); err != nil {
+		if g.Spec != "" {
+			sid, ok := ids[g.Spec]
+			if !ok || specFor[g.Spec] != g.Func {
+				return fmt.Errorf("prove: %s is not a go2lean:spec of %s", g.Spec, g.Func)
+			}
+			if g.Post != "" {
+				return fmt.Errorf("prove: %s: a goal takes a post or a spec, not both", g.Func)
+			}
+			post, err := prover.SpecPost(abi, report.LeanModule, sid)
+			if err != nil {
+				return fmt.Errorf("prove: %v", err)
+			}
+			goals[i].Post, goals[i].SpecFid = post, sid
+			if goals[i].Proof == "" && len(loops[g.Spec]) > 0 && len(loops[g.Func]) == 0 {
+				goals[i].Proof = prover.LoopProof(loops[g.Spec])
+			}
+		}
+		if _, err := prover.Statement(abi, id, prover.TheoremName(g), goals[i].Post); err != nil {
 			return fmt.Errorf("prove: %v", err)
 		}
 		abis = append(abis, abi)
@@ -120,6 +147,9 @@ func cmdProve(args []string) error {
 		saved := make([]prover.Goal, len(goals))
 		for i, g := range goals {
 			saved[i] = g
+			if g.Spec != "" {
+				saved[i].Post = ""
+			}
 			if !rs[i].Proved || strings.HasPrefix(g.Proof, "  sorry") {
 				saved[i].Prelude, saved[i].Proof = "", ""
 			}
@@ -164,5 +194,12 @@ func proofLibrary(root string) (string, error) {
 		}
 		fmt.Fprintf(&b, "## %s\n\n```lean\n%s```\n\n", f, text)
 	}
+	// Proofs the agent wrote before, for single loops over slices: the
+	// goals with their preludes and proofs.
+	text, err := os.ReadFile(filepath.Join(root, "examples/invariants/proofs.json"))
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&b, "## examples/invariants/proofs.json (goals of examples/invariants, proved)\n\n```json\n%s```\n\n", text)
 	return b.String(), nil
 }

@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/andreasfoo/go2lean/internal/prover"
 )
 
 func TestParseProof(t *testing.T) {
@@ -37,9 +39,22 @@ func TestVetProof(t *testing.T) {
 		"end Go2Lean.Proofs.Functional.p",
 		"namespace Other",
 		"theorem t : _root_.Foo := x",
+		"@[simp] local notation \"x\" => 1",
+		"open Foo renaming bar → baz",
+		"  exact (sorry : False)",
 	} {
 		if err := vetProof(bad); err == nil {
 			t.Errorf("%q should be refused", bad)
+		}
+	}
+	// Words in comments and names are not commands.
+	for _, fine := range []string{
+		"-- the sorted prefix grows\ntheorem sorted_prefix : True := trivial",
+		"/- uses sorry nowhere: an axiom-free proof -/\nexact trivial",
+		"theorem t : True := by\n  simp [List.isPrefixOf, prefix_eq]",
+	} {
+		if err := vetProof(fine); err != nil {
+			t.Errorf("%q: %v", fine, err)
 		}
 	}
 	ok := "def countInv (env : Env Val) : Prop := True\ntheorem l : True := trivial\n  apply wpPt_loop prog_f1 inv\n  · intro n env s hI ih\n    simp [List.isPrefixOf]"
@@ -48,5 +63,16 @@ func TestVetProof(t *testing.T) {
 	}
 	if !strings.Contains(proveSystem, "```lean proof") {
 		t.Error("the system prompt should show the answer format")
+	}
+}
+
+func TestDeclared(t *testing.T) {
+	goals := []prover.Goal{
+		{Prelude: "def inv (x : Nat) : Prop := True\n@[simp] theorem inv_ok : True := trivial\nabbrev post := 1"},
+		{Prelude: "def mine := 2"},
+	}
+	got := strings.Join(declared(goals, 1), ",")
+	if got != "inv,inv_ok,post" {
+		t.Errorf("got %s", got)
 	}
 }
