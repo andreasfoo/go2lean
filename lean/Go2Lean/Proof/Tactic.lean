@@ -15,9 +15,9 @@ through the callees' contracts.
   each call, then close what is left with `simp` and `grind`. A contract's
   postcondition of the form `∃ x, v = e x ∧ P` (or, as go2lean prove states
   it, `s.assumed = #[] ∧ ∃ x, v = e x ∧ P`) is destructured so that the
-  walk goes on with `e x` for the result; a contract's hypothesis that the
-  state at the call has taken no under-approximation is closed from the
-  caller's. -/
+  walk goes on with `e x` for the result; a contract's hypotheses that the
+  state at the call has taken no under-approximation, and that havoc
+  values are typed (`h_hv`), are closed from the caller's. -/
 
 namespace Go2Lean.GoSSA.WP
 
@@ -59,6 +59,7 @@ macro_rules
            rotate_left
            ($contract:tactic)
            all_goals first
+             | assumption
              | (intro _ _ hq
                 first
                   | (rcases hq with ⟨_, _, hv, _⟩; subst hv)

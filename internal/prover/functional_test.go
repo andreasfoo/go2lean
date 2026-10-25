@@ -19,7 +19,7 @@ func TestStatement(t *testing.T) {
 	}
 	for _, want := range []string{
 		"theorem F_spec (orc : Oracle) (hv : Havoc Val) (n : BitVec 32) (ok : Bool) (xs : List (BitVec 64)) (xs_len : BitVec 64) (xs_ref : Nat) (s : HState Val)",
-		"(h_xs_len : xs_len.toInt = xs.length) (h_xs_ref : xs_ref ≠ 0) (h_xs : s.heap[xs_ref]? = some (.arr (xs.map (.int 64)))) (h_assumed : s.assumed = #[])",
+		"(h_hv : _root_.Go2Lean.GoSSA.WP.HavocTyped prog.havocWidths hv) (h_xs_len : xs_len.toInt = xs.length) (h_xs_ref : xs_ref ≠ 0) (h_xs : s.heap[xs_ref]? = some (.arr (xs.map (.int 64)))) (h_assumed : s.assumed = #[])",
 		"wpFun prog orc hv 7 [.int 32 n, .bool ok, .slice xs_ref 0 xs_len xs_len]",
 		"(fun ret s' => s'.assumed = #[] ∧ (ret = .int 64 0)) s",
 	} {
@@ -72,6 +72,11 @@ func TestAxiomsOf(t *testing.T) {
 		if got := extraAxioms(ax); got != want {
 			t.Errorf("extraAxioms(%q) = %q, want %q", ax, got, want)
 		}
+	}
+	// An earlier goal stated as an axiom (CheckGoal) is permitted; an
+	// answer's axiom of another name is not.
+	if got := extraAxioms("'X.B' depends on axioms: [propext, X.A, X.Y.A]", "X.A"); got != "X.Y.A" {
+		t.Errorf("assumed: got %q", got)
 	}
 }
 
@@ -148,7 +153,7 @@ func TestCompanionsAndStrings(t *testing.T) {
 	if strings.Contains(st, "h_xs") || strings.Contains(st, "(xs :") {
 		t.Errorf("a nil parameter is bound:\n%s", st)
 	}
-	if got := strings.Join(binderNames(abi, cs[2].Empty), " "); got != "orc hv n s h_assumed" {
+	if got := strings.Join(binderNames(abi, cs[2].Empty), " "); got != "orc hv n s h_hv h_assumed" {
 		t.Errorf("binders %q", got)
 	}
 	// One slice parameter: one companion, named _empty.

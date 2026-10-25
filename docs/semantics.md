@@ -65,7 +65,7 @@ yields UB or poison, Go panics. A run ends in one of:
 | `ok v` | returned | — |
 | `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex: a fatal error in Go), `deadlock`, `goroutine_leak`, `data_race` (§6), `other` |
 | `panic modelStuck` | — | the model cannot continue (stuck); not a Go panic, never reported as one |
-| `outOfFuel` | — | the step budget ran out (loops, recursion); moot |
+| `outOfFuel` | — | the step budget ran out (loops, recursion), or a slice would exceed the model's size bound (1024 elements); moot |
 
 `recover` is not modelled: a panic ends the run.
 
@@ -100,8 +100,8 @@ yields UB or poison, Go panics. A run ends in one of:
 | `new(T)`, `&T{…}`, escaping locals | `alloc zero` | exact |
 | `*p`, `*p = v`, `&x.f`, `&xs[i]`, `x.f`, `a[i]` | `loadPath storePath fieldAddr indexAddr field arrIndex` | exact; nil dereference panics |
 | `xs[i]`, `xs[lo:hi]`, `xs[lo:hi:max]` | `indexCheck load reslice reslice3` | exact, bounds panics |
-| `make([]T, n, c)` | `makeSlice` | exact; negative/too large length panics |
-| `append` | `appendSlice` | exact while capacity allows; growth doubles the capacity (Go's growth is implementation-defined) |
+| `make([]T, n, c)` | `makeSlice` | exact; a negative length, or one above the capacity, panics; above 1024 elements: out of fuel |
+| `append` | `appendSlice` | exact while capacity allows; growth doubles the capacity (Go's growth is implementation-defined); growth above 1024 elements: out of fuel |
 | `copy` | `copySlice` | exact |
 | `min`, `max` on integers | a comparison and `ite` per argument | exact (on strings and floats: havoc) |
 | `len`, `cap` of slices, arrays, pointers to arrays | `len cap` | exact |
@@ -185,7 +185,7 @@ Calls not listed here are unmodelled (§4.6).
 |---|---|
 | `strings.HasPrefix HasSuffix Contains Index IndexByte LastIndex Count TrimPrefix TrimSuffix Trim TrimLeft TrimRight ReplaceAll Split Fields Join Repeat` | exact |
 | `strings.TrimSpace ToLower ToUpper EqualFold` | exact for ASCII; Unicode spaces and case folding are not modelled |
-| `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell) |
+| `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell); `Grow` (also `bytes.Buffer`'s) panics for a negative argument and is otherwise a no-op |
 | `strconv.Atoi` | exact for decimal `int64` (sign, range error) |
 | `strconv.Itoa` | exact |
 | `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add`; the functions `Load Store Add Swap CompareAndSwap` on `*int32 *int64 *uint32 *uint64` | exact: plain reads and writes (a goroutine's instructions between two scheduling points run atomically, §6); other methods (`Swap`, `CompareAndSwap` on the types): havoc |

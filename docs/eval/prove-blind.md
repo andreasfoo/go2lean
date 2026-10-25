@@ -251,3 +251,19 @@ not show this.
      not recorded as under-approximations;
    - `modelStuck` from the model's own bounds treated like running out
      of fuel, not like a Go panic.
+
+### After the run: the fixes
+
+Added after the results, which are unchanged. The tool issues are fixed
+since:
+
+1. Target IDs use the compile stage's keys (`Match`, `match_c0`).
+2. Each goal is checked in a file of its own, the earlier goals assumed.
+3. `prove -deps` (the default) links the dependencies' models.
+4. A companion is not attempted while its main goal is open.
+5. Companions no longer have a lower heartbeat limit of their own.
+6. A havoc value has its site's type (`h_hv`), `Grow` is modelled (a
+   panic for a negative count, else nothing), and the size bound ends a
+   run like fuel.
+
+A rerun on these three libraries is reported separately.

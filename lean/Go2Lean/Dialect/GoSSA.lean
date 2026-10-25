@@ -3040,7 +3040,9 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
             -- Grow: Go doubles small slices; the exact capacity is
             -- implementation-defined and only visible through `cap`.
             let newCap := max (2 * cap.toNat) newLen
-            if newCap > 1024 then .panic .modelStuck
+            -- The model's size bound, like fuel: a run that would grow a
+            -- slice past it ends out of fuel (no behaviour of the program).
+            if newCap > 1024 then .outOfFuel
             else
               let contents := (es.drop off.toNat).take len.toNat ++ ts ++ List.replicate (newCap - newLen) zero
               let (p, heap) := heapAlloc heap (.arr contents)
@@ -3087,7 +3089,8 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
         match p with
         | .ptr ref _ => .ok (.slice ref 0#64 len cap, heap)
         | _ => .panic .modelStuck
-      else if len.ule cap then .panic .modelStuck -- too large to materialise
+      -- Too large to materialise: the model's size bound, like fuel.
+      else if len.ule cap then .outOfFuel
       else .panic .makeSliceLen
     | _, _ => .panic .modelStuck
   | op, args =>

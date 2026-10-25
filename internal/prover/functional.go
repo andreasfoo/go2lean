@@ -50,6 +50,9 @@ type Goal struct {
 	// wp_auto with the earlier goals' contracts).
 	Prelude string `json:"prelude,omitempty"`
 	Proof   string `json:"proof,omitempty"`
+	// Base is, for a companion, the theorem name of the goal it covers the
+	// nil or empty inputs of (Companions).
+	Base string `json:"-"`
 }
 
 // GoalResult is what Lean made of a goal.
@@ -78,7 +81,9 @@ func statement(abi *contract.ABI, fid int, name, post, prog string, empty []stri
 	if len(abi.Results) > 1 {
 		return "", fmt.Errorf("%s: more than one result is not supported", abi.GoFunc)
 	}
-	var binders, hyps, args, lets []string
+	var binders, args, lets []string
+	// Values the model does not know are values of their Go type.
+	hyps := []string{fmt.Sprintf("(h_hv : _root_.Go2Lean.GoSSA.WP.HavocTyped %s.havocWidths hv)", prog)}
 	for _, p := range abi.Params {
 		x := LeanName(p.Go)
 		if x == "" || x == "_" {
@@ -131,9 +136,10 @@ func statement(abi *contract.ABI, fid int, name, post, prog string, empty []stri
 	if post == "" {
 		return "", fmt.Errorf("%s: no postcondition", abi.GoFunc)
 	}
-	// Every oracle and every havoc function: a value the model does not
-	// know is any value. No under-approximation taken (s'.assumed), from a
-	// state that had taken none.
+	// Every oracle and every havoc function that gives each site a value of
+	// its Go type: a value the model does not know is any such value. No
+	// under-approximation taken (s'.assumed), from a state that had taken
+	// none.
 	return fmt.Sprintf("theorem %s (orc : Oracle) (hv : Havoc Val) %s\n    %s :\n    _root_.Go2Lean.GoSSA.WP.wpFun %s orc hv %d [%s]\n      (fun ret s' => s'.assumed = #[] ∧ (%s%s)) s",
 		name, strings.Join(binders, " "), strings.Join(hyps, " "), prog, fid, strings.Join(args, ", "), strings.Join(lets, ""), post), nil
 }
@@ -189,7 +195,7 @@ func Companions(g Goal, abi *contract.ABI) []Goal {
 		if len(opt) > 1 {
 			c.Name += "_" + strings.Join(empty, "_")
 		}
-		c.Empty, c.Prelude, c.Proof = empty, "", ""
+		c.Empty, c.Prelude, c.Proof, c.Base = empty, "", "", TheoremName(g)
 		if g.EmptyPost != "" {
 			c.Post, c.Spec = g.EmptyPost, ""
 		}
@@ -238,7 +244,8 @@ func LeanName(goName string) string {
 
 // binderNames are the statement's binders and hypotheses, in order.
 func binderNames(abi *contract.ABI, empty []string) []string {
-	var names, hyps []string
+	var names []string
+	hyps := []string{"h_hv"}
 	for _, p := range abi.Params {
 		x := LeanName(p.Go)
 		if slices.Contains(empty, p.Go) {
@@ -268,6 +275,9 @@ func TheoremName(g Goal) string {
 // File is a written FunctionalFile: its path relative to the Lean project.
 type File struct {
 	Rel string
+	// Assumed are the full names of the theorems the file states as
+	// axioms (CheckGoal): a goal may depend on them.
+	Assumed []string
 }
 
 // Namespace is the namespace a package's theorems are stated in.
@@ -305,11 +315,54 @@ func FunctionalFileAt(leanDir, rel string, report *contract.ModelReport, goals [
 	return &File{Rel: rel}, os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
+// CheckGoal runs Lean, as CheckGoals does, on a file of goal i alone: the
+// goals before it with their preludes, stated as axioms (contracts it may
+// use, proved on their own), goal i with its prelude and proof. One goal
+// at a time keeps each check small: a package's goals in one file can
+// take longer than any budget. Only feedback; the judge checks every
+// proof without these axioms.
+func CheckGoal(leanDir, module string, report *contract.ModelReport, goals []Goal, abis []*contract.ABI, fids []int, i int, budget time.Duration) (GoalResult, string, *File, error) {
+	var b strings.Builder
+	assumed := map[int]bool{}
+	for j := 0; j < i; j++ {
+		assumed[j] = true
+	}
+	text, err := solutionText(report, goals[:i+1], abis[:i+1], fids[:i+1], nil, assumed)
+	if err != nil {
+		return GoalResult{}, "", nil, err
+	}
+	b.WriteString(text)
+	fmt.Fprintf(&b, "\n#print axioms %s.%s\n", Namespace(report), TheoremName(goals[i]))
+	rel := filepath.Join("Proofs", fmt.Sprintf("Check_%s_%d.lean", ident.ReplaceAllString(contract.PackageKey(report.Package), "_"), i))
+	path := filepath.Join(leanDir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return GoalResult{}, "", nil, err
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return GoalResult{}, "", nil, err
+	}
+	f := &File{Rel: rel}
+	for j := 0; j < i; j++ {
+		f.Assumed = append(f.Assumed, Namespace(report)+"."+TheoremName(goals[j]))
+	}
+	rs, out, err := CheckGoals(leanDir, module, f, goals[i:i+1], budget)
+	if err != nil {
+		return GoalResult{}, out, f, err
+	}
+	return rs[0], out, f, nil
+}
+
 // SolutionText is the goals' theorems with their preludes and proofs, in
 // order, in the package's namespace. A goal whose index is in sorried
 // keeps its statement but gets `sorry` for a proof (it failed, and must
 // not stop the others from building).
 func SolutionText(report *contract.ModelReport, goals []Goal, abis []*contract.ABI, fids []int, sorried map[int]bool) (string, error) {
+	return solutionText(report, goals, abis, fids, sorried, nil)
+}
+
+// solutionText is SolutionText with the goals in assumed stated as axioms
+// (CheckGoal).
+func solutionText(report *contract.ModelReport, goals []Goal, abis []*contract.ABI, fids []int, sorried, assumed map[int]bool) (string, error) {
 	var b strings.Builder
 	b.WriteString(fileHeader(report, goals, fids, true))
 	var before []string
@@ -333,12 +386,11 @@ func SolutionText(report *contract.ModelReport, goals []Goal, abis []*contract.A
 		if g.Prelude != "" && !sorried[i] {
 			fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(g.Prelude))
 		}
-		if len(g.Empty) > 0 && g.Proof == "" && !sorried[i] {
-			// A companion's walk is concrete, but a loop over another
-			// parameter would not end: bound it.
-			b.WriteString("\nset_option maxHeartbeats 1000000 in")
+		if assumed[i] {
+			fmt.Fprintf(&b, "\naxiom%s\n", strings.TrimPrefix(st, "theorem"))
+		} else {
+			fmt.Fprintf(&b, "\n%s := by\n%s\n", st, proof)
 		}
-		fmt.Fprintf(&b, "\n%s := by\n%s\n", st, proof)
 		before = append(before, TheoremName(g))
 	}
 	fmt.Fprintf(&b, "\nend %s\n", Namespace(report))
@@ -442,6 +494,42 @@ func LoopProof(heads []int) string {
 	return fmt.Sprintf("  sorry -- loops at blocks %v: each needs an invariant (wpPt_loop)", heads)
 }
 
+// Blockers are what in the model of function fid, or of a function it
+// calls (transitively), keeps a theorem about it from holding however the
+// proof goes: the under-approximations it records (a run through one
+// takes it, and the contract says no run does) and the values it does not
+// model (havoc, any value of its type). The search reports which runs reach
+// them; here they name why a goal may stay open.
+func Blockers(report *contract.ModelReport, fid int) []string {
+	byID := map[int]contract.ModelFunc{}
+	for _, f := range report.Funcs {
+		byID[f.ID] = f
+	}
+	var out []string
+	seen := map[int]bool{}
+	var walk func(id int)
+	walk = func(id int) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		f, ok := byID[id]
+		if !ok {
+			return
+		}
+		for _, is := range f.Issues {
+			if len(out) < 12 {
+				out = append(out, f.Name+": "+is)
+			}
+		}
+		for _, c := range f.Calls {
+			walk(c)
+		}
+	}
+	walk(fid)
+	return out
+}
+
 // CheckGoals runs Lean on a FunctionalFile and reads, per goal, whether
 // its theorem was proved from Lean's standard axioms alone (no sorry, no
 // axiom of the answer's own, none of native_decide's). It is quick
@@ -493,8 +581,8 @@ func CheckGoals(leanDir, module string, f *File, goals []Goal, budget time.Durat
 			r.Error = "not proved: it uses sorry"
 		case strings.Contains(ax, "sorryAx"):
 			r.Error = "not proved: " + firstError(text)
-		case extraAxioms(ax) != "":
-			r.Error = "proved, but from axioms other than Lean's standard ones: " + extraAxioms(ax)
+		case extraAxioms(ax, f.Assumed...) != "":
+			r.Error = "proved, but from axioms other than Lean's standard ones: " + extraAxioms(ax, f.Assumed...)
 		default:
 			r.Proved = true
 		}
@@ -503,9 +591,9 @@ func CheckGoals(leanDir, module string, f *File, goals []Goal, budget time.Durat
 	return rs, text, nil
 }
 
-// extraAxioms are the axioms in what axiomsOf read that are not
-// PermittedAxioms (an answer's own, native_decide's), or "".
-func extraAxioms(ax string) string {
+// extraAxioms are the axioms in what axiomsOf read that are neither
+// PermittedAxioms nor assumed (an answer's own, native_decide's), or "".
+func extraAxioms(ax string, assumed ...string) string {
 	if ax == "none" {
 		return ""
 	}
@@ -515,7 +603,7 @@ func extraAxioms(ax string) string {
 	}
 	var extra []string
 	for _, a := range strings.Split(ax[i+1:j], ",") {
-		if a = strings.TrimSpace(a); a != "" && !slices.Contains(PermittedAxioms, a) {
+		if a = strings.TrimSpace(a); a != "" && !slices.Contains(PermittedAxioms, a) && !slices.Contains(assumed, a) {
 			extra = append(extra, a)
 		}
 	}
