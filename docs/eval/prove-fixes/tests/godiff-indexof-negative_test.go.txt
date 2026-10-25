@@ -1,0 +1,7 @@
+package diffmatchpatch
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = indexOf("abc", "b", -1)
+}

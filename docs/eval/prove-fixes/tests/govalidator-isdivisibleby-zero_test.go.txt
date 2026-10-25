@@ -1,0 +1,7 @@
+package govalidator
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = IsDivisibleBy("1", "0")
+}

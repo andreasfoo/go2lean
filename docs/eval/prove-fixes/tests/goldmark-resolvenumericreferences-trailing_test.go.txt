@@ -1,0 +1,7 @@
+package util
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = ResolveNumericReferences([]byte("&#"))
+}

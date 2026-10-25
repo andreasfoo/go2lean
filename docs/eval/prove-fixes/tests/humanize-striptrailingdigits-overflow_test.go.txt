@@ -1,0 +1,10 @@
+package humanize
+
+import (
+	"math"
+	"testing"
+)
+
+func TestRepro(t *testing.T) {
+	_ = stripTrailingDigits("1.5", math.MaxInt)
+}

@@ -1,0 +1,7 @@
+package strconv
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = AppendNumber(nil, 5, 1, 0, '.', ',')
+}

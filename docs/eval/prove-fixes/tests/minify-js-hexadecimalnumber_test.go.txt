@@ -1,0 +1,8 @@
+package js
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	b := []byte("0xF000000000")
+	_ = hexadecimalNumber(b[:len(b):len(b)]) // cap == len == 12
+}

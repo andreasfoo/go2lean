@@ -1,0 +1,7 @@
+package stringutil
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = CommonPrefix("\u00e9a", "\u00e9b")
+}

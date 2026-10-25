@@ -1,0 +1,7 @@
+package idn
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = decode([]byte("xn--a000000000"))
+}
