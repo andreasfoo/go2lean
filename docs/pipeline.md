@@ -29,43 +29,65 @@ silently guesses. Lean core only — no Mathlib.
 
 ### Spec & search stage
 
-Two property shapes are templated:
-`no_panic` for every modelled function, and `postcondition` for every
-**spec-in-Go** function — a Go function with a `// go2lean:spec Target` doc
-comment and signature `func Spec(<Target params>..., ret <result>) bool`,
-compiled into the model with the same pipeline as the target so the Lean
-property and the Go oracle agree by construction. Two engines run per
-property: seeded random search (per-trial value profiles, plus the target's
-own integer literals so magic-constant branches are reachable), then
-exhaustive enumeration of a small domain (narrow signatures only), which
-records an `exhausted` certificate when it passes (`exhausted_havoc` when
-some inputs ran through values the model does not know, of which it tried
-only a few; `exhausted_assuming`, with the list, when some runs took an
-under-approximation such as a dropped store to a global). When it passes on
-a `no_panic` property of a function of integer and bool parameters, a Lean
-theorem over every input is generated and checked, and the result becomes
-`proved`, with the trust base `kernel` or `compiler` read from
-`#print axioms` (design doc §5.3). For a loop-free function (integers,
-bools, strings and integer slices), `no_panic` or a spec is stated as the
-function's contract for every input and every value the model does not
-know, proved by `wp_auto`, and recorded `proved` only when Lean's
-comparator accepts it, with a certificate ([trust](trust.md)). A third property shape,
-`go2lean:sequence`, states what must hold over a sequence of calls (an
-invariant after every event, a condition at the end of the stream) and is
-checked by bounded model checking over short sequences (design doc §5.2). A spec whose verdict
-depended on a havoc value (it looked inside an opaque value, or called
-something unmodelled) is reported as unknown, never as a counterexample
-or a certificate. Both run in `go2lean-search`, a native
-executable built by lake from the Lean engines and every generated model,
-driven by a JSON description of the search; properties are searched in
-parallel, and each engine stops at a wall-clock budget (10 s by default; 120 s
-under `agent`)
-so one function with expensive inputs cannot stall a sweep. go2lean keeps its own memory under a
-third of physical memory (a soft limit; `GOMEMLIMIT` overrides it), and
-`GO2LEAN_MEMPROFILE=<file>` writes a heap profile near a run's peak. The agent sits on top: it reads the source and
-the model report, writes specs into `<pkg>/go2lean_specs_test.go`, repairs
-the ones the frontend rejects, runs the pipeline, and writes a report from
-the verdicts.
+Three property shapes:
+
+- **`no_panic`**, generated for every modelled function.
+- **`postcondition`**, for every **spec-in-Go** function: a Go function with
+  a `// go2lean:spec Target` doc comment and signature
+  `func Spec(<Target params>..., ret <result>) bool`, compiled into the
+  model with the same pipeline as the target, so the Lean property and the
+  Go oracle agree by construction.
+- **`go2lean:sequence`**: what must hold over a sequence of calls (an
+  invariant after every event, a condition at the end of the stream),
+  checked by bounded model checking over short sequences (design doc §5.2).
+
+Two engines run per property:
+
+- **Seeded random search**, with per-trial value profiles and the target's
+  own integer literals, so magic-constant branches are reachable.
+- **Exhaustive enumeration** of a small domain (narrow signatures only).
+  When it passes, it records an `exhausted` certificate:
+  - `exhausted_havoc` when some inputs ran through values the model does
+    not know, of which it tried only a few;
+  - `exhausted_assuming`, with the list, when some runs took an
+    under-approximation such as a dropped store to a global.
+
+A spec whose verdict depended on a havoc value (it looked inside an opaque
+value, or called something unmodelled) is reported as unknown, never as a
+counterexample or a certificate.
+
+Both engines run in `go2lean-search`, a native executable built by lake
+from the Lean engines and every generated model, driven by a JSON
+description of the search. Properties are searched in parallel, and each
+engine stops at a wall-clock budget (10 s by default, 120 s under `agent`),
+so one function with expensive inputs cannot stall a sweep. go2lean keeps
+its own memory under a third of physical memory (a soft limit; `GOMEMLIMIT`
+overrides it); `GO2LEAN_MEMPROFILE=<file>` writes a heap profile near a
+run's peak.
+
+The agent sits on top:
+
+1. it reads the source and the model report;
+2. writes specs into `<pkg>/go2lean_specs_test.go` and repairs the ones the
+   frontend rejects;
+3. runs the pipeline;
+4. writes a report from the verdicts.
+
+### Proofs
+
+An `exhausted` certificate covers a finite domain. Where it can, the spec &
+search stage then tries a theorem over every input, recorded `proved`:
+
+| Route | Functions | The theorem | Checked by |
+|---|---|---|---|
+| bounded | `no_panic` of integer and bool parameters | every input, one fixed oracle, runs within a fuel that read no havoc value and take no under-approximation (`simp`, `split`, `bv_decide`) | `#print axioms`: trust `kernel`, or `compiler` when `Lean.ofReduceBool` appears |
+| weakest precondition | `no_panic` and specs of loop-free functions (integers, bools, strings, integer slices) | the function's contract for every input, every value the model does not know, every run that ends, with no under-approximation (`wp_auto`) | Lean's comparator against go2lean's statement, with a certificate |
+
+`go2lean prove` states the same contract from a postcondition you give
+(in Lean, or one of your Go specs), loops included. A loop needs an
+invariant, written by the optional proof agent or by hand. What a `proved`
+record asserts, and what it rests on, is in [trust](trust.md); the
+commands are in the [usage guide](usage.md).
 
 ### Replay stage
 

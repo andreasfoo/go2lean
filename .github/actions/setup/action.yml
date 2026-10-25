@@ -1,0 +1,41 @@
+name: Set up go2lean
+description: Go, the Lean toolchain and the core build (cached), bubblewrap, and the Lean core built.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Cache the Lean toolchain and the core build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          ~/.cache/go2lean
+          lean/.lake
+        key: lean-${{ hashFiles('lean/lean-toolchain') }}-${{ hashFiles('lean/lakefile.toml', 'lean/Go2Lean/**/*.lean', 'lean/Go2Lean.lean') }}
+        restore-keys: lean-${{ hashFiles('lean/lean-toolchain') }}-
+
+    - name: Install elan
+      shell: bash
+      run: |
+        if [ ! -x "$HOME/.elan/bin/elan" ]; then
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+        fi
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+    # The proof judge and replay run code in bubblewrap.
+    - name: Install bubblewrap (unprivileged user namespaces)
+      shell: bash
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+        # Ubuntu 24.04 restricts unprivileged user namespaces by AppArmor.
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        bwrap --ro-bind / / --unshare-all --die-with-parent true
+
+    - name: Build the Lean core
+      shell: bash
+      working-directory: lean
+      run: lake build
