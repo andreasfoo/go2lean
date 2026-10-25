@@ -205,8 +205,11 @@ func Print(p *ir.Prog, module string) string {
 	fmt.Fprintf(&b, "namespace %s\n\nopen Go2Lean.SSA Go2Lean.GoSSA\n\n", module)
 	// Large functions are long array literals; the default depth (512) is
 	// too small for a few hundred instructions in one block (614 needs
-	// more than 8192).
-	fmt.Fprintf(&b, "set_option maxRecDepth 100000\n\n")
+	// more than 8192). A linked dependency can hold a block of tens of
+	// thousands (rivo/uniseg's break tables), past 100000 and the default
+	// heartbeats.
+	fmt.Fprintf(&b, "set_option maxRecDepth 2000000\n")
+	fmt.Fprintf(&b, "set_option maxHeartbeats 4000000\n\n")
 	table := p.JSONTable
 	if table == "" {
 		table = "{ descs := #[], zeros := #[] }"

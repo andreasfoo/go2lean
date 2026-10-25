@@ -432,6 +432,7 @@ open Go2Lean.SSA Go2Lean.GoSSA Go2Lean.GoSSA.WP
 open %[1]s
 
 set_option maxHeartbeats 4000000
+set_option maxRecDepth 100000
 set_option linter.unusedVariables false
 
 namespace %[3]s
@@ -530,6 +531,11 @@ func Blockers(report *contract.ModelReport, fid int) []string {
 	return out
 }
 
+// leanMemoryMB caps the memory of Lean's check of one file, so a proof
+// that grows without bound fails alone rather than through the machine's
+// out-of-memory killer.
+const leanMemoryMB = 6144
+
 // CheckGoals runs Lean on a FunctionalFile and reads, per goal, whether
 // its theorem was proved from Lean's standard axioms alone (no sorry, no
 // axiom of the answer's own, none of native_decide's). It is quick
@@ -555,7 +561,7 @@ func CheckGoals(leanDir, module string, f *File, goals []Goal, budget time.Durat
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	args := append(prefix, "lake", "lean", rel)
+	args := append(prefix, "lake", "lean", rel, "--", fmt.Sprintf("--memory=%d", leanMemoryMB))
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = leanDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -563,10 +569,22 @@ func CheckGoals(leanDir, module string, f *File, goals []Goal, budget time.Durat
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	text := string(out)
+	// A proof that runs too long or too large leaves its goals unchecked;
+	// the agent hears of it, and the other goals go on.
+	unchecked := func(why string) []GoalResult {
+		var rs []GoalResult
+		for _, g := range goals {
+			rs = append(rs, GoalResult{Func: g.Func, Theorem: TheoremName(g), Error: "not checked: " + why})
+		}
+		return rs
+	}
 	if ctx.Err() != nil {
-		return nil, text, fmt.Errorf("lean: timeout after %s", budget)
+		return unchecked(fmt.Sprintf("Lean took longer than %s", budget)), text, nil
 	}
 	if err != nil && !errors.Is(err, context.Canceled) && !strings.Contains(text, "error") {
+		if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && (ee.ExitCode() == 137 || ee.ExitCode() == -1) {
+			return unchecked("Lean was killed (out of memory)"), text, nil
+		}
 		return nil, text, fmt.Errorf("lean: %v: %s", err, firstError(text))
 	}
 	var rs []GoalResult
@@ -581,6 +599,10 @@ func CheckGoals(leanDir, module string, f *File, goals []Goal, budget time.Durat
 			r.Error = "not proved: it uses sorry"
 		case strings.Contains(ax, "sorryAx"):
 			r.Error = "not proved: " + firstError(text)
+		case strings.Contains(text, "error") && dependsOnItself(ax, name):
+			// Lean keeps a theorem whose proof failed to elaborate as an
+			// axiom of its own.
+			r.Error = "not proved: " + firstError(text)
 		case extraAxioms(ax, f.Assumed...) != "":
 			r.Error = "proved, but from axioms other than Lean's standard ones: " + extraAxioms(ax, f.Assumed...)
 		default:
@@ -589,6 +611,21 @@ func CheckGoals(leanDir, module string, f *File, goals []Goal, budget time.Durat
 		rs = append(rs, r)
 	}
 	return rs, text, nil
+}
+
+// dependsOnItself reports whether what axiomsOf read lists the theorem
+// name itself.
+func dependsOnItself(ax, name string) bool {
+	i, j := strings.Index(ax, "["), strings.LastIndex(ax, "]")
+	if i < 0 || j < i {
+		return false
+	}
+	for _, a := range strings.Split(ax[i+1:j], ",") {
+		if a = strings.TrimSpace(a); a == name || strings.HasSuffix(a, "."+name) {
+			return true
+		}
+	}
+	return false
 }
 
 // extraAxioms are the axioms in what axiomsOf read that are neither

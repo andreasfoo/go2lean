@@ -73,6 +73,9 @@ func TestAxiomsOf(t *testing.T) {
 			t.Errorf("extraAxioms(%q) = %q, want %q", ax, got, want)
 		}
 	}
+	if !dependsOnItself("'X.A' depends on axioms: [propext, X.A]", "A") || dependsOnItself("'X.A' depends on axioms: [X.AB]", "A") {
+		t.Error("dependsOnItself")
+	}
 	// An earlier goal stated as an axiom (CheckGoal) is permitted; an
 	// answer's axiom of another name is not.
 	if got := extraAxioms("'X.B' depends on axioms: [propext, X.A, X.Y.A]", "X.A"); got != "X.Y.A" {
