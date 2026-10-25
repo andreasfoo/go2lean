@@ -41,6 +41,10 @@ Missing:
   generates it.
 - **Other parameter kinds:** structs, pointers, maps, methods.
 - **The LLVM line.**
+- **Real code.** On three string libraries no function's contract was
+  provable ([eval](eval/prove-blind.md)). The contract counts the model's
+  own over-approximations as failures: havoc values of any type, harmless
+  recorded assumptions, and the model's 1024-element bound.
 
 Every theorem is about the model; how faithfully the model follows Go is
 §5's question. The differential checks of proved properties bear on it,

@@ -37,7 +37,13 @@ match, was found by reading and reached by no search; templates again
 found none) and [concurrent code](../docs/eval/conc.md) (eapache/go-resiliency
 and patrickmn/go-cache: every concurrency result confirmed was real, the
 one bug, a data race in a package's own test, new, and found as well by
-`go test -race`; the run found two frontend bugs, fixed since). The 85 tingly-box findings
+`go test -race`; the run found two frontend bugs, fixed since). `go2lean prove`
+on real code ([three string libraries](../docs/eval/prove-blind.md)) proved
+none of 12 functions' `no_panic` contracts. One function really panics: a
+divide by zero in `smetrics.Ukkonen`, confirmed in Go. For the other 11, the
+contract is false only in the model, through its own over-approximations:
+untyped havoc values, harmless recorded assumptions, a size bound. These
+are fixed next. The 85 tingly-box findings
 were triaged by hand ([go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box)).
 
 ## Ground truth
