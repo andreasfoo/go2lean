@@ -128,4 +128,32 @@ Not done: a comparison with Gobra or another Go verifier.
 
 ## Results
 
-(Added after the run.)
+### Run log
+
+**The first start was stopped after 7 of 61 runs**, at the frozen build
+`4e23908`. Each failure was a tool error, not a verdict:
+
+- **Prompt too large.** The agent's prompt held the whole linked model,
+  0.4 to 1.7 MB, and `claude -p` failed on one.
+- **Recursion depth.** The lookup lemma `prog_fN := rfl` hit Lean's
+  recursion limit on a linked program of 500 functions. So did the walk
+  of the proof.
+- **A dependency too large to build.** `rivo/uniseg`'s break tables are
+  one block of 22,000 instructions. The model of go-pretty's `text`
+  failed to build.
+- **One check stopped the whole run.** A Lean check that was killed or
+  timed out aborted `prove` (exit 137 on natsort).
+
+None of these runs proved a goal; nothing from them is counted. Fixed in
+[#34](https://github.com/andreasfoo/go2lean/pull/34):
+- the prompt carries only the function and what it reaches;
+- the recursion limits are raised;
+- a check that times out or runs out of memory (capped at 6 GB) leaves
+  that goal unchecked;
+- the agent hears of it, and the run goes on.
+
+The run restarts from scratch at that merge, the build frozen there,
+with **two runs at a time instead of three**, for memory. Everything else
+is as above.
+
+(The results follow when the run ends.)

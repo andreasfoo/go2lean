@@ -300,7 +300,7 @@ func provePrompt(library, model string, fid int, fn, statement string, contracts
 	b.WriteString("# The proof library and worked examples\n\n")
 	b.WriteString(library)
 	b.WriteString("\n\n# The model of the function's package\n\n```lean\n")
-	b.WriteString(model)
+	b.WriteString(ModelExcerpt(model, fid))
 	fmt.Fprintf(&b, "```\n\n# Your goal\n\nThe function is %s, f%d in the model (lookup equation prog_f%d : prog.funcs[%d]? = some f%d, already stated). ", fn, fid, fid, fid, fid)
 	b.WriteString("In the file, `prog` is in scope, ")
 	b.WriteString("with `open Go2Lean.SSA Go2Lean.GoSSA Go2Lean.GoSSA.WP` and the model's namespace. The theorem:\n\n```lean\n")
@@ -312,6 +312,75 @@ func provePrompt(library, model string, fid int, fn, statement string, contracts
 	if feedback != "" {
 		b.WriteString("\n# Your previous attempt\n\n")
 		b.WriteString(feedback)
+	}
+	return b.String()
+}
+
+var (
+	funcDef  = regexp.MustCompile(`^def f(\d+) : GoSSA\.Func := \{`)
+	funcUses = regexp.MustCompile(`\.call (\d+) |\(\.funcRef (\d+)\)`)
+)
+
+// ModelExcerpt is the model's text with only function fid and the
+// functions it reaches (calls, func values), and the program's definition
+// abridged: a model linked with its dependencies can run to megabytes.
+func ModelExcerpt(model string, fid int) string {
+	lines := strings.Split(model, "\n")
+	// Chunks start at a doc comment, the program's definition or the end
+	// of the namespace; a chunk is function N's when its def follows.
+	type chunk struct{ id, start, end int }
+	var chunks []chunk
+	for i, l := range lines {
+		if i == 0 || strings.HasPrefix(l, "/-- ") || strings.HasPrefix(l, "def prog ") || strings.HasPrefix(l, "end ") {
+			if n := len(chunks); n > 0 {
+				chunks[n-1].end = i
+			}
+			chunks = append(chunks, chunk{id: -1, start: i})
+		}
+		if m := funcDef.FindStringSubmatch(l); m != nil {
+			fmt.Sscan(m[1], &chunks[len(chunks)-1].id)
+		}
+	}
+	chunks[len(chunks)-1].end = len(lines)
+	text := func(c chunk) string { return strings.Join(lines[c.start:c.end], "\n") }
+	byID := map[int]chunk{}
+	for _, c := range chunks {
+		if c.id >= 0 {
+			byID[c.id] = c
+		}
+	}
+	keep := map[int]bool{fid: true}
+	for work := []int{fid}; len(work) > 0; {
+		c, ok := byID[work[0]]
+		work = work[1:]
+		if !ok {
+			continue
+		}
+		for _, m := range funcUses.FindAllStringSubmatch(text(c), -1) {
+			var id int
+			fmt.Sscan(m[1]+m[2], &id)
+			if !keep[id] {
+				keep[id] = true
+				work = append(work, id)
+			}
+		}
+	}
+	var b strings.Builder
+	omitted := 0
+	for _, c := range chunks {
+		t := text(c)
+		switch {
+		case c.id >= 0 && !keep[c.id]:
+			omitted++
+			continue
+		case c.id < 0 && strings.HasPrefix(t, "def prog ") && len(t) > 2000:
+			t = fmt.Sprintf("-- def prog : GoSSA.Prog := { funcs := #[f0, …, f%d], havocWidths := … } (abridged)\n", len(byID)-1)
+		}
+		b.WriteString(t)
+		b.WriteString("\n")
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "\n-- (%d functions f%d does not reach are left out here; the module has them all)\n", omitted, fid)
 	}
 	return b.String()
 }

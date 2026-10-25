@@ -143,3 +143,38 @@ func TestWithLeanTools(t *testing.T) {
 		t.Error("a mock should not change")
 	}
 }
+
+func TestModelExcerpt(t *testing.T) {
+	model := `import Go2Lean.Dialect.GoSSA
+
+namespace M
+
+/-- f -/
+def f0 : GoSSA.Func := {
+  term := .call 2 [] 1 1 [] 1 }
+
+/-- g -/
+def f1 : GoSSA.Func := {
+  term := .ret 0 }
+
+/-- h -/
+def f2 : GoSSA.Func := {
+  instrs := #[.op 3 (.funcRef 3) []] }
+
+/-- k -/
+def f3 : GoSSA.Func := {
+  term := .ret 0 }
+
+def prog : GoSSA.Prog := { funcs := #[f0, f1, f2, f3] }
+
+end M`
+	got := ModelExcerpt(model, 0)
+	for _, want := range []string{"namespace M", "def f0 ", "def f2 ", "def f3 ", "def prog ", "end M", "1 functions f0 does not reach"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("excerpt lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "def f1 ") || strings.Contains(got, "/-- g -/") {
+		t.Errorf("excerpt keeps f1:\n%s", got)
+	}
+}
