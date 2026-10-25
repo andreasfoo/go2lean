@@ -34,6 +34,7 @@ func cmdProve(args []string) error {
 	leanTools := fs.Bool("lean-tools", true, "give the claude-code agent Lean tools (lean-lsp-mcp, when on PATH) to check its answers itself")
 	thinking := fs.Bool("thinking", true, "let the agent think at length (adaptive thinking; --effort high for claude-code)")
 	judgeAll := fs.Bool("judge-all", false, "judge every goal, also those Lean's check in the workspace rejected (the verdict is the judge's alone; for testing the judge)")
+	deps := fs.Bool("deps", true, "link the models of the dependency functions the package calls (translated from source, as run -deps does) into the model the theorems are about; off: they are unmodelled")
 	paranoid := fs.Bool("paranoid", true, "the judge also replays proofs in the external checkers bundled with Lean (lean4lean, nanoda, ...), not only Lean's kernel")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
@@ -58,18 +59,31 @@ func cmdProve(args []string) error {
 	if err != nil {
 		return err
 	}
-	report, err := pipeline.Compile(w, env, fs.Arg(0), os.Stdout)
+	var report *contract.ModelReport
+	if *deps {
+		report, err = pipeline.CompileLinked(w, env, fs.Arg(0), os.Stdout)
+	} else {
+		report, err = pipeline.Compile(w, env, fs.Arg(0), os.Stdout)
+	}
 	if err != nil {
 		return err
 	}
 	ids := map[string]int{}
 	loops := map[string][]int{}
 	specFor := map[string]string{}
+	var fnames []string
 	for _, f := range report.Funcs {
+		fnames = append(fnames, f.Name)
+		if _, dup := ids[f.Name]; dup {
+			continue // a linked dependency's function of the same name
+		}
 		ids[f.Name] = f.ID
 		loops[f.Name] = f.LoopHeaders
 		specFor[f.Name] = f.SpecFor
 	}
+	// Target ids as the compile stage wrote them: names that differ only
+	// in case (Match, match) get keys of their own.
+	keys := contract.FuncKeys(fnames)
 	names := map[string]bool{}
 	for _, g := range goals {
 		n := prover.TheoremName(g)
@@ -85,7 +99,7 @@ func cmdProve(args []string) error {
 		if !ok {
 			return fmt.Errorf("prove: %s is not a function of %s", g.Func, report.Package)
 		}
-		t, err := w.Target(contract.TargetID(report.Package, g.Func))
+		t, err := w.Target(contract.TargetID(report.Package, keys[g.Func]))
 		if err != nil {
 			return fmt.Errorf("prove: %s is not a target: %v", g.Func, err)
 		}
@@ -143,8 +157,14 @@ func cmdProve(args []string) error {
 	fmt.Printf("theorems: %s\n", file.Rel)
 	var rs []prover.GoalResult
 	if *llmSpec == "" {
-		if rs, _, err = prover.CheckGoals(leanDir, report.LeanModule, file, goals, *budget); err != nil {
-			return err
+		// One goal at a time, the goals before it as contracts: a package's
+		// goals in one file can take longer than any budget.
+		for i := range goals {
+			r, _, _, err := prover.CheckGoal(leanDir, report.LeanModule, report, goals, abis, fids, i, *budget)
+			if err != nil {
+				return err
+			}
+			rs = append(rs, r)
 		}
 	} else {
 		llm, err := agent.New(*llmSpec, agent.ClaudeConfig{Model: *model, Thinking: *thinking})
@@ -249,6 +269,12 @@ func cmdProve(args []string) error {
 				why = fmt.Sprintf("loops at blocks %v need invariants", h)
 			}
 			fmt.Printf("  open     %s (%s): %s\n", r.Func, r.Theorem, why)
+			if bl := prover.Blockers(report, fids[i]); len(bl) > 0 && goals[i].Base == "" {
+				fmt.Printf("           what in the model of %s or its callees may keep it open (a run through an assumption breaks the contract; a havoc value is any value of its type):\n", r.Func)
+				for _, b := range bl {
+					fmt.Printf("             - %s\n", b)
+				}
+			}
 		}
 	}
 	if failed > 0 {

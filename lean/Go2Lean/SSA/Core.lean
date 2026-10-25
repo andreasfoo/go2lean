@@ -82,7 +82,9 @@ def PanicKind.tag : PanicKind → String
   | .modelStuck => "model_stuck"
 
 /-- Result of running a function. `outOfFuel` is an artefact of the bounded
-semantics and never a real program behaviour. -/
+semantics and never a real program behaviour: the run took more steps than
+its fuel, or would allocate past the model's size bound (a slice of more
+than 1024 elements, `GoSSA` `makeSlice` and `append`). -/
 inductive Res (α : Type) where
   | ok (v : α)
   | panic (k : PanicKind)

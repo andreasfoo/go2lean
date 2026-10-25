@@ -7,7 +7,7 @@
   {
     "func": "Clamp",
     "spec": "SpecClamp",
-    "proof": "  refine wpFun_mono ?_ (Clamp_range orc hv v lo hi s h_assumed)\n  rintro ret s' ⟨ha, m, rfl, hm⟩\n  refine ⟨ha, ?_⟩\n  apply wpFun_of_wpPt prog_f5\n  wp_auto prog_f5 [f5]"
+    "proof": "  refine wpFun_mono ?_ (Clamp_range orc hv v lo hi s h_hv h_assumed)\n  rintro ret s' ⟨ha, m, rfl, hm⟩\n  refine ⟨ha, ?_⟩\n  apply wpFun_of_wpPt prog_f5\n  wp_auto prog_f5 [f5]"
   },
   {
     "func": "ClampAll",

@@ -66,11 +66,12 @@ It runs in CI.
 | `homoglyph` | proves a theorem whose name differs by a Cyrillic letter | rejected | rejects | rejects |
 | `comment_in_string` | `have _s := "--"; exact sorry`: a comment stripper that does not lex strings misses the `sorry` | rejected | rejects | rejects |
 | `eval_writes` | `#eval` writing the checkout's library, go2lean's cache, the model, the judge's core, `/tmp`, and running a shell | not run: unconfined, it writes them all (shown by hand in a scratch home) | rejects; nothing written | rejects; nothing written |
+| `earlier_contract` | its own axiom `{P : Prop} : P`, named like an assumption of the per-goal check | — (added with that check) | rejects (an axiom outside the allowlist and the earlier goals) | rejects |
 | solution `env_hack` | whole file: `import Lean`, `addDecl` with the kernel skipped | — | elaborates without error | rejects (Lean's kernel replay fails) |
 | solution `skip_kernel` | whole file: `import Lean`, kernel off, ill-typed proof assigned | — | elaborates without error | rejects (Lean's kernel replay fails) |
 
-Fourteen attacks run as answers, two as whole solution files: the judge
-rejects all 16, and the true control is accepted. The "before" column is
+Fifteen attacks run as answers, two as whole solution files: the judge
+rejects all 17, and the true control is accepted. The "before" column is
 the binary of the last merge (`80f4673`) on the same corpus. Four attacks
 were recorded `proved, kernel only` there:
 

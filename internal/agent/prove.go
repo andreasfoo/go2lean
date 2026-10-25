@@ -33,9 +33,12 @@ functional properties of them over that model.
 
 go2lean has stated a theorem: the contract of one Go function, in the form
 wpFun prog orc hv <id> [args] (fun ret s' => s'.assumed = #[] ∧ <postcondition>) s,
-for every memory oracle orc and havoc function hv (the values the model
-does not know: any value) and every state s that has taken no
-under-approximation (h_assumed : s.assumed = #[]), meaning that every run
+for every memory oracle orc and havoc function hv giving each site a
+value of its Go type (h_hv : HavocTyped prog.havocWidths hv: the values the
+model does not know are any values of their type; HavocTyped.int,
+HavocTyped.bool and HavocTyped.err turn a havoc read into a value of that
+shape) and every state s that has taken no under-approximation
+(h_assumed : s.assumed = #[]), meaning that every run
 of the function on these arguments that ends returns without panicking,
 takes no under-approximation, and has a result ret and final state s'
 satisfying the postcondition (partial correctness). wp_simp and wp_step
@@ -89,18 +92,21 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 	if opts.Budget <= 0 {
 		opts.Budget = 10 * time.Minute
 	}
-	check := func() ([]prover.GoalResult, *prover.File, string, error) {
-		f, err := prover.FunctionalFile(leanDir, report, goals, abis, fids)
-		if err != nil {
-			return nil, nil, "", err
+	// One goal at a time, the goals before it as contracts (CheckGoal).
+	rs := make([]prover.GoalResult, len(goals))
+	check := func(i int) (*prover.File, string, error) {
+		r, text, f, err := prover.CheckGoal(leanDir, report.LeanModule, report, goals, abis, fids, i, opts.Budget)
+		if err == nil {
+			rs[i] = r
 		}
-		rs, text, err := prover.CheckGoals(leanDir, report.LeanModule, f, goals, opts.Budget)
-		return rs, f, text, err
+		return f, text, err
 	}
-	rs, _, _, err := check()
-	if err != nil {
-		return nil, err
+	for i := range goals {
+		if _, _, err := check(i); err != nil {
+			return nil, err
+		}
 	}
+	provedGoals := map[string]bool{}
 	model, err := os.ReadFile(filepath.Join(ws.Root, report.LeanFile))
 	if err != nil {
 		return nil, err
@@ -111,6 +117,13 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 	}
 	for i := range goals {
 		if rs[i].Proved {
+			provedGoals[prover.TheoremName(goals[i])] = true
+			continue
+		}
+		if b := goals[i].Base; b != "" && !provedGoals[b] {
+			// A companion of a goal that stays open: most often open for
+			// the same reason, so not worth the agent's rounds.
+			fmt.Fprintf(out, "  %s: not attempted (%s is not proved)\n", prover.TheoremName(goals[i]), b)
 			continue
 		}
 		orig := goals[i]
@@ -162,7 +175,7 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 			goals[i].Prelude, goals[i].Proof = prelude, proof
 			var f *prover.File
 			var text string
-			rs, f, text, err = check()
+			f, text, err = check(i)
 			if err != nil {
 				return nil, err
 			}
@@ -180,9 +193,12 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 		}
 		if !rs[i].Proved {
 			goals[i] = orig
-			if rs, _, _, err = check(); err != nil {
+			if _, _, err = check(i); err != nil {
 				return nil, err
 			}
+		}
+		if rs[i].Proved {
+			provedGoals[prover.TheoremName(goals[i])] = true
 		}
 	}
 	return rs, nil
@@ -291,7 +307,7 @@ func provePrompt(library, model string, fid int, fn, statement string, contracts
 	b.WriteString(statement)
 	b.WriteString("\n```\n")
 	if len(contracts) > 0 {
-		fmt.Fprintf(&b, "\nProved contracts you may use at calls (wpFun_mono, or wp_auto's using): %s.\n", strings.Join(contracts, ", "))
+		fmt.Fprintf(&b, "\nProved contracts you may use at calls (wpFun_mono, or wp_auto's using; their h_hv is your h_hv): %s.\n", strings.Join(contracts, ", "))
 	}
 	if feedback != "" {
 		b.WriteString("\n# Your previous attempt\n\n")

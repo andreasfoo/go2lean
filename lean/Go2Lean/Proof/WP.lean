@@ -41,6 +41,39 @@ def wpPtN (n : Nat) (pt : Pt) (Q : Val → HState Val → Prop) (env : Env Val) 
     | (.panic _, _) => False
     | (.outOfFuel, _) => True
 
+/-- The kind of value a havoc site of width `w` holds (`Prog.havocWidths`,
+written by the frontend from the Go type of the value): 0 an `error`,
+1 a `bool`, 2 a `string`, 3 an assumption marker (a value never used),
+and any other width an integer of that many bits. -/
+def HavocKind : Nat → Val → Prop
+  | 0, v => ∃ b, v = .err b
+  | 1, v => ∃ b, v = .bool b
+  | 2, v => ∃ r o l, v = .str r o l
+  | 3, v => v = .unit
+  | w, v => ∃ x : BitVec w, v = .int w x
+
+/-- A havoc function that gives each site a value of its Go type: what Go
+can return where the model does not know the value. A theorem quantified
+over every `h` with `HavocTyped p.havocWidths h` covers every value of
+the right type, and no value Go cannot produce there. -/
+def HavocTyped (widths : Array Nat) (h : Havoc Val) : Prop :=
+  ∀ site iter w, widths[site]? = some w → HavocKind w (h site iter)
+
+theorem HavocTyped.int {widths : Array Nat} {h : Havoc Val} (ht : HavocTyped widths h)
+    {site w : Nat} (hs : widths[site]? = some w) (h0 : w ≠ 0) (h1 : w ≠ 1) (h2 : w ≠ 2) (h3 : w ≠ 3)
+    (iter : Nat) : ∃ x : BitVec w, h site iter = .int w x := by
+  have := ht site iter w hs
+  match w, h0, h1, h2, h3 with
+  | w + 4, _, _, _, _ => exact this
+
+theorem HavocTyped.bool {widths : Array Nat} {h : Havoc Val} (ht : HavocTyped widths h)
+    {site : Nat} (hs : widths[site]? = some 1) (iter : Nat) : ∃ b, h site iter = .bool b :=
+  ht site iter 1 hs
+
+theorem HavocTyped.err {widths : Array Nat} {h : Havoc Val} (ht : HavocTyped widths h)
+    {site : Nat} (hs : widths[site]? = some 0) (iter : Nat) : ∃ b, h site iter = .err b :=
+  ht site iter 0 hs
+
 /-- Partial correctness of a call: running function `f` on `args` from
 state `s`, with any fuel, runs out of fuel or returns a value satisfying
 `Q`; it never panics (a callee the model gets stuck in included: the

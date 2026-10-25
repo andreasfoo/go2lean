@@ -1,0 +1,10 @@
+[
+  {
+    "func": "Max2",
+    "name": "earlier_contract",
+    "post": "False",
+    "prelude": "namespace X\naxiom go2lean_earlier_contract {P : Prop} : P\nend X",
+    "proof": "  exact X.go2lean_earlier_contract",
+    "attack": "An axiom of its own named like an assumption of the per-goal check (an earlier version allowed any axiom of this name in the workspace)."
+  }
+]

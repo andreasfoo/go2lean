@@ -1,0 +1,7 @@
+package text
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = justifyText("a b", 10, 2)
+}

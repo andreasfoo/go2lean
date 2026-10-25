@@ -1,0 +1,7 @@
+package lz4block
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	Put(nil)
+}

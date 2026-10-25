@@ -1,0 +1,7 @@
+package runewidth
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = Truncate("", 0, "x")
+}

@@ -1,0 +1,7 @@
+package mathutil
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = Permutation(70, 1)
+}

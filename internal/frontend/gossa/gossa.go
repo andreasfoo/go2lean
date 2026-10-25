@@ -3224,6 +3224,9 @@ func (t *fnState) call(x *ssa.Call) error {
 		if done, err := t.randBounded(x, callee); done || err != nil {
 			return err
 		}
+		if done, err := t.bufferGrow(x, callee); done || err != nil {
+			return err
+		}
 		if done, err := t.atomicFuncCall(x, callee); done || err != nil {
 			return err
 		}
@@ -4989,6 +4992,38 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 		t.emit(ir.Instr{Dst: r, Op: ir.Simple("add"), Args: []ir.Var{old, d}})
 		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Conc("atomicStore"), Args: []ir.Var{addr, r}})
 	}
+	return true, nil
+}
+
+// bufferGrow lowers (*strings.Builder).Grow(n) and (*bytes.Buffer).Grow(n).
+// Grow changes only the capacity, which the model does not track, and
+// panics for n < 0 as in Go. Ignoring the call would be an
+// under-approximation: it would drop that panic.
+func (t *fnState) bufferGrow(x *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.String() {
+	case "(*strings.Builder).Grow", "(*bytes.Buffer).Grow":
+	default:
+		return false, nil
+	}
+	args := x.Call.Args
+	if len(args) != 2 {
+		return false, nil
+	}
+	n, err := t.val(args[1])
+	if err != nil {
+		return true, err
+	}
+	zero := t.fresh()
+	t.emit(ir.Instr{Dst: zero, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
+	neg := t.fresh()
+	t.emit(ir.Instr{Dst: neg, Op: ir.Simple("slt"), Args: []ir.Var{n, zero}})
+	panicB := len(t.out.Blocks)
+	okB := panicB + 1
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: neg, T: panicB, F: okB}
+	name0 := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name0 + ".grow-neg"}, ir.Block{Name: name0 + ".grow-ok"})
+	t.out.Blocks[panicB].Term = ir.Term{Kind: ir.TermPanic, Panic: contract.PanicExplicit}
+	t.cur = &t.out.Blocks[okB]
 	return true, nil
 }
 

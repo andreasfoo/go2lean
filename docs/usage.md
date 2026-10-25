@@ -86,7 +86,7 @@ go2lean run     [-workspace out] [-nil-inputs] <packages...>   compile, props, h
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
                 [-repairs n] [-report] <package>
 go2lean prove   [-workspace out] -goals goals.json | -func F -post P  [-llm claude-code|claude|mock:<path>]
-                [-rounds n] [-lean-tools] [-paranoid] [-out proofs.json] <package>
+                [-rounds n] [-lean-tools] [-paranoid] [-deps] [-out proofs.json] <package>
 ```
 
 `prove` states, for each goal, the function's contract as a Lean theorem
@@ -110,7 +110,14 @@ contents (a `List (BitVec w)` under the parameter's name, with `x_len`
 and `x_ref`), and go2lean adds a companion theorem per goal for the nil
 slice or empty string, with `"empty_post"` as its postcondition when the
 goal's speaks of what a nil slice lacks (its backing array). A parameter
-named `s`, `ret` or like a Lean keyword is `s_` in the postcondition. Loop-free functions are proved
+named `s`, `ret` or like a Lean keyword is `s_` in the postcondition.
+With `-deps` (the default) the model is linked with the packages it
+calls, as `run -deps` translates them, so their functions are modelled,
+not havoc. A value the model does not know is any value of its type
+(`h_hv` in the theorem). Each goal is checked on its own, the earlier ones
+assumed; an open goal lists the issues in the model of its function and
+callees that may keep it open, and a companion is not attempted while its
+main goal is open. Loop-free functions are proved
 with no proof text; a function with loops needs an invariant per loop.
 With `-llm`, an agent writes them: it answers with invariants and a proof,
 Lean checks, and its errors go back for up to `-rounds` attempts

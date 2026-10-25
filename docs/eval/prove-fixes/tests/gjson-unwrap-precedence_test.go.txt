@@ -1,0 +1,7 @@
+package gjson
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = unwrap("{")
+}

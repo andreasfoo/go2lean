@@ -15,6 +15,7 @@ for a function `f(a int, xs []int) int` it is
 theorem f_spec (orc : Oracle) (hv : Havoc Val)
     (a : BitVec 64) (xs : List (BitVec 64)) (xs_len : BitVec 64) (xs_ref : Nat)
     (s : HState Val)
+    (h_hv : HavocTyped <model>.prog.havocWidths hv)
     (h_xs_len : xs_len.toInt = xs.length) (h_xs_ref : xs_ref ≠ 0)
     (h_xs : s.heap[xs_ref]? = some (.arr (xs.map (.int 64))))
     (h_assumed : s.assumed = #[]) :
@@ -23,8 +24,9 @@ theorem f_spec (orc : Oracle) (hv : Havoc Val)
 ```
 
 It reads: for every memory oracle and every havoc function (every value the
-model does not know), every argument, and every heap the argument lives in,
-every run of the model of `f` that ends:
+model does not know, of the type its site has: an integer of the site's
+width, a bool, an error or a string), every argument, and every heap the
+argument lives in, every run of the model of `f` that ends:
 
 - does not panic;
 - takes no under-approximation (`s'.assumed = #[]`: the model left out
@@ -38,6 +40,9 @@ It does not assert:
 
 - **Termination.** A run that does not end, or runs out of fuel,
   satisfies every `wpFun`: this is partial correctness.
+- **Slices past the model's size bound.** A run that would make a slice
+  of more than 1024 elements ends out of fuel, so the theorem says
+  nothing about it.
 - **Uncovered inputs.** A slice is taken with offset 0 and capacity equal
   to its length. A nil slice or empty string is covered by companion
   theorems (`f_spec_empty…`) for up to three such parameters; with more,
@@ -61,7 +66,7 @@ This page is not about that route.
 | Lean's kernel, and with `-paranoid` (the `prove` default) the external checkers bundled with Lean v4.35 (`leanchecker-paranoid`, lean4lean, nanoda, con-leche, con-ron) | they decide that a proof term has the stated type | independent implementations must agree |
 | `lake comparator` and `leanexport` (Lean v4.35) | they compare the solution's theorem type with the challenge's and export the environment the kernels replay | Lean's own code |
 | The model's semantics (`lean/Go2Lean/SSA`, `lean/Go2Lean/Dialect/GoSSA.lean`), including `wpFun` | the statement means what they define | differential tests against Go (`docs/validation.md`); fuzz and replay of proved properties |
-| The frontend (go/ssa, `internal/ir`, `internal/ssaout`) | the model of `f` is what it prints | the same differential tests |
+| The frontend (go/ssa, `internal/ir`, `internal/ssaout`), including each havoc site's type (`havocWidths`, a hypothesis of the theorem) and the linking of dependencies (`ir.Link`, with `prove -deps`) | the model of `f` is what it prints | the same differential tests |
 | The statement generator (`internal/prover/functional.go`: `statement`, `SpecPost`, `Companions`) | it turns a goal into the theorem above | this page; unit tests; mutants of proved functions must fail to prove |
 | The judge (`internal/prover/judge.go`) | it builds the trusted project and reads comparator's exit status | the red-team corpus |
 | bubblewrap and the kernel's namespaces | they confine Lean text an agent wrote | the corpus's file-write attack |
@@ -89,6 +94,9 @@ The trusted modules are built before any answer text is in the project.
   them.
 - **Regex vetting of answers** (`vetProof`). It only gives early feedback
   and saves a round.
+- **The per-goal check.** In the workspace each goal is checked alone,
+  the goals before it stated as axioms (their exact statements) for it to
+  use. That file is feedback only; the judge never sees those axioms.
 
 ## The adversary
 

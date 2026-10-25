@@ -16,6 +16,7 @@ import (
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/frontend/gossa"
 	"github.com/andreasfoo/go2lean/internal/fuzzimport"
+	"github.com/andreasfoo/go2lean/internal/ir"
 	"github.com/andreasfoo/go2lean/internal/poc"
 	"github.com/andreasfoo/go2lean/internal/repo"
 	"github.com/andreasfoo/go2lean/internal/ssaout"
@@ -66,6 +67,60 @@ func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*con
 		return nil, fmt.Errorf("pattern %s matched %d packages; expected exactly one", pattern, len(reports))
 	}
 	return reports[0], nil
+}
+
+// CompileLinked compiles the one package pattern names with the
+// dependency functions it calls (-deps), and links them into a single
+// model (ir.Link): the package's functions keep their ids, the
+// dependencies' follow. A theorem about it is about the dependencies'
+// models too, not havoc. Only the linked model is written.
+func CompileLinked(w contract.Workspace, env Env, pattern string, out io.Writer) (*contract.ModelReport, error) {
+	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: true, Overlay: env.Overlay, Tests: env.Tests}, pattern)
+	if err != nil {
+		return nil, err
+	}
+	var main *ir.Prog
+	deps := map[string]*ir.Prog{}
+	for _, p := range progs {
+		if p.Dependency {
+			deps[p.Package] = p
+		} else if main != nil {
+			return nil, fmt.Errorf("pattern %s matched more than one package; expected exactly one", pattern)
+		} else {
+			main = p
+		}
+	}
+	if main == nil {
+		return nil, fmt.Errorf("pattern %s matched no package", pattern)
+	}
+	linked, err := ir.Link(main, deps, func(pkg string) string { return ssaout.RegistryKey(main.Frontend, pkg) })
+	if err != nil {
+		return nil, err
+	}
+	leanDir := repo.WorkspaceLeanDir(w.Root)
+	core, err := repo.CoreDir(env.Root)
+	if err != nil {
+		return nil, err
+	}
+	if err := ssaout.EnsureProject(leanDir, core); err != nil {
+		return nil, err
+	}
+	constraint.InvalidateDriver()
+	report, err := ssaout.Emit(linked, leanDir, w, modPath)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(out, "compiled %s with %d dependency packages linked -> %s\n", main.Package, len(deps), filepath.Join(w.Root, report.LeanFile))
+	for i, f := range report.Funcs {
+		if i >= len(main.Funcs) {
+			break
+		}
+		fmt.Fprintf(out, "  %-12s %-9s %s\n", f.Name, f.Status, f.GoSig)
+		for _, is := range f.Issues {
+			fmt.Fprintf(out, "      - %s\n", is)
+		}
+	}
+	return report, nil
 }
 
 // CompileAll runs M1 on every package matching the patterns (e.g. "./...")

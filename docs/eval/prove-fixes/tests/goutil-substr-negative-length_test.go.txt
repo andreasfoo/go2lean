@@ -1,0 +1,7 @@
+package strutil
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = Substr("abc", 2, -2)
+}

@@ -14,7 +14,7 @@ functions alone, loops with invariants an agent writes
 (`examples/invariants`, `examples/loops`: nested loops, bubble sort) or by hand (`lean/Proofs/Functional.lean`: up to
 insertion sort, sorted and a permutation, for every slice). Each proof is
 judged by Lean's comparator against go2lean's own statement; a red-team
-corpus of 16 attacks on that judgement is rejected in CI, and the
+corpus of 17 attacks on that judgement is rejected in CI, and the
 properties `go2lean prove` proves on the examples are checked again on the
 real Go code, where a mutant of each proved function is told apart and
 fails to prove ([trust](trust.md), [eval](eval/proof-trust.md)). 31 ground-truth packages run in CI (260 properties, each outcome

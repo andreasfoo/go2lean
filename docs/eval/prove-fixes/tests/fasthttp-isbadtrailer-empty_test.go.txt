@@ -1,0 +1,7 @@
+package fasthttp
+
+import "testing"
+
+func TestRepro(t *testing.T) {
+	_ = isBadTrailer([]byte{})
+}
