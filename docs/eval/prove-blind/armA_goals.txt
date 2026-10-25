@@ -1,0 +1,43 @@
+ComputeDistance_nopanic                       open: : not proved:  | rounds 6 agent 55 min turns 105
+ComputeDistance_nopanic_empty_a               proved | rounds 5 agent 38 min turns 67
+ComputeDistance_nopanic_empty_b               proved | rounds 1 agent 4 min turns 8
+ComputeDistance_nopanic_empty_a_b             proved | rounds 0 agent 0 min turns 0
+Soundex_nopanic                               (run stopped: the answer uses "sorry", which is not allowed) | rounds 6 agent 33 min turns 45
+Ukkonen_nopanic                               (run stopped: the answer uses "sorry", which is not allowed) | rounds 6 agent 30 min turns 10
+Ukkonen_nopanic_empty_a                       (run stopped: the answer uses "sorry", which is not allowed) | rounds 6 agent 36 min turns 22
+WagnerFischer_nopanic                         open: : loops at blocks [3 6 9] need invariants | rounds 6 agent 48 min turns 56
+WagnerFischer_nopanic_empty_b                 proved | rounds 1 agent 12 min turns 20
+WagnerFischer_nopanic_empty_a_b               proved | rounds 1 agent 9 min turns 10
+WagnerFischer_nopanic_empty_a                 open: : the judge rejected it (Lean accepted it in the workspace): see /tmp/ | rounds 0 agent 0 min turns 0
+MatchFold_nopanic                             (run stopped: not proved:  | rounds 6 agent 30 min turns 58
+MatchFold_nopanic_empty_source                (run stopped: not proved:  | rounds 6 agent 50 min turns 70
+MatchFold_nopanic_empty_target                (run stopped: not proved:  | rounds 1 agent 6 min turns 16
+LevenshteinDistance_nopanic                   open: : loops at blocks [1 4 7] need invariants | rounds 6 agent 30 min turns 64
+LevenshteinDistance_nopanic_empty_s           open: : the judge rejected it (Lean accepted it in the workspace): see /tmp/ | rounds 0 agent 0 min turns 0
+LevenshteinDistance_nopanic_empty_t           open: : the judge rejected it (Lean accepted it in the workspace): see /tmp/ | rounds 0 agent 0 min turns 0
+LevenshteinDistance_nopanic_empty_s_t         open: : the judge rejected it (Lean accepted it in the workspace): see /tmp/ | rounds 0 agent 0 min turns 0
+MatchNormalized_nopanic                       open: : not proved:  | rounds 6 agent 16 min turns 40
+MatchNormalized_nopanic_empty_source          open: : not proved:  | rounds 6 agent 21 min turns 75
+MatchNormalized_nopanic_empty_target          open: : not proved:  | rounds 6 agent 18 min turns 59
+MatchNormalized_nopanic_empty_source_target   open: : not proved:  | rounds 6 agent 23 min turns 38
+MatchNormalizedFold_nopanic                   open: : not proved:  | rounds 6 agent 8 min turns 41
+MatchNormalizedFold_nopanic_empty_source      open: : not proved:  | rounds 6 agent 13 min turns 13
+MatchNormalizedFold_nopanic_empty_target      open: : not proved:  | rounds 6 agent 15 min turns 40
+MatchNormalizedFold_nopanic_empty_source_target open: : not proved:  | rounds 6 agent 11 min turns 32
+RankMatch_nopanic                             open: : not proved:  | rounds 6 agent 13 min turns 85
+RankMatch_nopanic_empty_source                open: : not proved:  | rounds 6 agent 31 min turns 47
+RankMatch_nopanic_empty_target                proved | rounds 1 agent 8 min turns 28
+RankMatch_nopanic_empty_source_target         proved | rounds 1 agent 4 min turns 12
+RankMatchFold_nopanic                         open: : not proved:  | rounds 6 agent 15 min turns 75
+RankMatchFold_nopanic_empty_source            open: : not proved:  | rounds 6 agent 18 min turns 60
+RankMatchFold_nopanic_empty_target            open: : not proved:  | rounds 6 agent 21 min turns 35
+RankMatchFold_nopanic_empty_source_target     open: : not proved:  | rounds 6 agent 15 min turns 49
+RankMatchNormalized_nopanic                   open: : not proved:  | rounds 6 agent 13 min turns 36
+RankMatchNormalized_nopanic_empty_source      open: : not proved:  | rounds 6 agent 14 min turns 30
+RankMatchNormalized_nopanic_empty_target      open: : not proved:  | rounds 6 agent 22 min turns 66
+RankMatchNormalized_nopanic_empty_source_target open: : not proved:  | rounds 6 agent 16 min turns 27
+RankMatchNormalizedFold_nopanic               open: : not proved:  | rounds 6 agent 12 min turns 39
+RankMatchNormalizedFold_nopanic_empty_source  open: : not proved:  | rounds 6 agent 12 min turns 40
+RankMatchNormalizedFold_nopanic_empty_target  open: : not proved:  | rounds 6 agent 19 min turns 58
+RankMatchNormalizedFold_nopanic_empty_source_target open: : not proved:  | rounds 6 agent 19 min turns 22
+agent time total 776 min; 191 rounds; 7 proved of 42

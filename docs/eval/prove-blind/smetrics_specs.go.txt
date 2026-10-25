@@ -1,0 +1,411 @@
+package smetrics
+
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// Readings:
+// - Soundex: specs cover strings whose first byte is an ASCII letter (where
+//   "first letter of the original string" is unambiguous); the first letter is
+//   compared case-insensitively.
+// - WagnerFischer/Ukkonen: the docs do not say bytes vs runes, so length-based
+//   specs are restricted to ASCII inputs. The docs do not fix the direction of
+//   insertion vs deletion, so specs use min/max of icost,dcost or require
+//   icost == dcost. Only non-negative costs are considered. Costs and lengths
+//   are capped at 1<<20 solely so the spec's own arithmetic cannot overflow.
+
+// go2lean:spec Soundex
+func SpecSoundexEmpty(s string, ret string) bool {
+	if s != "" {
+		return true
+	}
+	return ret == ""
+}
+
+// go2lean:spec Soundex
+func SpecSoundexFormat(s string, ret string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	c := s[0]
+	if c >= 'a' && c <= 'z' {
+		c -= 'a' - 'A'
+	}
+	if c < 'A' || c > 'Z' {
+		return true
+	}
+	if len(ret) != 4 {
+		return false
+	}
+	f := ret[0]
+	if f >= 'a' && f <= 'z' {
+		f -= 'a' - 'A'
+	}
+	if f != c {
+		return false
+	}
+	for i := 1; i < 4; i++ {
+		if ret[i] < '0' || ret[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec Soundex
+// Standard Soundex: digits are codes 1-6, padded at the end with 0.
+func SpecSoundexDigitsStandard(s string, ret string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	c := s[0]
+	if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+		return true
+	}
+	if len(ret) != 4 {
+		return true // covered by SpecSoundexFormat
+	}
+	padding := false
+	for i := 1; i < 4; i++ {
+		d := ret[i]
+		if d == '0' {
+			padding = true
+			continue
+		}
+		if padding {
+			return false
+		}
+		if d < '1' || d > '6' {
+			return false
+		}
+	}
+	return true
+}
+
+// go2lean:spec Soundex
+// Standard Soundex: vowels and h, w, y are not coded, so a letter followed only
+// by such letters encodes as <letter>000 (includes the single-letter case).
+func SpecSoundexUncodedLetters(s string, ret string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	c := s[0]
+	if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+		return true
+	}
+	for i := 1; i < len(s); i++ {
+		if strings.IndexByte("aeiouyhwAEIOUYHW", s[i]) < 0 {
+			return true
+		}
+	}
+	return len(ret) == 4 && ret[1:4] == "000"
+}
+
+// ---------------- WagnerFischer ----------------
+
+// go2lean:spec WagnerFischer
+func SpecWagnerFischerNonNegative(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 {
+		return true
+	}
+	return ret >= 0
+}
+
+// go2lean:spec WagnerFischer
+func SpecWagnerFischerEqualIsZero(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || a != b {
+		return true
+	}
+	return ret == 0
+}
+
+// go2lean:spec WagnerFischer
+func SpecWagnerFischerLengthLowerBound(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	d := len(a) - len(b)
+	if d < 0 {
+		d = -d
+	}
+	m := icost
+	if dcost < m {
+		m = dcost
+	}
+	return ret >= d*m
+}
+
+// go2lean:spec WagnerFischer
+// Deleting all of one string and inserting all of the other is an edit script.
+func SpecWagnerFischerIndelUpperBound(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	m := icost
+	if dcost > m {
+		m = dcost
+	}
+	return ret <= (len(a)+len(b))*m
+}
+
+// go2lean:spec WagnerFischer
+func SpecWagnerFischerHammingBound(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if len(a) != len(b) || len(a) > 1<<20 {
+		return true
+	}
+	diff := 0
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 || b[i] >= 0x80 {
+			return true
+		}
+		if a[i] != b[i] {
+			diff++
+		}
+	}
+	return ret <= diff*scost
+}
+
+// go2lean:spec WagnerFischer
+// With icost == dcost the direction ambiguity disappears: from/to the empty
+// string only insertions (or deletions) are possible.
+func SpecWagnerFischerEmpty(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if icost != dcost || len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	if a == "" {
+		return ret == len(b)*icost
+	}
+	if b == "" {
+		return ret == len(a)*icost
+	}
+	return true
+}
+
+// go2lean:spec WagnerFischer
+// Normal costs (1,1,2): distance is 0 exactly when the strings are equal.
+func SpecWagnerFischerNormalZeroIffEqual(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost != 1 || dcost != 1 || scost != 2 {
+		return true
+	}
+	if !utf8.ValidString(a) || !utf8.ValidString(b) {
+		return true
+	}
+	return (ret == 0) == (a == b)
+}
+
+// go2lean:spec WagnerFischer
+// Normal costs (1,1,2): substitution = insertion + deletion, so the distance
+// is len(a)+len(b)-2*LCS and has the parity of len(a)+len(b).
+func SpecWagnerFischerNormalParity(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost != 1 || dcost != 1 || scost != 2 {
+		return true
+	}
+	if len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	return (ret+len(a)+len(b))%2 == 0
+}
+
+// ---------------- Ukkonen ----------------
+
+// go2lean:spec Ukkonen
+func SpecUkkonenNonNegative(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 {
+		return true
+	}
+	return ret >= 0
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenEqualIsZero(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || a != b {
+		return true
+	}
+	return ret == 0
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenLengthLowerBound(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	d := len(a) - len(b)
+	if d < 0 {
+		d = -d
+	}
+	m := icost
+	if dcost < m {
+		m = dcost
+	}
+	return ret >= d*m
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenIndelUpperBound(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	m := icost
+	if dcost > m {
+		m = dcost
+	}
+	return ret <= (len(a)+len(b))*m
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenHammingBound(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if len(a) != len(b) || len(a) > 1<<20 {
+		return true
+	}
+	diff := 0
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 || b[i] >= 0x80 {
+			return true
+		}
+		if a[i] != b[i] {
+			diff++
+		}
+	}
+	return ret <= diff*scost
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenEmpty(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost < 0 || dcost < 0 || scost < 0 || icost > 1<<20 || dcost > 1<<20 || scost > 1<<20 {
+		return true
+	}
+	if icost != dcost || len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	if a == "" {
+		return ret == len(b)*icost
+	}
+	if b == "" {
+		return ret == len(a)*icost
+	}
+	return true
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenNormalZeroIffEqual(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost != 1 || dcost != 1 || scost != 2 {
+		return true
+	}
+	if !utf8.ValidString(a) || !utf8.ValidString(b) {
+		return true
+	}
+	return (ret == 0) == (a == b)
+}
+
+// go2lean:spec Ukkonen
+func SpecUkkonenNormalParity(a, b string, icost, dcost, scost int, ret int) bool {
+	if icost != 1 || dcost != 1 || scost != 2 {
+		return true
+	}
+	if len(a) > 1<<20 || len(b) > 1<<20 {
+		return true
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] >= 0x80 {
+			return true
+		}
+	}
+	for i := 0; i < len(b); i++ {
+		if b[i] >= 0x80 {
+			return true
+		}
+	}
+	return (ret+len(a)+len(b))%2 == 0
+}

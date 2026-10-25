@@ -105,4 +105,149 @@ open.
 
 ## Results
 
-Added after the run.
+The run took 2026-10-25, with go2lean frozen at `6a7312a`. The raw
+material is in `prove-blind/`:
+
+- the specs (`*_specs.go.txt`);
+- every arm A goal with its rounds, agent time and tool turns
+  (`armA_goals.txt`);
+- the agent's last answer on each function's goal
+  (`armA_last_answers.md`).
+
+### Headline
+
+None of the 12 functions attempted got its `no_panic` contract proved.
+The agent did not run out of ideas. On each one it ended by reporting the
+statement **false in the model**, with a run of the model that shows it:
+
+| why the contract is false | functions |
+|---|---|
+| **the real code panics**: integer division by zero when a cost is 0 | `Ukkonen` |
+| **havoc values are untyped**. `Havoc Val` may return any `Val`: `.unit` where Go has an integer, or a rune width of 100. The model then takes panics Go cannot take. `Prog.havocWidths` exists but nothing reads it. | `ComputeDistance`, `MatchFold`, `RankMatch`, `RankMatchFold` |
+| **every run takes an under-approximation**. Even a harmless one sets `s.assumed`: `Soundex` ignores `strings.Builder.Grow`, which has no observable effect, and the normalising transformer loads the unmodelled `unicode.Mn` | `Soundex`, `MatchNormalized`, `MatchNormalizedFold`, `RankMatchNormalized`, `RankMatchNormalizedFold` |
+| **the model's size bound counts as a panic**. `makeSlice` and `append` stop with `modelStuck` above a capacity of 1024, and `wpFun` treats that like a Go panic | `LevenshteinDistance`, `WagnerFischer` |
+
+We checked the size bound (`GoSSA.lean`: `newCap > 1024`,
+`cap.toNat ≤ 1024`) and the unused `havocWidths` in the source. The
+other diagnoses are the agent's, each with the model run it reports.
+
+So the proof engine on real code is blocked by **the statement**, not by
+the prover:
+
+- One function in twelve is wrong in Go.
+- The other eleven are right in Go, as far as the search and the docs
+  show. They are "wrong" only because the contract counts the model's own
+  over-approximations (untyped havoc, a harmless assumption, its size
+  bound) as failures.
+
+The P0 change that quantified over every havoc function made the
+contract sound. On real code it also made it unprovable in this way. The
+examples written for go2lean never call anything unmodelled, so they did
+not show this.
+
+### Arm A: no panic
+
+- **Goals:** 42 in all:
+  - 12 functions' contracts;
+  - their nil-string companions;
+  - `MatchFold`'s, stopped partway (below).
+- **Proved: 7**, all companions. Every one is accepted by
+  `lake comparator --paranoid`.
+  - `ComputeDistance` with `a`, `b`, or both empty;
+  - `RankMatch` with an empty target, or both empty;
+  - `WagnerFischer` with `b`, or both empty.
+- **Fuzzing:** each proved property ran as a Go fuzz target for 60 s on
+  the real code. No panic.
+- **Rejected by the judge after Lean accepted them: 4 companions**
+  (`LevenshteinDistance` ×3, `WagnerFischer` with `a` empty). Their
+  `wp_auto` proofs ran into the heartbeat limit in the judge's one-goal-
+  at-a-time pass, where earlier goals are `sorry`. The workspace accepted
+  them; the judge did not. This only makes the judge stricter, not
+  unsound. Tool issue 5.
+- **Cost:** 191 agent rounds, about 13 hours of agent time, up to 105
+  tool turns on one goal.
+- **Not attempted: `Match`.** Tool issue 1.
+
+### Arm B: documented contracts
+
+**The specs.** A fresh subagent wrote 40 specs from `go doc` alone.
+
+**The search** (`go2lean run -deps`):
+
+- **A real bug, found by the `no_panic` template.**
+  `smetrics.Ukkonen("3", "caa-B \n9", 7, 0, 6)` panics with an integer
+  divide by zero. A zero deletion cost is a cost the docs allow. go2lean
+  confirmed it by replaying it on the real Go code, and it is the same
+  bug the proof agent found from the other side. Not reported upstream
+  yet.
+- **Two specs falsified, both misreadings.**
+  `SpecWagnerFischerNonNegative` and `SpecUkkonenNonNegative` fail only
+  at costs near 2^63, where the sum wraps. The spec capped neither the
+  costs nor the lengths.
+- **No counterexample for the other 38.** Levenshtein's six are
+  exhausted; Soundex's four are `exhausted_assuming`.
+
+**The proofs.**
+
+- **The protocol's run failed.** It sent the 38 to `prove` one package at
+  a time. All three runs failed before the agent started:
+  - two hit the 10-minute budget on Lean's first check of the whole
+    file;
+  - one ran out of memory.
+
+  That is tool issue 2.
+- **The rest were not sent.** A spec's contract includes the function's
+  `no_panic` (`wpFun` counts a panic as false), and arm A showed that
+  contract false in the model for every function here. So no spec
+  contract can be proved either. We stopped arm B's proofs there. This
+  is a deviation from the protocol, stated here.
+
+### Deviations from the protocol
+
+- **The spec writer's input.** It saw the docs of the functions in scope
+  only, not all of `go doc -all`, and wrote no specs for the
+  `Normalized` variants.
+- **`Match` was left out of both arms (tool issue 1).** The other
+  fuzzysearch functions ran one `prove` per function, since a package-
+  wide run stops at the first missing target.
+- **`MatchFold`'s companions are incomplete.** Its run was stopped by
+  the harness's two-hour limit after the contract (6 rounds, open) and
+  one companion. The other functions ran detached, under an eight-hour
+  box, which they finished within.
+- **`WagnerFischer`** was run on its own, after the smetrics run was
+  stopped by the same limit.
+- **Arm B's proofs** stopped as described above.
+
+### Expectations against the outcome
+
+- **The `Normalized` variants stay open: yes.** The cause is not that
+  `x/text` is unmodelled but the assumptions recorded where it is.
+- **The edit distances are the hardest proofs: not tested.** They are
+  blocked by the model's capacity bound before any invariant matters.
+- **`Soundex`'s `no_panic` is in reach: no.** A harmless ignored
+  `Grow` blocks it.
+
+### Tool issues (to fix after the run)
+
+1. **Target IDs.** Two functions whose names differ only in case
+   (`Match`, `match`) get suffixed target IDs, and `prove` looks the
+   plain one up and stops the whole package.
+2. **The first check.** `prove` checks every goal of a package in one
+   Lean file before the agent starts. With many goals that file times out
+   or runs out of memory.
+3. **No `-deps`.** `prove` has no `-deps`, so standard-library functions
+   the search models (`unicode/utf8`) are havoc in the theorem.
+4. **Companions.** Each nil or empty companion goes to the agent for the
+   full rounds. On string functions that multiplies the cost by four,
+   and most companions fail for the main goal's reason.
+5. **The judge's second pass.** It can reject an automatic proof the
+   workspace accepted, through the heartbeat limit once earlier goals
+   are `sorry`.
+6. **The contract counts the model's own over-approximations as
+   failures.** The fix is in the statement and the model:
+   - havoc values constrained to the type the site has (`havocWidths`, or
+     a typed havoc);
+   - assumptions that cannot change Go's behaviour (an ignored `Grow`)
+     not recorded as under-approximations;
+   - `modelStuck` from the model's own bounds treated like running out
+     of fuel, not like a Go panic.

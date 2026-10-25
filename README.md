@@ -122,6 +122,7 @@ these checks are evidence, not a general correctness guarantee.
 
 [Validation and regression cases](docs/validation.md) ·
 [semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md) ·
+[proofs on real code](docs/eval/prove-blind.md) ·
 [concurrency evaluation](docs/eval/conc.md)
 
 ## Documentation
