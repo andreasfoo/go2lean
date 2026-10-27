@@ -123,7 +123,53 @@ marker to check that neither target execution nor target build tooling runs.
 These fixtures test the diagnostic, not the release requirement to find a
 real project's non-panic functional defect.
 
-The installed packaging gate runs these diagnostics on the pinned external
-uuid module with the checkout hidden and networking disabled, before compiling
-it. It is still not a clean-machine dependency installation test or proof
-that all build configurations of the module are available.
+The installed packaging gate (`scripts/install-smoke.sh <external-module>
+<new-results-directory> [--require-external-deps]`) installs the binary with a
+fresh Go module/build cache and an empty HOME. It then provisions target dependencies into a separate
+fresh module cache, with target files read-only, before running diagnostics and
+compilation with the checkout hidden and networking disabled. All stages use
+an allowlisted environment, ignoring host Go configuration, workspace selection,
+credentials and sandbox opt-outs. Installation and dependency preparation may
+use the network; their logs are separate from offline doctor/compile logs.
+`scripts/test_install_smoke.py` checks environment allowlisting, separate
+initially empty caches, online/offline phase selection, and rejection of
+reused result directories using mock tools. Those tests check orchestration,
+not real namespace isolation or successful dependency downloads.
+
+With `--require-external-deps`, tool/isolation prerequisites must first pass.
+Offline dependency diagnostics against the initially empty target cache must
+then fail with a dependency diagnostic. A successful diagnostic or an unrelated
+failure is not accepted as missing-dependency evidence. Only then does the gate
+provision dependencies and require offline diagnostics and compilation to pass.
+Mock tests cover both rejected cases as well as the expected failure/success
+transition. A missing module can stop `go list` before it emits package JSON;
+the gate accepts that path only with the explicit offline module-lookup
+diagnostic, not an arbitrary command failure.
+
+CI uses the pinned external uuid and stdr modules; stdr exercises the required
+missing-dependency transition. Go, elan, the pinned Lean toolchain,
+system tools and their PATH remain preinstalled prerequisites; other host paths
+remain readable. This tests clean Go dependency/cache setup and standalone
+packaging, **not** installation of OS/Lean prerequisites on a clean machine,
+every target build configuration, search/replay, or the full release gate.
+
+Local checkpoint (2026-10-27): the gate passed on uuid revision
+`2d3c2a9cc518326daf99a383f07c4d3c44317e4d`, with deliberately invalid host
+`GOFLAGS`, `GOENV` and `GOWORK`, host sandbox opt-outs, and a credential
+sentinel. Doctor reported 143 locally available packages and working replay,
+Lean and comparator isolation. The external checkout remained unchanged.
+The fresh **tool installation** downloaded go2lean's dependencies; this uuid
+revision has no module dependencies to download, so it does not exercise
+provisioning a third-party target dependency. Compilation still reports
+unsupported model operations; successful packaging is not full model support.
+
+The same checkpoint passed on stdr v1.2.2, revision
+`521af2addfa7c81c8a65d0e85ed34bb6bb6dc262`, with the same hostile host settings
+and `--require-external-deps`. Tool/isolation prerequisites passed; offline
+doctor first rejected the empty cache because `github.com/go-logr/logr@v1.2.2`
+was unavailable. After network-enabled preparation populated the separate
+target cache, offline doctor reported 131 available packages and compilation
+passed with the checkout hidden. The external checkout remained unchanged.
+The compile report includes unmodeled calls/state, so this is dependency
+provisioning and packaging evidence only, not functional validation of stdr.
+CI retains both packaging cases' logs on success as well as failure.

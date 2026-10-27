@@ -38,8 +38,23 @@ jobs:
         run: |
           git clone https://github.com/google/uuid.git "$RUNNER_TEMP/install-uuid"
           git -C "$RUNNER_TEMP/install-uuid" checkout --detach 2d3c2a9cc518326daf99a383f07c4d3c44317e4d
-          (cd "$RUNNER_TEMP/install-uuid" && go mod download)
           scripts/install-smoke.sh "$RUNNER_TEMP/install-uuid" "$RUNNER_TEMP/install-smoke"
+
+      - name: Installed binary with missing then provisioned external dependencies
+        run: |
+          git clone https://github.com/go-logr/stdr.git "$RUNNER_TEMP/install-stdr"
+          git -C "$RUNNER_TEMP/install-stdr" checkout --detach 521af2addfa7c81c8a65d0e85ed34bb6bb6dc262
+          scripts/install-smoke.sh "$RUNNER_TEMP/install-stdr" "$RUNNER_TEMP/install-stdr-smoke" --require-external-deps
+
+      - name: Installed packaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-packaging
+          path: |
+            ${{ runner.temp }}/install-smoke/*.log
+            ${{ runner.temp }}/install-stdr-smoke/*.log
+          if-no-files-found: ignore
 
       - name: Differential gate unit tests
         run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
@@ -55,8 +70,6 @@ jobs:
           path: |
             ${{ runner.temp }}/regress/run.log
             ${{ runner.temp }}/regress/outcomes.txt
-            ${{ runner.temp }}/install-smoke/compile.log
-            ${{ runner.temp }}/install-smoke/doctor.log
           if-no-files-found: ignore
 
   # The library models against Go (scripts/json-diff.sh).

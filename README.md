@@ -81,6 +81,8 @@ implicit unconfined fallback. Run `go2lean doctor` to check the local Go/Lean
 toolchains and sandbox capabilities, including proof-judge requirements.
 Use `go2lean doctor -deps ./...` to also check the target's cached dependencies
 offline, without compiling or running it.
+The [installation regression](docs/validation.md#offline-dependency-diagnostics)
+checks fresh Go caches and missing-then-provisioned external dependencies.
 Builds still run outside the sandbox, so use trusted source and dependencies.
 Sandboxed replay and agent Lean checks do not inherit host credentials from
 the environment. Other readable host paths remain exposed; this is not a
