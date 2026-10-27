@@ -41,6 +41,7 @@ Lean finds the inputs; `go test` is the judge.
   properties over bounded streams of calls.
 - **Real Go replay** — turn candidate counterexamples into runnable tests and
   distinguish confirmed findings from spurious or inconclusive results.
+  Package-local generated helpers travel with their replay artifacts.
 - **Concurrency bugs** — deadlocks, goroutine leaks and data races, found in
   the model and confirmed by `go test` (with `-race`, and the model's
   schedule replayed when Go's scheduler does not take it); for small

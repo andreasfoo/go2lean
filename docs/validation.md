@@ -101,7 +101,7 @@ Existing partial results are not full-suite evidence.
 
 ### Sandbox integration gate
 
-`GO2LEAN_REQUIRE_SANDBOX_TESTS=1 go test ./internal/sandbox -count=1 -v`
+`GO2LEAN_REQUIRE_SANDBOX_TESTS=1 go test ./internal/sandbox ./internal/poc -count=1 -v`
 requires working bubblewrap and prlimit, with no replay or Lean isolation
 opt-out. CI runs this separately so a machine without user namespaces
 cannot silently pass by skipping the isolation tests. The tests check replay
@@ -110,6 +110,31 @@ storage, absence of inherited credential variables in both execution paths,
 and replay wall-clock termination. This is evidence for those boundaries,
 not a security audit or a full release gate. Local unit tests without this
 flag may still skip unavailable integration cases.
+
+### Generated-source artifact completeness
+
+The mandatory isolation gate also runs `./internal/poc`. Its trusted packaging
+fixture first builds/runs a generated oracle through the normal replay path,
+copies the delivered bundle to a different directory, removes the original
+target and workspace, and discards the in-memory overlay. It then builds the
+bundle's standalone preparer, prepares an overlay for a fresh source clone,
+builds the observation test with Go, and runs it under real isolation. The
+test requires the actual oracle/result observation, not just exit zero.
+A harness-only negative control must fail compilation without the helpers.
+The fixture's oracle **holds**: these are spurious candidates, not invented
+confirmed bugs or external-project release evidence.
+
+Other tests cover all package-local helpers, exclusion of unrelated package
+overlays, rewrite precedence, `-race` flag preservation, invalidation of an old
+manifest after a failed update, hash mismatches, omitted/missing files,
+unsupported manifest versions/fields, duplicate destinations, unsafe relative
+paths, symlinks and refusal to overwrite output. Portable preparation ignores
+the legacy absolute-path schedule overlay.
+
+This verifies the package-local Go-source delivery mechanism described in
+[the pipeline](pipeline.md#generated-support-sources), not arbitrary dependency
+overlays, a hostile-filesystem race boundary, model correctness, resumed
+command bindings, or the still-missing real external non-panic release case.
 
 ### Offline dependency diagnostics
 

@@ -107,6 +107,44 @@ through an overlay so that each channel, lock and `select` operation waits
 for its turn, and the real runtime then shows the deadlock or leak. The
 PoC carries the overlay ([concurrency.md](concurrency.md)).
 
+### Generated support sources
+
+When replay uses package-local generated Go helpers (including imported fuzz
+oracles), the delivered artifact includes them rather than only a test that
+references absent functions. Schedule-rewritten sources take precedence over
+general overlays, matching the actual replay.
+
+Such artifacts contain `bundle.json`, source SHA-256 hashes, `support/` and/or
+`replay/` sources, and a standalone standard-library-only `prepare.go`. From
+the bundle directory, use it to rebase an overlay onto a disposable clone of
+the same target revision:
+
+```sh
+GOWORK=off go run prepare.go -bundle . \
+  -module /absolute/scratch-clone \
+  -output /absolute/new-replay-overlay.json
+```
+
+The preparer validates the source inventory, hashes, package-relative paths
+and absence of symlinks within the bundle/clone. It creates only the requested
+new JSON file; it does not build or execute target code, replace target source,
+or overwrite an existing output. The bundle's README gives the subsequent
+local `go test -overlay ...` command, including `-race` when needed. That manual
+command is **not sandboxed**, unlike pipeline replay: trust the artifact,
+source and dependencies and use a disposable isolated environment. Tests
+print observations; exit zero alone does not confirm a finding.
+
+The bundle includes generated/replaced Go sources, not the target repository
+or its dependencies. Current replay applies overlays only to the target
+package; arbitrary dependency-package overlays and non-Go support overlays
+are not supported by this portable delivery path. The target package must be
+inside the selected module directory. Hashes detect inconsistent files, not
+an untrusted producer or changes to the underlying target revision. These
+bundles are not persisted builtin bindings or resume authorizations.
+Artifacts requiring no support sources retain the single-test instructions.
+If a package already contains copied `zz_go2lean_poc_*_test.go` observations,
+replay refuses with cleanup instructions rather than deleting source files.
+
 ## Writing a spec
 
 You do not need to write Lean. There are two different ways to state a claim:

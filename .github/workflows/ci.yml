@@ -32,7 +32,7 @@ jobs:
       - name: Sandbox integration (missing isolation must fail, not skip)
         env:
           GO2LEAN_REQUIRE_SANDBOX_TESTS: "1"
-        run: go test ./internal/sandbox -count=1 -v
+        run: go test ./internal/sandbox ./internal/poc -count=1 -v
 
       - name: Installed binary with checkout hidden (packaging only)
         run: |

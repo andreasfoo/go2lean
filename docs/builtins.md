@@ -129,8 +129,10 @@ this can count toward release acceptance:
    The current compiler diagnostic does not establish support for arbitrary
    callees or justify trusting a stale capability report.
 3. Complete non-vacuity/search accounting and model-versus-Go parity evidence.
-4. Standalone delivery of required generated helpers, independently replayed
-   without the original in-memory overlay or generated workspace.
+4. Use and independently verify the [helper-bundle delivery path](pipeline.md#generated-support-sources)
+   for activated builtin findings. Its package-local infrastructure is unit
+   tested without the original workspace/overlay, but no installed external
+   builtin finding has passed that path yet.
 5. A frozen authorized external-project evaluation with a real non-panic
    violation, fixed revision and relevant negative controls, using
    model-generated inputs rather than supplied historical counterexamples.

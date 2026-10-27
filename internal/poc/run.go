@@ -3,7 +3,7 @@ package poc
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/andreasfoo/go2lean/internal/replay"
+	"go/token"
 	"maps"
 	"os"
 	"os/exec"
@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/andreasfoo/go2lean/internal/contract"
+	"github.com/andreasfoo/go2lean/internal/replay"
 	"github.com/andreasfoo/go2lean/internal/sandbox"
 )
 
@@ -163,7 +164,7 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 		if p.v.Status == contract.VerdictConfirmed {
 			p.v.Rank = rankOf(p, callers)
 		}
-		if err := deliver(ws, root, p); err != nil {
+		if err := deliver(ws, root, p, overlay); err != nil {
 			return nil, err
 		}
 		vs = append(vs, p.v)
@@ -397,12 +398,10 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[
 	}
 	sort.Strings(imps)
 	src := File(pkgName, imps, funcs)
-	// A harness left behind by an interrupted run would redeclare the
-	// test; ours are the only files with this prefix.
+	// Copied/legacy harnesses may redeclare this test. Never delete source
+	// files to make a build pass, even files carrying our naming prefix.
 	if stale, _ := filepath.Glob(filepath.Join(pkgDir, "zz_go2lean_poc_*_test.go")); len(stale) > 0 {
-		for _, f := range stale {
-			os.Remove(f)
-		}
+		return nil, "", 0, "", "", fmt.Errorf("replay refused: package contains copied/generated observation tests; move them out of the scratch clone before retrying (no files were removed): %s", strings.Join(stale, ", "))
 	}
 	// The harness joins the package through an overlay and runs in the
 	// sandbox: nothing is written to the package, and a target that writes
@@ -419,10 +418,15 @@ func runBatch(root, pkgDir, pkgName, pkg string, batch []*prepared, overlay map[
 	bin := filepath.Join(tmp, "poc.test")
 	name := fmt.Sprintf("zz_go2lean_poc_%d_test.go", os.Getpid())
 	files := map[string][]byte{name: []byte(src)}
-	for path, b := range overlay {
-		if filepath.Dir(path) == pkgDir {
-			files[filepath.Base(path)] = b
+	helpers, err := packageOverlayFiles(pkgDir, overlay)
+	if err != nil {
+		return nil, "", 0, "", "", err
+	}
+	for helper, b := range helpers {
+		if helper == name {
+			return nil, "", 0, "", "", fmt.Errorf("package overlay replaces the generated test harness: %s", name)
 		}
+		files[helper] = b
 	}
 	var flags []string
 	for _, p := range batch {
@@ -631,13 +635,23 @@ func havocSites(ws contract.Workspace, cx *contract.Counterexample) []contract.A
 	return out
 }
 
-// deliver writes the PoC directory (a standalone test file and a README)
-// and the verdict.
-func deliver(ws contract.Workspace, root string, p *prepared) error {
+// deliver writes the harness, its effective generated/replayed support
+// sources, reproduction instructions, and the verdict.
+func deliver(ws contract.Workspace, root string, p *prepared, overlay map[string][]byte) error {
 	v := p.v
 	if p.fn != "" {
+		if p.cx.ID == "" || !token.IsIdentifier("TestGo2LeanPoC_"+p.cx.ID) {
+			return fmt.Errorf("invalid reproduction test identifier for %q", p.cx.ID)
+		}
 		pocDir := ws.PocDir(p.cx.ID)
 		if err := os.MkdirAll(pocDir, 0o755); err != nil {
+			return err
+		}
+		if info, err := os.Lstat(pocDir); err != nil || !info.IsDir() {
+			return fmt.Errorf("PoC artifact root is not a regular directory: %s", pocDir)
+		}
+		// A failed update must not leave an old manifest apparently ready.
+		if err := os.Remove(filepath.Join(pocDir, "bundle.json")); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		pkgDir, pkgName, err := goList(root, p.target.Package)
@@ -645,7 +659,8 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 			return err
 		}
 		testName := "zz_go2lean_poc_" + p.cx.ID + "_test.go"
-		if err := os.WriteFile(filepath.Join(pocDir, testName), []byte(File(pkgName, p.imps, []string{p.fn})), 0o644); err != nil {
+		harness := []byte(File(pkgName, p.imps, []string{p.fn}))
+		if err := writeArtifactFile(pocDir, testName, harness); err != nil {
 			return err
 		}
 		cmd := "go test -count=1 -v -run '^TestGo2LeanPoC_" + p.cx.ID + "$' " + testPath(p.target.Package)
@@ -661,13 +676,13 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 			}
 			ov := map[string]map[string]string{"Replace": {}}
 			for name, src := range p.replayed {
-				if err := os.WriteFile(filepath.Join(odir, name), src, 0o644); err != nil {
+				if err := writeArtifactFile(pocDir, "replay/"+name, src); err != nil {
 					return err
 				}
 				ov["Replace"][filepath.Join(pkgDir, name)] = filepath.Join(odir, name)
 			}
 			b, _ := json.MarshalIndent(ov, "", "  ")
-			if err := os.WriteFile(filepath.Join(odir, "overlay.json"), b, 0o644); err != nil {
+			if err := writeArtifactFile(pocDir, "replay/overlay.json", b); err != nil {
 				return err
 			}
 			cmd = strings.Replace(cmd, "-count=1 -v", "-count=1 -v -overlay "+filepath.Join(odir, "overlay.json"), 1)
@@ -677,7 +692,44 @@ func deliver(ws contract.Workspace, root string, p *prepared) error {
 		if p.replayed != nil {
 			readme += "\nThe run replays the model's schedule: `replay/` holds the package's files rewritten so that every synchronisation operation waits for its turn (go2lean's replay controller), built through the overlay; the package itself is not changed.\n"
 		}
-		if err := os.WriteFile(filepath.Join(pocDir, "README.md"), []byte(readme), 0o644); err != nil {
+		helpers, err := packageOverlayFiles(pkgDir, overlay)
+		if err != nil {
+			return err
+		}
+		if len(helpers) > 0 || len(p.replayed) > 0 {
+			if err := deliverBundle(pocDir, root, pkgDir, testName, harness, p, helpers); err != nil {
+				return err
+			}
+			race := ""
+			if p.race {
+				race = "-race "
+			}
+			absoluteRoot, err := filepath.Abs(root)
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(absoluteRoot, pkgDir)
+			if err != nil {
+				return err
+			}
+			localPkg := "./" + filepath.ToSlash(rel)
+			readme = fmt.Sprintf("# PoC %s\n\nProperty: %s (%s)\n\n%s\n\nVerdict: **%s**\n\n"+
+				"This bundle includes the harness and the package-local generated/support sources actually used by replay. "+
+				"It does not include target source or dependencies. Use a disposable clone of the same target revision and build configuration.\n\n"+
+				"From this bundle directory, prepare a NEW overlay for the clone (no target code is built or executed by this preparation):\n\n"+
+				"    GOWORK=off go run prepare.go -bundle . -module /absolute/scratch-clone -output /absolute/new-replay-overlay.json\n\n"+
+				"Then, from the scratch clone's module directory:\n\n"+
+				"    go test %s-count=1 -v -overlay /absolute/new-replay-overlay.json -run '^TestGo2LeanPoC_%s$' %s\n\n"+
+				"Preparation checks source SHA-256 hashes and rejects unsafe paths, symlinks, missing files and overwriting an existing output. "+
+				"Hashes detect inconsistent artifacts; they do not authenticate an untrusted producer. "+
+				"The manual go test command is NOT sandboxed: trust the sources and dependencies, and use an isolated disposable environment. "+
+				"These observation tests print GO2LEAN_RESULT; go test exiting zero alone does not confirm a finding.\n",
+				p.cx.ID, p.prop.ID, p.prop.Kind, p.prop.NL, v.Status, race, p.cx.ID, "'"+strings.ReplaceAll(localPkg, "'", "'\\''")+"'")
+			if len(p.replayed) > 0 {
+				readme += "\nThe bundle includes schedule-rewritten package sources; these take precedence over general overlays, matching the confirmed replay. This is an instrumented schedule reproduction, not a claim that the unmodified Go scheduler must reproduce it.\n"
+			}
+		}
+		if err := writeArtifactFile(pocDir, "README.md", []byte(readme)); err != nil {
 			return err
 		}
 		v.PocDir = pocDir
