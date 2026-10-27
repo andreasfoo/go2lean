@@ -63,7 +63,9 @@ The pinned Lean toolchain is fetched on the first build. No LLM API key is neede
 The binary bundles its Lean sources and can be installed with
 `go install github.com/andreasfoo/go2lean/cmd/go2lean@latest`; it does not
 need a source checkout at runtime. From a Go module, use
-`go2lean run ./...` (currently only panic checks are spec-free).
+`go2lean run ./...` (automatic templates are panic checks).
+An [experimental explicit ordering mode](docs/builtins.md) supplies non-panic
+laws for a selected comparator under documented role/domain assumptions.
 
 ```sh
 git clone https://github.com/andreasfoo/go2lean.git
@@ -158,7 +160,7 @@ these checks are evidence, not a general correctness guarantee.
 | [Project reference](docs/reference.md) | Repository layout and roadmap |
 | [Design](docs/design.md) | Architecture and technical decisions |
 | [Concurrency](docs/concurrency.md) | Concurrent Go modeling and its limits |
-| [Built-in check prototype](docs/builtins.md) | Ordering-oracle generation and static compile gate; not CLI-enabled or release evidence |
+| [Experimental ordering checks](docs/builtins.md) | Explicit opt-in, frozen bindings and replay; not release acceptance evidence |
 | [Related work](docs/related-work.md) | Context and comparisons |
 
 ## License

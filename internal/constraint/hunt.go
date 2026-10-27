@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andreasfoo/go2lean/internal/builtin"
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/prover"
 	"github.com/andreasfoo/go2lean/internal/repo"
@@ -523,6 +524,11 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 	target, err := ws.Target(prop.Target)
 	if err != nil {
 		return nil, "", err
+	}
+	if builtin.IsGeneratedProperty(prop, target) {
+		if _, err := builtin.ValidateProperty(ws, prop); err != nil {
+			return nil, "", err
+		}
 	}
 	abi, err := ws.ABI(target, prop.Frontend)
 	if err != nil {

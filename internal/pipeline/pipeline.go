@@ -43,9 +43,12 @@ type Env struct {
 	// Tests makes test functions targets (gossa.Options.Tests).
 	Tests bool
 	// CompareOrder requires a static call-graph assessment of the supplied
-	// canonical generated overlay before emitting a model. It does not infer
-	// a contract, activate a property, or enable CLI/resume/replay support.
-	CompareOrder *builtin.Binding
+	// canonical generated overlay before emitting a model. The field alone
+	// does not activate a property; ConfigureCompareOrder additionally binds
+	// source fingerprints and a dedicated persistent check workspace.
+	CompareOrder   *builtin.Binding
+	compareSources *builtin.SourceGraph
+	compareRef     *contract.BuiltinRef
 }
 
 func (e Env) module() string {
@@ -80,6 +83,12 @@ func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*con
 // dependencies' follow. A theorem about it is about the dependencies'
 // models too, not havoc. Only the linked model is written.
 func CompileLinked(w contract.Workspace, env Env, pattern string, out io.Writer) (*contract.ModelReport, error) {
+	if err := refuseActiveCompile(w); err != nil {
+		return nil, err
+	}
+	if env.compareSources != nil {
+		return nil, fmt.Errorf("compare-order activation uses ordinary compilation, not proof linking")
+	}
 	if err := validateCompareOrderOverlay(env); err != nil {
 		return nil, err
 	}
@@ -137,6 +146,9 @@ func CompileLinked(w contract.Workspace, env Env, pattern string, out io.Writer)
 // CompileAll runs M1 on every package matching the patterns (e.g. "./...")
 // with a single load of the dependency graph.
 func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string) ([]*contract.ModelReport, error) {
+	if err := refuseActiveCompile(w); err != nil {
+		return nil, err
+	}
 	if err := validateCompareOrderOverlay(env); err != nil {
 		return nil, err
 	}
@@ -175,12 +187,22 @@ func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string
 		}
 		reports = append(reports, report)
 	}
+	if env.compareSources != nil {
+		ref, err := builtin.WriteSnapshot(w, env.module(), env.CompareOrder, env.compareSources, reports)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(out, "compiled builtin snapshot: %s (explicit ordering/purity/totality assumptions; not a passed check)\n", ref.SnapshotSHA256)
+	}
 	return reports, nil
 }
 
 // Propose runs M2's property templates and prints them.
 func Propose(w contract.Workspace, report *contract.ModelReport, out io.Writer) ([]*contract.Property, error) {
-	props, err := constraint.Propose(w, report)
+	props, active, err := activeProperties(w, report)
+	if err == nil && !active {
+		props, err = constraint.Propose(w, report)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +214,14 @@ func Propose(w contract.Workspace, report *contract.ModelReport, out io.Writer) 
 
 // Hunt runs the engines on one property and prints the outcome.
 func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.SearchOptions, out io.Writer) (*contract.Counterexample, error) {
+	if err := validateBuiltinHunt(w, env, p); err != nil {
+		return nil, err
+	}
 	if env.Resume {
 		if r := w.HuntRecord(p.ID); r != nil {
+			if p.Builtin != nil && r.BuiltinSnapshotSHA256 != p.Builtin.SnapshotSHA256 {
+				return nil, fmt.Errorf("builtin: cached hunt belongs to another compiled snapshot")
+			}
 			fmt.Fprintf(out, "  %-28s (resumed) %s\n", p.ID, r.Summary)
 			if r.Counterexample == "" {
 				return nil, nil
@@ -206,6 +234,9 @@ func Hunt(w contract.Workspace, env Env, p *contract.Property, opts constraint.S
 		return nil, fmt.Errorf("hunt %s: %w", p.ID, err)
 	}
 	rec := &contract.HuntRecord{Property: p.ID, Summary: summary}
+	if p.Builtin != nil {
+		rec.BuiltinSnapshotSHA256 = p.Builtin.SnapshotSHA256
+	}
 	if cx != nil {
 		rec.Counterexample = cx.ID
 	}
@@ -285,6 +316,23 @@ func VerifyAll(w contract.Workspace, env Env, ids []string, out io.Writer) ([]*c
 		var todo []string
 		for _, id := range ids {
 			if v := w.Verdict(id); v != nil {
+				cx, err := w.Counterexample(id)
+				if err != nil {
+					return nil, err
+				}
+				p, err := w.Property(cx.Property)
+				if err != nil {
+					return nil, err
+				}
+				t, err := w.Target(p.Target)
+				if err != nil {
+					return nil, err
+				}
+				if builtin.IsGeneratedProperty(p, t) {
+					if err := builtin.ValidateCachedVerdict(w, env.module(), cx, p, v); err != nil {
+						return nil, err
+					}
+				}
 				done = append(done, v)
 			} else {
 				todo = append(todo, id)
@@ -382,7 +430,22 @@ func RunAll(w contract.Workspace, env Env, opts constraint.SearchOptions, out io
 		maps.Copy(env.Overlay, overlay)
 	}
 	fmt.Fprintln(out, "== Compile stage")
-	reports, err := CompileAll(w, env, out, patterns...)
+	var reports []*contract.ModelReport
+	var err error
+	if env.compareRef != nil {
+		s, loadErr := builtin.LoadSnapshot(w, env.compareRef)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		r, loadErr := w.ModelReport("gossa", s.Binding.Package)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		reports = []*contract.ModelReport{r}
+		fmt.Fprintln(out, "  resumed immutable compiled builtin snapshot")
+	} else {
+		reports, err = CompileAll(w, env, out, patterns...)
+	}
 	if err != nil {
 		return nil, err
 	}

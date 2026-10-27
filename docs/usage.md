@@ -45,6 +45,12 @@ It is not a clean-machine installation test.
 
 ### 2. Install, or clone and run the included example
 
+For an explicitly selected pure/total string ordering comparator, the
+[experimental ordering mode](builtins.md#experimental-usage) supplies a
+non-panic law without handwritten spec code. It requires a dedicated workspace
+and default native build configuration; it is not automatic contract inference
+or a completed real-project release evaluation.
+
 ```sh
 go install github.com/andreasfoo/go2lean/cmd/go2lean@latest
 cd /path/to/your/go/module

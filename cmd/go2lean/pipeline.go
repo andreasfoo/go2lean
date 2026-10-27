@@ -149,6 +149,7 @@ func cmdRun(args []string) error {
 	resume := fs.Bool("resume", false, "skip properties already searched and counterexamples already verified in the workspace")
 	fuzzSpecs := fs.Bool("fuzz-specs", true, "read the packages' Go fuzz targets (FuzzXxx) as specs")
 	tests := fs.Bool("tests", false, "make the packages' test functions (TestXxx(t *testing.T)) targets")
+	compareOrder := fs.String("compare-order", "", "explicitly select a pure, deterministic, total func(string,string) int ordering comparator (experimental; one package)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("run: at least one package pattern expected (e.g. ./...)")
@@ -158,6 +159,13 @@ func cmdRun(args []string) error {
 		return err
 	}
 	env.Deps, env.Resume, env.FuzzSpecs, env.Tests = *deps, *resume, *fuzzSpecs, *tests
+	if *compareOrder != "" {
+		env, err = pipeline.ConfigureCompareOrder(w, env, *compareOrder, fs.Args()...)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "compare-order opt-in: asserting a pure, deterministic, total three-way ordering over all byte strings")
+	}
 	_, err = pipeline.RunAll(w, env, opts.get(), os.Stdout, fs.Args()...)
 	return err
 }

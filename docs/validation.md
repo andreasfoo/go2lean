@@ -113,6 +113,17 @@ flag may still skip unavailable integration cases.
 
 ### Generated-source artifact completeness
 
+The experimental ordering mode has a separate mandatory integration gate:
+`GO2LEAN_REQUIRE_BUILTIN_TESTS=1 GO2LEAN_REQUIRE_SANDBOX_TESTS=1 go test
+./internal/pipeline -run TestBuiltinSearchReplayFromPersistedSnapshot -count=1 -v`.
+It uses actual Lean search to generate a witness for a deliberately invalid
+unit comparator and independently replays it in sandboxed Go from the persisted
+snapshot, without passing the original overlay. No witness is supplied by the
+test. This proves the unit path works, **not** that an external project's
+contract was inferred or a release gate was met. Snapshot tests separately
+cover changed source/embed data/configuration, model/property tampering, moved
+identical clones, immutable compilation and stale cached results.
+
 The mandatory isolation gate also runs `./internal/poc`. Its trusted packaging
 fixture first builds/runs a generated oracle through the normal replay path,
 copies the delivered bundle to a different directory, removes the original

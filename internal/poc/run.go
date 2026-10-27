@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/andreasfoo/go2lean/internal/builtin"
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/replay"
 	"github.com/andreasfoo/go2lean/internal/sandbox"
@@ -97,10 +98,35 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 	byPkg := map[string][]*prepared{}
 	var order []string
 	all := map[string]*prepared{}
+	snapshots := map[string]*builtin.Snapshot{}
+	effective := maps.Clone(overlay)
+	if effective == nil {
+		effective = map[string][]byte{}
+	}
 	for _, id := range cxIDs {
 		p, err := prepare(ws, id)
 		if err != nil {
 			return nil, err
+		}
+		if builtin.IsGeneratedProperty(p.prop, p.target) {
+			s, err := builtin.ValidateProperty(ws, p.prop)
+			if err != nil {
+				return nil, err
+			}
+			key := p.prop.Builtin.SnapshotSHA256
+			if _, seen := snapshots[key]; !seen {
+				restored, err := s.RestoreOverlay(root)
+				if err != nil {
+					return nil, err
+				}
+				for path, source := range restored {
+					if old, exists := effective[path]; exists && string(old) != string(source) {
+						return nil, fmt.Errorf("builtin: replay overlay conflicts with its canonical snapshot")
+					}
+					effective[path] = source
+				}
+				snapshots[key] = s
+			}
 		}
 		all[id] = p
 		if p.v == nil {
@@ -110,6 +136,7 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 			byPkg[p.target.Package] = append(byPkg[p.target.Package], p)
 		}
 	}
+	overlay = effective
 	for _, pkg := range order {
 		batch := byPkg[pkg]
 		pkgDir, pkgName, err := goList(root, pkg)
@@ -154,6 +181,11 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 			}
 		}
 	}
+	for _, snapshot := range snapshots {
+		if _, err := snapshot.RestoreOverlay(root); err != nil {
+			return nil, fmt.Errorf("builtin: source graph changed during replay: %w", err)
+		}
+	}
 	var vs []*contract.Verdict
 	callers := newCallerIndex(root)
 	for _, id := range cxIDs {
@@ -161,8 +193,15 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 		if p.v == nil {
 			return nil, fmt.Errorf("%s: no verdict produced", id)
 		}
-		if p.v.Status == contract.VerdictConfirmed {
+		if p.v.Status == contract.VerdictConfirmed && p.prop.Builtin == nil {
 			p.v.Rank = rankOf(p, callers)
+		}
+		if p.prop.Builtin != nil {
+			stamp, err := builtin.ReplayRef(p.prop, p.cx)
+			if err != nil {
+				return nil, err
+			}
+			p.v.Builtin = stamp
 		}
 		if err := deliver(ws, root, p, overlay); err != nil {
 			return nil, err

@@ -1,9 +1,44 @@
 # Built-in semantic checks: implementation checkpoint
 
-Status: internal source-generation/static-compile prototype, **not enabled by the CLI**.
+Status: **experimental explicit-opt-in CLI mode**, not a release acceptance result.
 The release requirement for a spec-free non-panic check on a real external
-project remains unmet. Source generation alone is neither a working pipeline
-check nor release evidence.
+project remains unmet. Unit fixtures and a model-only external run do not
+substitute for the requested real-project evidence.
+
+## Experimental usage
+
+Only select this role when the function is intended to be a pure,
+deterministic, total ordering comparator on **all** byte strings. Neither its
+name nor its signature establishes that contract.
+
+```sh
+# From a trusted scratch module, using a new dedicated workspace:
+GOWORK=off go2lean run -compare-order Compare -workspace /tmp/new-order-check .
+```
+
+The tool supplies the law and helpers; no Go spec is handwritten. The opt-in
+asserts role/domain assumptions, rather than discovering an arbitrary API's
+business contract. The initial mode supports one package, native 64-bit Go
+1.26+, empty `GOFLAGS`, no active `go.work`, no test targets and no additional
+source overlays. Dependencies are modeled automatically; fuzz assertions are
+not imported in this mode. Methods, bool-returning `Less` APIs and
+restricted-domain comparators are not supported adapters.
+
+Stages may run in separate processes:
+
+```sh
+GOWORK=off go2lean compile -compare-order Compare -workspace /tmp/new-order-check .
+go2lean props -workspace /tmp/new-order-check -package example.com/module
+go2lean hunt -workspace /tmp/new-order-check
+go2lean poc -module /scratch/module -workspace /tmp/new-order-check \
+  -counterexample <model-generated-id>
+```
+
+Use the actual import path in `props`. Search operates on the frozen model;
+replay needs identical source/dependencies and build configuration, but can
+restore helpers in a clone at a different path. `run -compare-order Compare
+-resume` reuses an unchanged bound workspace. Changed source or recompilation
+requires a fresh workspace, not overwriting models while retaining old results.
 
 ## Explicitly bound comparison-order oracle
 
@@ -85,6 +120,31 @@ reasons. This is a diagnostic snapshot, **not** an active property, immutable
 target-source/model snapshot, resume record, or executable replay manifest.
 Ordinary compilation does not activate the gate.
 
+`ConfigureCompareOrder` adds explicit activation on top of this diagnostic
+gate. A content-addressed `checks/` snapshot pins the canonical helper, static
+assessment, source/test dependency hashes, module manifests, selected embedded
+and native files, build configuration fingerprint, bundled Lean runtime,
+generated models, reports, ABIs, targets and registry. The canonical property's
+reference identifies that snapshot. Configuration values are fingerprinted,
+not dumped as credential-bearing environment data.
+
+The fingerprint probe uses offline metadata loading, a 45-second command
+deadline and bounded output. Dependencies/toolchains must already be prepared.
+It does not execute target functions; compilation/type-check/build tooling
+still requires trusted source as described in the usage guide. Custom compiler
+executables/system libraries and hostile filesystem races are not authenticated
+by these hashes.
+
+Search and replay reject changed model/property records or stripped generated
+property provenance. Replay restores the canonical helper from the snapshot,
+not the original process's overlay, and checks source fingerprints before and
+after execution. Resumed hunts require the same snapshot; cached verdicts also
+bind the concrete counterexample digest. These are reproducibility/integrity
+checks, not signed attestations or an adversary-proof trust chain.
+Ordinary caller-plausibility ranking is not applied to the generated wrapper:
+a confirmed oracle violation still depends on the explicitly asserted API role,
+not on the wrapper being called by the original application.
+
 Local external-source checkpoint (2026-10-27): a scratch clone of
 `golang.org/x/mod` v0.42.0, revision
 `b5136e5ba156da612a1efc6e49b55988a134a5e0`, was compiled with the generated
@@ -94,13 +154,20 @@ fallback sites. The checkout remained unchanged. Unrelated partial functions
 in dependency packages remained visible in the compile reports but were not
 part of this comparator's required call graph.
 
-This checkpoint used an internal assessment driver, **not** a released CLI
+That static checkpoint used an internal assessment driver, **not** a released CLI
 check. It executed no target function, searched no property, confirmed no
 defect and is not yet a negative regression. Attempting to compile the overlay
 directly over the downloaded module cache was rejected by Go: source beneath
 `GOMODCACHE` cannot be replaced through an overlay. Use a scratch clone/source
 copy outside that cache; a type-compatible binding alone does not establish
 that its source location is eligible for Go overlays.
+
+The experimental CLI subsequently compiled a frozen check for the same
+external comparator and ran 1,000 seeded model trials: 1,000 checked, zero
+vacuous/moot/stuck or out-of-fuel trials, and no counterexample. This remains
+**model-only** evidence: no real-Go parity result, confirmed external defect,
+fixed-revision comparison, or accepted negative release control. It does not
+establish coverage of valid version strings.
 
 ## Verified here, and what remains
 
@@ -117,17 +184,21 @@ normal versus synthetic fallback edges, and fail-closed handling of unknown
 operations. Pipeline tests check both compilation paths, exact source/overlay
 correspondence, diagnostic persistence, failure before model emission and
 unchanged ordinary compilation behavior.
+Snapshot tests cover source/configuration drift, moved identical clones,
+tampered model/property/manifest files and stale resume records. A mandatory
+integration gate uses real Lean search on a planted unit comparator, then
+confirms its non-panic law violation in sandboxed Go **without passing an
+overlay or binding to replay**. Its witness is generated by search. This is
+unit pipeline evidence, not a real external-project finding.
 
 These are unit tests, **not external-project defect evidence** and not
 Lean-versus-Go execution parity. The following work is still required before
 this can count toward release acceptance:
 
-1. CLI/pipeline opt-in, persisted bindings and consistent generated-source
-   availability across compile, search, replay and resumed commands.
-2. Use the static capability gate consistently when activating checks, and tie
-   emitted model/source snapshots to persisted properties and resumed commands.
-   The current compiler diagnostic does not establish support for arbitrary
-   callees or justify trusting a stale capability report.
+1. Exercise the implemented opt-in, persistence and resumed commands in the
+   real-project installed-binary protocol.
+2. Establish actual target/model applicability: passing a static gate does not
+   establish arbitrary callee fidelity or justify a signature-based contract.
 3. Complete non-vacuity/search accounting and model-versus-Go parity evidence.
 4. Use and independently verify the [helper-bundle delivery path](pipeline.md#generated-support-sources)
    for activated builtin findings. Its package-local infrastructure is unit
@@ -138,6 +209,6 @@ this can count toward release acceptance:
    model-generated inputs rather than supplied historical counterexamples.
 6. Installed-binary and clean-environment evaluation of that entire path.
 
-The existing `run` behavior has not changed: its spec-free automatic templates
-still provide panic checks; existing fuzz assertions and handwritten Go specs
-remain separate mechanisms.
+Without the explicit flag, `run` still uses automatic panic templates,
+imported fuzz assertions and handwritten Go specs. The experimental ordering
+mode never silently activates based on a function's name.

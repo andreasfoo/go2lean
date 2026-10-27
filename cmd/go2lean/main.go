@@ -65,6 +65,9 @@ func usage() {
   go2lean hunt    [-workspace out] [-property id] spec & search stage: search for counterexamples
   go2lean poc     [-workspace out] -counterexample id   replay stage: realise and verify in Go
   go2lean run     [-workspace out] <package>      all of the above
+  experimental: compile/run -compare-order Func <one package>
+                explicitly assert pure, deterministic, total func(string,string) int ordering;
+                default native 64-bit build, no go.work/GOFLAGS, fresh dedicated workspace
   go2lean fuzz    [-workspace out] [-fuzztime 30s] [-spec-file f] <package>   the package's specs as go test -fuzz targets
   go2lean prove   [-workspace out] -goals f.json | -func F -post P  <package>
                                                   state functional theorems (wpFun contracts) and prove them
@@ -123,6 +126,7 @@ func cmdCompile(args []string) error {
 	ws := workspaceFlag(fs)
 	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
 	tests := fs.Bool("tests", false, "make the packages' test functions (TestXxx(t *testing.T)) targets")
+	compareOrder := fs.String("compare-order", "", "explicitly select a pure, deterministic, total func(string,string) int ordering comparator (experimental; one package)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("compile: at least one package pattern expected (e.g. ./...)")
@@ -132,6 +136,13 @@ func cmdCompile(args []string) error {
 		return err
 	}
 	env.Deps, env.Tests = *deps, *tests
+	if *compareOrder != "" {
+		env, err = pipeline.ConfigureCompareOrder(w, env, *compareOrder, fs.Args()...)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "compare-order opt-in: asserting a pure, deterministic, total three-way ordering over all byte strings")
+	}
 	_, err = pipeline.CompileAll(w, env, os.Stdout, fs.Args()...)
 	return err
 }

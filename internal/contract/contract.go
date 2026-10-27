@@ -54,6 +54,19 @@ type SpecRef struct {
 	LeanDecl string `json:"lean_decl,omitempty"`
 }
 
+// BuiltinRef binds a generated property to a content-addressed compiled check
+// snapshot. It is provenance/integrity metadata, not a proof certificate.
+type BuiltinRef struct {
+	ID             string `json:"id"`
+	Version        string `json:"version"`
+	SnapshotSHA256 string `json:"snapshot_sha256"`
+}
+
+type BuiltinReplayRef struct {
+	SnapshotSHA256       string `json:"snapshot_sha256"`
+	CounterexampleSHA256 string `json:"counterexample_sha256"`
+}
+
 // Property is one claim about a Target.
 type Property struct {
 	ID           string       `json:"id"`
@@ -67,10 +80,11 @@ type Property struct {
 	MaxLen int `json:"max_len,omitempty"`
 	// ExpectedPanic restricts a no_panic property to one panic category
 	// (see PanicKind). Empty means any panic counts.
-	ExpectedPanic PanicKind `json:"expected_panic,omitempty"`
-	Frontend      string    `json:"frontend"`
-	Source        string    `json:"source"` // "agent" | "human" | "template"
-	CreatedBy     string    `json:"created_by,omitempty"`
+	ExpectedPanic PanicKind   `json:"expected_panic,omitempty"`
+	Frontend      string      `json:"frontend"`
+	Source        string      `json:"source"` // "agent" | "human" | "template"
+	CreatedBy     string      `json:"created_by,omitempty"`
+	Builtin       *BuiltinRef `json:"builtin,omitempty"`
 }
 
 // PanicKind is the category of a Go runtime panic as both the Lean model and
@@ -242,7 +256,8 @@ type Verdict struct {
 	Probes []Probe `json:"probes,omitempty"`
 	// Rank orders a confirmed verdict by how plausible its input is for the
 	// code's real callers.
-	Rank *Rank `json:"rank,omitempty"`
+	Rank    *Rank             `json:"rank,omitempty"`
+	Builtin *BuiltinReplayRef `json:"builtin,omitempty"`
 }
 
 // Rank of a confirmed finding: tier 1 (any caller of the API can pass the

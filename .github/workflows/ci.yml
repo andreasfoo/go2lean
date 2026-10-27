@@ -34,6 +34,12 @@ jobs:
           GO2LEAN_REQUIRE_SANDBOX_TESTS: "1"
         run: go test ./internal/sandbox ./internal/poc -count=1 -v
 
+      - name: Builtin snapshot model search and independent Go replay
+        env:
+          GO2LEAN_REQUIRE_SANDBOX_TESTS: "1"
+          GO2LEAN_REQUIRE_BUILTIN_TESTS: "1"
+        run: go test ./internal/pipeline -run TestBuiltinSearchReplayFromPersistedSnapshot -count=1 -v
+
       - name: Installed binary with checkout hidden (packaging only)
         run: |
           git clone https://github.com/google/uuid.git "$RUNNER_TEMP/install-uuid"
