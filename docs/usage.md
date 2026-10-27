@@ -18,8 +18,11 @@ limits without isolation, and `GO2LEAN_SANDBOX=off` permits unconfined execution
 Neither weak mode is safe for arbitrary code. Build steps still run outside
 confinement (including cgo), so a scratch clone is not a complete security boundary.
 
-Run `go2lean doctor` to check local tools, the bundled toolchain pin, and usable
-isolation. It returns nonzero when prerequisites are missing or isolation is
+Run `go2lean doctor` to check local tools, Go 1.26 or newer (with automatic
+toolchain downloads disabled for the version probe), the bundled Lean toolchain pin, and usable
+isolation, including the `--clearenv` capability required by Lean's comparator
+(older bubblewrap may support replay but not proof judging).
+`COMPARATOR_BWRAP` selects the comparator sandbox executable, as in Lake. It returns nonzero when prerequisites are missing or isolation is
 unavailable. It does not download tools, load target packages or execute target
 code; it is not a target dependency resolver or a clean-machine installation test.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"go/version"
 	"io"
 	"os"
 	"os/exec"
@@ -45,6 +46,25 @@ func diagnose(out io.Writer) error {
 			check(true, tool, p)
 		}
 	}
+	// Force local toolchain selection: even inside a module requiring a newer
+	// Go version, diagnostics must not trigger Go's automatic downloads.
+	goCtx, goCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer goCancel()
+	cmd := exec.CommandContext(goCtx, "go", "version")
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GOTOOLCHAIN=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "GOTOOLCHAIN=local")
+	goOut, goErr := cmd.CombinedOutput()
+	goDetail := strings.TrimSpace(string(goOut))
+	fields := strings.Fields(goDetail)
+	goOK := goErr == nil && len(fields) >= 3 && fields[0] == "go" && fields[1] == "version" && version.IsValid(fields[2]) && version.Compare(fields[2], "go1.26") >= 0
+	if !goOK {
+		goDetail += "; Go 1.26 or newer is required (local toolchain; no downloads)"
+	}
+	check(goOK, "Go version", goDetail)
 	pinned, err := leanassets.Core.ReadFile("lean-toolchain")
 	if err != nil {
 		return err
@@ -76,6 +96,12 @@ func diagnose(out io.Writer) error {
 	} else {
 		_, err := sandbox.Confine(nil, nil, "")
 		check(err == nil, "Lean isolation", "bubblewrap/user namespaces required for untrusted Lean")
+		err = sandbox.CheckComparator()
+		detail := "bubblewrap supports pinned Lean comparator isolation"
+		if err != nil {
+			detail = err.Error()
+		}
+		check(err == nil, "proof judge", detail)
 	}
 	fmt.Fprintln(out, "Scope: checks local prerequisites only; does not validate target dependencies or promise that arbitrary target code is safe.")
 	if failed {

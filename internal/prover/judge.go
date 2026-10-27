@@ -78,6 +78,13 @@ func Judge(in JudgeInput) (map[int]*Certificate, error) {
 	if len(in.Candidates) == 0 {
 		return map[int]*Certificate{}, nil
 	}
+	// Diagnose host capability before expensive trusted builds; never treat a
+	// missing comparator sandbox feature as a rejected mathematical proof.
+	if !sandbox.Unconfined() {
+		if err := sandbox.CheckComparator(); err != nil {
+			return nil, err
+		}
+	}
 	cert, err := judgeProject(in)
 	if err != nil {
 		return nil, err

@@ -77,7 +77,8 @@ runnable test plus reproduction instructions to `out/poc/`.
 **Run against a scratch clone:** replay executes real code and may have side
 effects. On Linux, [bubblewrap](https://github.com/containers/bubblewrap) is
 required for isolated replay (together with `prlimit`); replay refuses an
-implicit unconfined fallback. Run `go2lean doctor` to check prerequisites.
+implicit unconfined fallback. Run `go2lean doctor` to check the local Go/Lean
+toolchains and sandbox capabilities, including proof-judge requirements.
 Builds still run outside the sandbox, so use trusted source and dependencies.
 
 See the [usage guide](docs/usage.md) for sample output, agent setup, command

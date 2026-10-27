@@ -24,7 +24,15 @@ source; validating installation from a published version remains a release
 gate. Go's toolchain and downloaded dependencies remain readable on the host;
 this is not a clean-machine dependency-installation test.
 
-Still required: dependency diagnostics, safe execution acceptance, a spec-free
+Local prerequisite diagnostics now exist (`go2lean doctor`), including a
+probe for the comparator's bubblewrap capabilities. On the evaluation host,
+bubblewrap 0.4.0 allowed basic replay confinement but lacked `--clearenv`;
+the first proof judge run rejected results because its sandbox could not
+start. This is an environment failure, not a successful proof regression.
+The host was upgraded to bubblewrap 0.11.0 without disabling confinement.
+Proof regression results are still pending.
+
+Still required: complete dependency and safe execution acceptance, a spec-free
 non-panic check with model-generated inputs and real Go confirmation,
 real-project before/after and negative evaluations, complete regression
 and clean-machine installation tests, and publication. No tag has been made.
