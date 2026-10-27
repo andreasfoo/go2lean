@@ -14,7 +14,29 @@ Recommended on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
 (`apt install bubblewrap`), which isolates tests during the replay stage; without
 it they run with resource limits only.
 
-### 2. Clone and run the included example
+### 2. Install, or clone and run the included example
+
+```sh
+go install github.com/andreasfoo/go2lean/cmd/go2lean@latest
+cd /path/to/your/go/module
+go2lean compile ./...
+```
+
+The binary embeds the trusted Lean core sources. It materializes them in
+`$GO2LEAN_CACHE` (default: the user cache directory's `go2lean/`) and builds
+there; no go2lean checkout is required. Changes to embedded sources require
+rebuilding the binary. The target module's `lean/` directory is never used
+as the trusted runtime. Compilation alone does not run the search or replay.
+Lean/Lake must still be installed for search and proof commands.
+[Standalone packaging evaluation](eval/install.md) records the isolated
+external-module compile check and its limits.
+
+Relative `-workspace` paths are resolved from the invoking directory.
+Without `-module`, package loading uses the enclosing Go module. With
+`-module /path/to/module`, commands can also be invoked outside any Go module.
+The latter flag does not change how workspace paths are resolved.
+
+To run the included example instead:
 
 ```sh
 git clone https://github.com/andreasfoo/go2lean.git

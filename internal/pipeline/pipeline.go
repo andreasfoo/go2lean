@@ -22,8 +22,8 @@ import (
 	"github.com/andreasfoo/go2lean/internal/ssaout"
 )
 
-// Env says where things are: Root is the go2lean checkout (Lean project),
-// Module is the directory of the Go module under analysis (defaults to Root).
+// Env says where things are: Root is the default Go module directory,
+// Module overrides it. The trusted Lean runtime is embedded in the binary.
 type Env struct {
 	Root   string
 	Module string

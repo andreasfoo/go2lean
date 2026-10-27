@@ -86,21 +86,24 @@ type commonFlags struct {
 func workspaceFlag(fs *flag.FlagSet) *commonFlags {
 	return &commonFlags{
 		workspace: fs.String("workspace", "out", "workspace directory for JSON records"),
-		module:    fs.String("module", "", "directory of the Go module to analyse (default: this checkout)"),
+		module:    fs.String("module", "", "directory of the Go module to analyse (default: current module)"),
 	}
 }
 
-// openWorkspace resolves the workspace and the environment. The Lean project
-// always lives in the go2lean checkout; -module points package loading and
-// go test at another Go module.
+// openWorkspace resolves paths from the invoking directory. The trusted Lean
+// runtime is bundled; -module selects the module for loading and Go replay.
 func openWorkspace(cf *commonFlags) (contract.Workspace, pipeline.Env, error) {
-	root, err := repo.Root()
+	cwd, err := os.Getwd()
 	if err != nil {
 		return contract.Workspace{}, pipeline.Env{}, err
 	}
+	root, err := repo.Root()
+	if err != nil {
+		root = cwd // -module also works from a directory with no go.mod
+	}
 	path := *cf.workspace
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, path)
+		path = filepath.Join(cwd, path)
 	}
 	env := pipeline.Env{Root: root}
 	if *cf.module != "" {

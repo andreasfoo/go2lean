@@ -59,6 +59,10 @@ Lean finds the inputs; `go test` is the judge.
 
 Requires **Git, Go 1.26 and [elan](https://github.com/leanprover/elan)**.
 The pinned Lean toolchain is fetched on the first build. No LLM API key is needed.
+The binary bundles its Lean sources and can be installed with
+`go install github.com/andreasfoo/go2lean/cmd/go2lean@latest`; it does not
+need a source checkout at runtime. From a Go module, use
+`go2lean run ./...` (currently only panic checks are spec-free).
 
 ```sh
 git clone https://github.com/andreasfoo/go2lean.git
