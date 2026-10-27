@@ -56,6 +56,7 @@ jobs:
             ${{ runner.temp }}/regress/run.log
             ${{ runner.temp }}/regress/outcomes.txt
             ${{ runner.temp }}/install-smoke/compile.log
+            ${{ runner.temp }}/install-smoke/doctor.log
           if-no-files-found: ignore
 
   # The library models against Go (scripts/json-diff.sh).

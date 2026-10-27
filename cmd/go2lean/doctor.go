@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"go/version"
@@ -15,17 +16,26 @@ import (
 	leanassets "github.com/andreasfoo/go2lean/lean"
 )
 
-// doctor inspects prerequisites without downloading a toolchain, building a
-// model, loading a target package, or executing target code.
+// doctor inspects prerequisites without downloading a toolchain or executing
+// target code. Target dependency loading is explicit and offline.
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	deps := fs.Bool("deps", false, "also check target package dependencies offline, without building or running code")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("doctor: no positional arguments expected")
+	if !*deps && fs.NArg() != 0 {
+		return fmt.Errorf("doctor: package patterns require -deps")
 	}
-	return diagnose(os.Stdout)
+	err := diagnose(os.Stdout)
+	if *deps {
+		patterns := fs.Args()
+		if len(patterns) == 0 {
+			patterns = []string{"./..."}
+		}
+		err = errors.Join(err, diagnoseDeps(os.Stdout, patterns))
+	}
+	return err
 }
 
 func diagnose(out io.Writer) error {
@@ -103,7 +113,7 @@ func diagnose(out io.Writer) error {
 		}
 		check(err == nil, "proof judge", detail)
 	}
-	fmt.Fprintln(out, "Scope: checks local prerequisites only; does not validate target dependencies or promise that arbitrary target code is safe.")
+	fmt.Fprintln(out, "Prerequisite scope: local tools and isolation only; use -deps for offline target metadata. Neither check promises that arbitrary target code is safe.")
 	if failed {
 		return fmt.Errorf("doctor: prerequisites missing or isolation disabled; see diagnostics above")
 	}

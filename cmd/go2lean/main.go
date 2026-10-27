@@ -58,7 +58,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  go2lean doctor                               diagnose local prerequisites (no downloads or target execution)
+  go2lean doctor [-deps [./...]]               diagnose prerequisites; optional offline target dependency check
   common flags: -workspace out   -module <dir of the Go module to analyse>
   go2lean compile [-workspace out] <packages...>  compile stage: Go -> Lean model, ABI, targets (./... allowed)
   go2lean props   [-workspace out]                spec & search stage: template properties from the model report

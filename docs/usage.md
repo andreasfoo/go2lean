@@ -24,7 +24,24 @@ isolation, including the `--clearenv` capability required by Lean's comparator
 (older bubblewrap may support replay but not proof judging).
 `COMPARATOR_BWRAP` selects the comparator sandbox executable, as in Lake. It returns nonzero when prerequisites are missing or isolation is
 unavailable. It does not download tools, load target packages or execute target
-code; it is not a target dependency resolver or a clean-machine installation test.
+code by default. Add `-deps` to inspect target package and test dependencies:
+
+```sh
+go2lean doctor -deps ./...
+```
+
+This runs offline `go list` metadata loading with the local toolchain, module
+proxy/checksum/VCS downloads disabled, host GOFLAGS/GOENV overrides ignored,
+and `-mod=readonly`. Workspace resolution is preserved through a disposable
+copy of `go.work` (with absolute local paths) and its sums, since Go may update
+workspace sums even in readonly mode. Target module/workspace files are not
+rewritten. Missing dependencies, package-loading errors and empty matches fail
+the check; use trusted tooling to prepare dependencies separately. It does not
+compile or run target code, check types, install dependencies, inspect every
+build-tag configuration, or establish model support. Cache metadata may be
+written. The metadata command has a 30-second timeout and a 16 MiB output
+limit; use narrower package patterns if either limit is reached.
+It is not a clean-machine installation test.
 
 ### 2. Install, or clone and run the included example
 

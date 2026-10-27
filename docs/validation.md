@@ -110,3 +110,20 @@ storage, absence of inherited credential variables in both execution paths,
 and replay wall-clock termination. This is evidence for those boundaries,
 not a security audit or a full release gate. Local unit tests without this
 flag may still skip unavailable integration cases.
+
+### Offline dependency diagnostics
+
+`go2lean doctor -deps ./...` inspects the target's package and test import
+graph, without compiling or executing it. Unit/integration tests cover missing
+test dependencies, command and JSON failures, partially empty package
+selections, host download/build-setting overrides, bounded output, and local
+workspace `use`/`replace` resolution without changing module or workspace
+files. Real Go metadata probes use an `init` marker and a cgo `pkg-config`
+marker to check that neither target execution nor target build tooling runs.
+These fixtures test the diagnostic, not the release requirement to find a
+real project's non-panic functional defect.
+
+The installed packaging gate runs these diagnostics on the pinned external
+uuid module with the checkout hidden and networking disabled, before compiling
+it. It is still not a clean-machine dependency installation test or proof
+that all build configurations of the module are available.
