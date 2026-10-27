@@ -2,19 +2,38 @@
 # Diagnose and compile an external Go module with an installed binary while the
 # checkout is hidden and networking disabled after dependency provisioning.
 # Requires Linux, usable bwrap, and a preinstalled Go/Lean toolchain.
-# This is a packaging gate, NOT a search/replay or full release gate.
+# Optional explicit ordering search/replay is still NOT a full release gate.
 set -euo pipefail
-REQUIRE_DEPS=${3:-}
-if [[ "$REQUIRE_DEPS" != "" && "$REQUIRE_DEPS" != --require-external-deps ]] || (( $# > 3 )); then
-  echo 'usage: install-smoke.sh <external-module> <new-results-directory> [--require-external-deps]' >&2
+usage() {
+  echo 'usage: install-smoke.sh <external-module> <new-results-directory> [--require-external-deps] [--compare-order Function]' >&2
   exit 2
-fi
+}
+(( $# >= 2 )) || usage
+MODULE_ARG=$1
+RESULT_ARG=$2
+shift 2
+REQUIRE_DEPS=
+COMPARE_ORDER=
+while (( $# )); do
+  case "$1" in
+    --require-external-deps)
+      [[ -z "$REQUIRE_DEPS" ]] || usage
+      REQUIRE_DEPS=1
+      shift ;;
+    --compare-order)
+      (( $# >= 2 )) || usage
+      [[ -z "$COMPARE_ORDER" && "$2" =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]] || usage
+      COMPARE_ORDER=$2
+      shift 2 ;;
+    *) usage ;;
+  esac
+done
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
-MODULE=$(cd "${1:?external module directory}" && pwd -P)
+MODULE=$(cd "$MODULE_ARG" && pwd -P)
 # Never reuse an old binary, generated workspace or populated runtime cache as
 # evidence of a fresh install. mkdir (without -p) also rejects concurrent reuse.
-mkdir -- "${2:?new result directory}"
-WS=$(cd "$2" && pwd -P)
+mkdir -- "$RESULT_ARG"
+WS=$(cd "$RESULT_ARG" && pwd -P)
 case "$MODULE/" in "$ROOT/"*) echo 'module must be outside checkout' >&2; exit 1;; esac
 case "$WS/" in "$ROOT/"*) echo 'results must be outside checkout' >&2; exit 1;; esac
 case "$MODULE/" in "$WS/"*) echo 'module and results must not overlap' >&2; exit 1;; esac
@@ -80,3 +99,13 @@ isolated online go mod download > "$WS/dependencies.log" 2>&1
 installed doctor -deps ./... > "$WS/doctor.log" 2>&1
 installed compile -workspace "$WS/compiled" ./... > "$WS/compile.log" 2>&1
 printf 'installed compile passed (fresh HOME and Go caches, checkout hidden, offline after dependency setup): %s\n' "$WS/compile.log"
+if [[ -n "$COMPARE_ORDER" ]]; then
+  # Explicit role assertion, not inferred API semantics. A successful command
+  # (or no witness) is not a confirmed defect or a correctness certificate.
+  order_args=(run -compare-order "$COMPARE_ORDER" -workspace "$WS/ordering"
+    -engine random -seed 42 -trials 2000 -maxlen 8 -fuel 1000 -budget 60
+    -mutate=false -prove=false)
+  installed "${order_args[@]}" . > "$WS/ordering.log" 2>&1
+  installed "${order_args[@]}" -resume . > "$WS/ordering-resume.log" 2>&1
+  printf 'installed ordering search/replay and resume completed; inspect hunt/verdict evidence (not an acceptance verdict): %s\n' "$WS/ordering"
+fi

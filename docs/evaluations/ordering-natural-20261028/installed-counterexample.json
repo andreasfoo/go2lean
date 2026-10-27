@@ -1,0 +1,18 @@
+{
+  "id": "cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42",
+  "property": "p_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2",
+  "frontend": "gossa",
+  "engine": "random",
+  "fuel": 1000,
+  "inputs": {},
+  "objects": {
+    "a": "9223372036854775808",
+    "b": "00-:",
+    "c": "9Bb"
+  },
+  "model_output": {
+    "res": "ok",
+    "value": "[0, -9223372036854775808, -9223372036854775808, -9, 9223372036854775799]"
+  },
+  "revalidated_in_lean": true
+}

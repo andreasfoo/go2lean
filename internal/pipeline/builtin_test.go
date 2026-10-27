@@ -49,6 +49,19 @@ func compileOrder(w contract.Workspace, env pipeline.Env, linked bool, log *byte
 	return err
 }
 
+func TestComparisonGateWithStringsCompare(t *testing.T) {
+	w, env := preparedOrder(t, `import "strings"
+		func Compare(a,b string) int { return strings.Compare(a,b) }`)
+	env.Deps = true
+	var log bytes.Buffer
+	if err := compileOrder(w, env, false, &log); err != nil {
+		t.Fatalf("compile: %v\n%s", err, &log)
+	}
+	if a := readAssessment(t, w); a.Capability.Status != "static-model-eligible" {
+		t.Fatalf("string comparator unsupported: %+v", a.Capability)
+	}
+}
+
 func readAssessment(t *testing.T, w contract.Workspace) builtin.Assessment {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(w.Root, "builtins", "*.json"))

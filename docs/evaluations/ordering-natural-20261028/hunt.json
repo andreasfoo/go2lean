@@ -1,0 +1,6 @@
+{
+  "property": "p_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2",
+  "summary": "random: found at trial 695",
+  "counterexample": "cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42",
+  "builtin_snapshot_sha256": "9fef9cc1b53b81c77c3a89570fb9192f842402f48906c3c9c477c45a93edcdb4"
+}

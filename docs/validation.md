@@ -160,7 +160,7 @@ These fixtures test the diagnostic, not the release requirement to find a
 real project's non-panic functional defect.
 
 The installed packaging gate (`scripts/install-smoke.sh <external-module>
-<new-results-directory> [--require-external-deps]`) installs the binary with a
+<new-results-directory> [--require-external-deps] [--compare-order Function]`) installs the binary with a
 fresh Go module/build cache and an empty HOME. It then provisions target dependencies into a separate
 fresh module cache, with target files read-only, before running diagnostics and
 compilation with the checkout hidden and networking disabled. All stages use
@@ -187,7 +187,15 @@ missing-dependency transition. Go, elan, the pinned Lean toolchain,
 system tools and their PATH remain preinstalled prerequisites; other host paths
 remain readable. This tests clean Go dependency/cache setup and standalone
 packaging, **not** installation of OS/Lean prerequisites on a clean machine,
-every target build configuration, search/replay, or the full release gate.
+every target build configuration, or the full release gate. By default it
+does not search/replay. The optional `--compare-order Function` explicitly
+asserts the experimental comparator role and additionally runs a fresh
+seed-42 ordering search/replay and resume, offline with the checkout hidden.
+Inspect the saved hunt and verdict records: command success alone does not
+mean a defect was found or the comparator passed. The
+[natural-order evaluation](evaluations/ordering-natural-20261028.md) records
+a real installed non-panic positive with this option; it is not the full
+acceptance matrix.
 
 Local checkpoint (2026-10-27): the gate passed on uuid revision
 `2d3c2a9cc518326daf99a383f07c4d3c44317e4d`, with deliberately invalid host

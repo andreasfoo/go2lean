@@ -1,9 +1,11 @@
 # Built-in semantic checks: implementation checkpoint
 
 Status: **experimental explicit-opt-in CLI mode**, not a release acceptance result.
-The release requirement for a spec-free non-panic check on a real external
-project remains unmet. Unit fixtures and a model-only external run do not
-substitute for the requested real-project evidence.
+A model-generated non-panic ordering violation has now been confirmed on
+a real external project, including a detached helper-bundle replay and a
+locally proposed fix comparison. The **full release gate remains unmet**:
+this is not yet a completed acceptance evaluation.
+See the [recorded evaluation](evaluations/ordering-natural-20261028.md).
 
 ## Experimental usage
 
@@ -171,6 +173,37 @@ establish coverage of valid version strings.
 
 ## Verified here, and what remains
 
+External candidate triage (2026-10-28), with a frozen seed/budget protocol
+and no imported upstream test inputs, rejected both
+`github.com/maruel/natural.Compare` at
+`83eecaf9a40d7c4212e4518531111204418a4077` and
+`github.com/fvbommel/sortorder.NaturalCompare` at
+`edc3fa94c108b5d9a4ee8931e2920aea61647c87` before search. The former
+required the native `internal/bytealg.abigen_runtime_cmpstring` bridge;
+the latter required generic `cmp.Compare` instantiations. These are
+unsupported results, not negative controls or passes.
+
+The native string bridge now lowers to existing unsigned byte-string
+comparisons and conditional selection of exactly -1, 0 or 1. It does not
+model arbitrary assembly or bypass capability checks. The dedicated
+`testdata/stringcmpdiff` differential suite compares six generated string
+pairs (in both directions), plus a 10-by-10 fixed matrix including empty,
+prefix, NUL, high-byte and invalid UTF-8 strings, with sandboxed real Go:
+six matching probes, zero different or missing. This is bridge validation,
+not external comparator parity or a defect finding. Generic `cmp.Compare`
+remains unsupported.
+
+After that bridge change, the frozen protocol found a violation in the
+unchanged `maruel/natural` revision at zero-based trial 695, seed 42.
+The real sandboxed Go result matched all five model outputs and violated
+sign reversal without a panic. Removing the original checkout/workspace
+paths and replaying the delivered bundle against another identical clone
+confirmed it again. The original witness holds after a local subtraction
+fix, and 32,000 bounded model trials found no further witness. These are
+recorded observations, not an upstream fix, arbitrary-input equivalence,
+or a proof of ordering. Source revisions, inputs, limitations and the local
+patch are in the evaluation record.
+
 Unit tests check positive and negative binding cases, collisions, source
 provenance, immutable overlay copies and absence of checkout writes.
 The generated target and postcondition translate together through the existing
@@ -204,9 +237,10 @@ this can count toward release acceptance:
    for activated builtin findings. Its package-local infrastructure is unit
    tested without the original workspace/overlay, but no installed external
    builtin finding has passed that path yet.
-5. A frozen authorized external-project evaluation with a real non-panic
-   violation, fixed revision and relevant negative controls, using
-   model-generated inputs rather than supplied historical counterexamples.
+5. Finish the external-project acceptance evaluation: the recorded finding
+   and local fix comparison are a first positive, not a complete fixed-release
+   and negative-control matrix. Inputs must remain model-generated rather
+   than supplied historical counterexamples.
 6. Installed-binary and clean-environment evaluation of that entire path.
 
 Without the explicit flag, `run` still uses automatic panic templates,

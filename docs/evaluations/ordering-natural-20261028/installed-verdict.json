@@ -1,0 +1,17 @@
+{
+  "counterexample": "cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42",
+  "status": "confirmed",
+  "evidence": {
+    "cmd": "go test -count=1 -v -run '^TestGo2LeanPoC_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42$' github.com/maruel/natural",
+    "exit": 0,
+    "stdout_tail": "=== RUN   TestGo2LeanPoC_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42\nGO2LEAN_RESULT {\"panicked\":false,\"ret\":\"0 -9223372036854775808 -9223372036854775808 -9 9223372036854775799\",\"spec\":false}\n--- PASS: TestGo2LeanPoC_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42 (0.00s)\nPASS\n"
+  },
+  "observed": {
+    "ret": "0 -9223372036854775808 -9223372036854775808 -9 9223372036854775799"
+  },
+  "poc_dir": "/tmp/go2lean-natural-installed-20261028/ordering/poc/cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42",
+  "builtin": {
+    "snapshot_sha256": "7e3d9583740437da9a94a965ea6f862bf6a43aee4c7750a5802ca4c45d431ff4",
+    "counterexample_sha256": "3f4a03468e8e0c8fcaea516d33df9cf7beae6aa9cc99ef3744e07a9599008d95"
+  }
+}

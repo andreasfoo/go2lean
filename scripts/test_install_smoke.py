@@ -49,6 +49,13 @@ if name == "bwrap":
         (cache / "prepared").touch()
     else:
         assert command[:4] == ["env", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off"]
+        if command[5] == "run":
+            assert command[6:8] == ["-compare-order", "Compare"]
+            assert "-mutate=false" in command and "-prove=false" in command
+            assert command[-1] == "."
+            assert (cache / "prepared").exists()
+            with (cache / "order-commands").open("a") as f:
+                f.write("resume\n" if "-resume" in command else "run\n")
     for key in ("HOST_SECRET", "GOFLAGS", "GO2LEAN_LEAN_SANDBOX", "GO2LEAN_SANDBOX"):
         assert key not in env, key
     assert env["GOENV"] == "off"
@@ -103,6 +110,22 @@ class InstallSmokeTest(unittest.TestCase):
     def test_missing_module_before_package_json(self):
         self.check_install(True, "module-load-error")
 
+    def test_explicit_ordering_run_and_resume(self):
+        self.check_install(False, compare_order=True)
+
+    def test_ordering_with_dependency_diagnosis(self):
+        self.check_install(True, compare_order=True)
+
+    def test_invalid_ordering_arguments(self):
+        for args in (["--compare-order"], ["--compare-order", "../Compare"],
+                     ["--compare-order", "Compare", "--compare-order", "Compare"],
+                     ["--unknown"]):
+            run = subprocess.run(["bash", str(ROOT / "scripts/install-smoke.sh"),
+                                  "/unused", "/unused", *args],
+                                 capture_output=True, text=True)
+            self.assertEqual(run.returncode, 2)
+            self.assertIn("usage:", run.stderr)
+
     def test_required_dependencies_must_really_be_missing(self):
         self.check_install(True, "no-external-deps", "expected missing external dependencies")
 
@@ -112,7 +135,7 @@ class InstallSmokeTest(unittest.TestCase):
     def test_unrelated_go_list_failure_is_not_dependency_evidence(self):
         self.check_install(True, "other-list-error", "without a missing-dependency diagnostic")
 
-    def check_install(self, require_deps, scenario=None, expected_error=None):
+    def check_install(self, require_deps, scenario=None, expected_error=None, compare_order=False):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             tools = base / "tools"
@@ -134,6 +157,8 @@ class InstallSmokeTest(unittest.TestCase):
                        str(module), str(result)]
             if require_deps:
                 command.append("--require-external-deps")
+            if compare_order:
+                command.extend(["--compare-order", "Compare"])
             run = subprocess.run(command, env=env, capture_output=True, text=True)
             logs = "\n".join(p.read_text() for p in result.glob("*.log"))
             if expected_error:
@@ -144,6 +169,10 @@ class InstallSmokeTest(unittest.TestCase):
                 return
             self.assertEqual(run.returncode, 0, run.stderr + logs)
             self.assertIn("offline after dependency setup", run.stdout)
+            if compare_order:
+                self.assertEqual((result / "target-modules/order-commands").read_text(),
+                                 "run\nresume\n")
+                self.assertIn("not an acceptance verdict", run.stdout)
             # Old results must not silently become fresh-install evidence.
             run = subprocess.run(command, env=env, capture_output=True, text=True)
             self.assertNotEqual(run.returncode, 0)

@@ -215,6 +215,14 @@ Calls not listed here are unmodelled (§4.6).
 | `github.com/google/uuid.New` | a fresh value distinct from every other in the run (real UUIDs collide with negligible probability) |
 | `time.Now` and other clocks, `os.Getenv`, I/O, network | havoc |
 
+On native builds whose `bytealg.CompareString` calls the bodyless
+`internal/bytealg.abigen_runtime_cmpstring` assembly bridge, that bridge is
+lowered to the existing unsigned byte-string comparisons and conditional
+selection of -1, 0 or 1. It does not decode Unicode. This narrow lowering does
+not cover arbitrary assembly or generic `cmp.Compare`. Run
+`DEPS=1 PKG=testdata/stringcmpdiff scripts/json-diff.sh <workspace> 6`
+for generated-pair and fixed byte-edge matrix comparisons against real Go.
+
 ## 6. Concurrency
 
 A function that can reach a synchronisation operation (directly, or through

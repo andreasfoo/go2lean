@@ -110,6 +110,9 @@ jobs:
       - name: strings, strconv and utf8 models against Go
         run: DEPS=1 PKG=testdata/stdaudit scripts/json-diff.sh "$RUNNER_TEMP/std-audit" 6 | tail -5
 
+      - name: Native string comparison bridge against Go
+        run: DEPS=1 PKG=testdata/stringcmpdiff scripts/json-diff.sh "$RUNNER_TEMP/stringcmp-diff" 6 | tail -5
+
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -124,6 +127,7 @@ jobs:
             ${{ runner.temp }}/url-diff/*.log
             ${{ runner.temp }}/misc-diff/*.log
             ${{ runner.temp }}/std-audit/*.log
+            ${{ runner.temp }}/stringcmp-diff/*.log
           if-no-files-found: ignore
 
   # Proofs (docs/trust.md): the judge runs Lean's comparator in bubblewrap,

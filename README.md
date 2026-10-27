@@ -160,7 +160,7 @@ these checks are evidence, not a general correctness guarantee.
 | [Project reference](docs/reference.md) | Repository layout and roadmap |
 | [Design](docs/design.md) | Architecture and technical decisions |
 | [Concurrency](docs/concurrency.md) | Concurrent Go modeling and its limits |
-| [Experimental ordering checks](docs/builtins.md) | Explicit opt-in, frozen bindings and replay; not release acceptance evidence |
+| [Experimental ordering checks](docs/builtins.md) | Explicit opt-in, frozen bindings, real-project finding and remaining release gates |
 | [Related work](docs/related-work.md) | Context and comparisons |
 
 ## License

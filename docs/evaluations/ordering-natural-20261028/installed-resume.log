@@ -1,0 +1,11 @@
+compare-order opt-in: asserting a pure, deterministic, total three-way ordering over all byte strings
+== Compile stage
+  resumed immutable compiled builtin snapshot
+######## github.com/maruel/natural
+== Spec & search stage: properties
+  p_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2 postcondition  explicitly selected github.com/maruel/natural.Compare obeys compare-order v1 over all byte strings (assuming purity, determinism and totality)
+== Spec & search stage: hunt
+  p_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2 (resumed) random: found at trial 695
+== Replay stage: generate PoC and verify
+  cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42 confirmed    real: map[ret:0 -9223372036854775808 -9223372036854775808 -9 9223372036854775799]
+      PoC: /tmp/go2lean-natural-installed-20261028/ordering/poc/cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42
