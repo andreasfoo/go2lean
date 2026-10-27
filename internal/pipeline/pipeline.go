@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/andreasfoo/go2lean/internal/builtin"
 	"github.com/andreasfoo/go2lean/internal/constraint"
 	"github.com/andreasfoo/go2lean/internal/contract"
 	"github.com/andreasfoo/go2lean/internal/frontend/gossa"
@@ -41,6 +42,10 @@ type Env struct {
 	Overlay map[string][]byte
 	// Tests makes test functions targets (gossa.Options.Tests).
 	Tests bool
+	// CompareOrder requires a static call-graph assessment of the supplied
+	// canonical generated overlay before emitting a model. It does not infer
+	// a contract, activate a property, or enable CLI/resume/replay support.
+	CompareOrder *builtin.Binding
 }
 
 func (e Env) module() string {
@@ -75,8 +80,14 @@ func Compile(w contract.Workspace, env Env, pattern string, out io.Writer) (*con
 // dependencies' follow. A theorem about it is about the dependencies'
 // models too, not havoc. Only the linked model is written.
 func CompileLinked(w contract.Workspace, env Env, pattern string, out io.Writer) (*contract.ModelReport, error) {
+	if err := validateCompareOrderOverlay(env); err != nil {
+		return nil, err
+	}
 	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: true, Overlay: env.Overlay, Tests: env.Tests}, pattern)
 	if err != nil {
+		return nil, err
+	}
+	if err := assessCompareOrder(w, env, progs, out); err != nil {
 		return nil, err
 	}
 	var main *ir.Prog
@@ -126,8 +137,14 @@ func CompileLinked(w contract.Workspace, env Env, pattern string, out io.Writer)
 // CompileAll runs M1 on every package matching the patterns (e.g. "./...")
 // with a single load of the dependency graph.
 func CompileAll(w contract.Workspace, env Env, out io.Writer, patterns ...string) ([]*contract.ModelReport, error) {
+	if err := validateCompareOrderOverlay(env); err != nil {
+		return nil, err
+	}
 	progs, modPath, err := gossa.TranslateAllOpts(env.module(), gossa.Options{Deps: env.Deps, Overlay: env.Overlay, Tests: env.Tests}, patterns...)
 	if err != nil {
+		return nil, err
+	}
+	if err := assessCompareOrder(w, env, progs, out); err != nil {
 		return nil, err
 	}
 	var reports []*contract.ModelReport

@@ -157,7 +157,7 @@ these checks are evidence, not a general correctness guarantee.
 | [Project reference](docs/reference.md) | Repository layout and roadmap |
 | [Design](docs/design.md) | Architecture and technical decisions |
 | [Concurrency](docs/concurrency.md) | Concurrent Go modeling and its limits |
-| [Built-in check prototype](docs/builtins.md) | Explicitly bound ordering-oracle generation; not CLI-enabled or release evidence |
+| [Built-in check prototype](docs/builtins.md) | Ordering-oracle generation and static compile gate; not CLI-enabled or release evidence |
 | [Related work](docs/related-work.md) | Context and comparisons |
 
 ## License

@@ -1,6 +1,6 @@
 # Built-in semantic checks: implementation checkpoint
 
-Status: internal source-generation prototype, **not enabled by the CLI**.
+Status: internal source-generation/static-compile prototype, **not enabled by the CLI**.
 The release requirement for a spec-free non-panic check on a real external
 project remains unmet. Source generation alone is neither a working pipeline
 check nor release evidence.
@@ -46,6 +46,62 @@ Its stage is explicitly `type-compatible-source-only`: **not** applicable-model,
 searched, replayed, or passed. An overlay copy is returned without writing
 generated source into the target checkout.
 
+`Binding.Validate` checks the supported card, domain and assumptions as well
+as the source hash and canonical generated source. The source includes the
+package/function binding. Substituting another function/package, changing the
+law, or replacing it with arbitrary rehashed Go code does not validate as this
+builtin.
+
+## Static compiler capability gate
+
+`internal/builtin.AssessCompareOrder` walks the generated target, oracle,
+selected comparator, and all statically called local/cross-package callees.
+It reads the compiler IR's actual call terminators and normal control-flow
+edges, not the literal-mining call summaries in model reports. Missing,
+partial or rejected callees, reported model issues, normal-path havoc or
+assumptions, unresolved function/interface calls, concurrent operations,
+unstructured IR terms and unreviewed primitive/operation types are unsupported.
+Unrelated functions do not disqualify the selected call graph.
+
+The only positive status is `static-model-eligible`, **not passed**. The
+gate does not establish model fidelity, purity, determinism, totality,
+termination or any ordering law. Recursive direct-call graphs can be statically
+eligible without establishing that execution terminates.
+
+Direct-call fallback blocks are synthetic paths for a callee that gets stuck.
+The gate checks the callee and its normal continuation, and records the number
+of fallback sites. A fallback reached through an ordinary branch is inspected
+and its havoc is rejected. Excluding synthetic fallback edges from this static
+walk does **not** establish that no search trial can take them; independent
+runtime stuck/havoc/assumption/fuel accounting is still required.
+
+The internal pipeline can request this gate with `Env.CompareOrder` alongside
+the binding's canonical overlay. `CompileAll` and `CompileLinked` reject a
+missing/mismatched/ambiguous generated overlay before loading source, assess
+the actual compiler output, and stop before model emission when unsupported.
+They preserve the card, full generated source and structured assessment at
+`<workspace>/builtins/compare-order-<source-sha256>.json`, including unsupported
+reasons. This is a diagnostic snapshot, **not** an active property, immutable
+target-source/model snapshot, resume record, or executable replay manifest.
+Ordinary compilation does not activate the gate.
+
+Local external-source checkpoint (2026-10-27): a scratch clone of
+`golang.org/x/mod` v0.42.0, revision
+`b5136e5ba156da612a1efc6e49b55988a134a5e0`, was compiled with the generated
+binding for `semver.Compare` and dependency models enabled. The gate reported
+13 required functions as statically eligible and recorded 24 direct-call
+fallback sites. The checkout remained unchanged. Unrelated partial functions
+in dependency packages remained visible in the compile reports but were not
+part of this comparator's required call graph.
+
+This checkpoint used an internal assessment driver, **not** a released CLI
+check. It executed no target function, searched no property, confirmed no
+defect and is not yet a negative regression. Attempting to compile the overlay
+directly over the downloaded module cache was rejected by Go: source beneath
+`GOMODCACHE` cannot be replaced through an overlay. Use a scratch clone/source
+copy outside that cache; a type-compatible binding alone does not establish
+that its source location is eligible for Go overlays.
+
 ## Verified here, and what remains
 
 Unit tests check positive and negative binding cases, collisions, source
@@ -55,6 +111,12 @@ Go frontend on a trusted unit fixture. Real Go tests exercise the generated
 oracle on correct lexicographic and equivalence-class comparators, unequal
 negative/positive result magnitudes, and deliberately invalid reflexivity,
 sign reversal, equivalence transitivity and strict-order transitivity.
+Capability tests exercise missing/partial dependencies, actual cross-package
+compiler output, ignored shared-state effects, recursion, dynamic calls,
+normal versus synthetic fallback edges, and fail-closed handling of unknown
+operations. Pipeline tests check both compilation paths, exact source/overlay
+correspondence, diagnostic persistence, failure before model emission and
+unchanged ordinary compilation behavior.
 
 These are unit tests, **not external-project defect evidence** and not
 Lean-versus-Go execution parity. The following work is still required before
@@ -62,8 +124,10 @@ this can count toward release acceptance:
 
 1. CLI/pipeline opt-in, persisted bindings and consistent generated-source
    availability across compile, search, replay and resumed commands.
-2. Capability checks for the full target/oracle call graph; type compatibility
-   and one complete unit model do not establish support for arbitrary callees.
+2. Use the static capability gate consistently when activating checks, and tie
+   emitted model/source snapshots to persisted properties and resumed commands.
+   The current compiler diagnostic does not establish support for arbitrary
+   callees or justify trusting a stale capability report.
 3. Complete non-vacuity/search accounting and model-versus-Go parity evidence.
 4. Standalone delivery of required generated helpers, independently replayed
    without the original in-memory overlay or generated workspace.
