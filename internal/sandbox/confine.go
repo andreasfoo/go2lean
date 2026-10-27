@@ -55,7 +55,9 @@ func Confine(ro, rw []string, chdir string) ([]string, error) {
 	if chdir != "" {
 		args = append(args, "--chdir", chdir)
 	}
-	return append(args, "--unshare-all", "--die-with-parent", "--new-session"), nil
+	// Host TMPDIR may be under the hidden home. Lake passes its temporary
+	// setup file to Lean, so both must use the private writable /tmp.
+	return append(args, "--setenv", "TMPDIR", "/tmp", "--unshare-all", "--die-with-parent", "--new-session"), nil
 }
 
 // LeanReadOnly are the directories untrusted Lean code needs to read: the
