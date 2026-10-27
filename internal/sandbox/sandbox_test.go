@@ -52,3 +52,39 @@ func TestRunWallClock(t *testing.T) {
 		t.Errorf("exit %d after %s, stderr %q", exit, time.Since(start), errOut)
 	}
 }
+
+func TestIsolationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		mode, consent string
+		allowed       bool
+	}{
+		{ModeBwrap, "", true}, {ModeLimits, "", false}, {ModeNone, "", false},
+		{ModeLimits, "rlimits", true}, {ModeNone, "rlimits", false},
+		{ModeNone, "off", true}, {ModeLimits, "off", true}, {ModeNone, "typo", false},
+	} {
+		if got := requireIsolation(tc.mode, tc.consent) == nil; got != tc.allowed {
+			t.Errorf("%+v: allowed=%v", tc, got)
+		}
+	}
+}
+
+func TestRunHidesHome(t *testing.T) {
+	if Mode() != ModeBwrap {
+		t.Skip("requires bwrap")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := os.CreateTemp(home, "go2lean-private-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := secret.Name()
+	secret.Close()
+	defer os.Remove(name)
+	out, stderr, exit, err := Run("/bin/sh", "", []string{"-c", `test ! -e "$1" && echo hidden`, "sh", name}, nil, Default)
+	if err != nil || exit != 0 || !strings.Contains(out, "hidden") {
+		t.Fatalf("home visible: exit=%d err=%v stdout=%s stderr=%s", exit, err, out, stderr)
+	}
+}

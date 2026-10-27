@@ -76,7 +76,9 @@ runnable test plus reproduction instructions to `out/poc/`.
 
 **Run against a scratch clone:** replay executes real code and may have side
 effects. On Linux, [bubblewrap](https://github.com/containers/bubblewrap) is
-recommended for isolation; without it, replay uses resource limits only.
+required for isolated replay (together with `prlimit`); replay refuses an
+implicit unconfined fallback. Run `go2lean doctor` to check prerequisites.
+Builds still run outside the sandbox, so use trusted source and dependencies.
 
 See the [usage guide](docs/usage.md) for sample output, agent setup, command
 options, and running against another module.

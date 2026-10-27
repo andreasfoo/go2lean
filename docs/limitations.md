@@ -191,8 +191,12 @@ directory under [bubblewrap](https://github.com/containers/bubblewrap)
 except that copy, a private `/tmp`, no network, its own PID namespace,
 killed with go2lean) and `prlimit` (8 GB address space, 300 s CPU, 256 MB
 files, 10 min wall clock). Without a usable `bwrap` (not installed, or
-user namespaces disabled) only the limits apply and go2lean says so on
-stderr; `GO2LEAN_SANDBOX=off` disables the sandbox. The C and TinyGo
+user namespaces disabled) replay now refuses execution by default.
+`GO2LEAN_SANDBOX=rlimits` explicitly permits limits-only execution if prlimit
+is available; `GO2LEAN_SANDBOX=off` disables confinement and limits. These
+opt-outs are for trusted code only. Replay also hides the host home directory
+in bwrap mode; the rest of the host remains read-only but readable, so this
+is not a boundary for all host secrets. `go2lean doctor` checks prerequisites. The C and TinyGo
 replays use the same runner (ASan runs without the address-space limit).
 The build step itself (`go test -c`) still runs cgo and the toolchain
 outside the sandbox, as any build does. Not covered: the `agent`

@@ -21,6 +21,8 @@ func main() {
 	startMemProfile()
 	var err error
 	switch os.Args[1] {
+	case "doctor":
+		err = cmdDoctor(os.Args[2:])
 	case "compile":
 		err = cmdCompile(os.Args[2:])
 	case "props":
@@ -56,6 +58,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
+  go2lean doctor                               diagnose local prerequisites (no downloads or target execution)
   common flags: -workspace out   -module <dir of the Go module to analyse>
   go2lean compile [-workspace out] <packages...>  compile stage: Go -> Lean model, ABI, targets (./... allowed)
   go2lean props   [-workspace out]                spec & search stage: template properties from the model report

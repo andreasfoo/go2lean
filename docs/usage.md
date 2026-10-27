@@ -10,9 +10,18 @@
 
 Requirements: Git, Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
 toolchain pinned in `lean/lean-toolchain` is fetched on the first build.
-Recommended on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
-(`apt install bubblewrap`), which isolates tests during the replay stage; without
-it they run with resource limits only.
+Required for isolated replay on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
+(`apt install bubblewrap`, plus `prlimit` from util-linux), which isolates tests
+during the replay stage. Missing isolation refuses replay by default. For
+**trusted code only**, `GO2LEAN_SANDBOX=rlimits` explicitly permits resource
+limits without isolation, and `GO2LEAN_SANDBOX=off` permits unconfined execution.
+Neither weak mode is safe for arbitrary code. Build steps still run outside
+confinement (including cgo), so a scratch clone is not a complete security boundary.
+
+Run `go2lean doctor` to check local tools, the bundled toolchain pin, and usable
+isolation. It returns nonzero when prerequisites are missing or isolation is
+unavailable. It does not download tools, load target packages or execute target
+code; it is not a target dependency resolver or a clean-machine installation test.
 
 ### 2. Install, or clone and run the included example
 
