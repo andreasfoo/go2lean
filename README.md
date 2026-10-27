@@ -126,7 +126,8 @@ alone would miss it. [More about specs →](docs/pipeline.md#writing-a-spec)
 ## Validation
 
 The project checks known-bug examples, compares model behavior with real Go,
-and records real-world case studies. CI pins expected regression outcomes;
+and records real-world case studies. CI pins expected regression outcomes and requires real replay coverage for
+every differential property and requested seed;
 these checks are evidence, not a general correctness guarantee.
 
 [Validation and regression cases](docs/validation.md) ·

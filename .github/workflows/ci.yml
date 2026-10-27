@@ -29,6 +29,9 @@ jobs:
       - name: Unit tests
         run: go test ./internal/... ./cmd/go2lean
 
+      - name: Differential gate unit tests
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Ground-truth regression (testdata/regress/examples.golden)
         run: scripts/regress.sh "$RUNNER_TEMP/regress"
 
