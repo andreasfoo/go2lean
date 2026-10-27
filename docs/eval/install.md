@@ -23,6 +23,17 @@ log in its second argument. It rebuilds with `go install` from the current
 source; validating installation from a published version remains a release
 gate. Go's toolchain and downloaded dependencies remain readable on the host;
 this is not a clean-machine dependency-installation test.
+The result directory must not already exist, so stale artifacts or a populated
+runtime cache cannot stand in for a fresh packaging run. CI runs this packaging
+gate on the pinned uuid revision, independently of the sandbox integration gate.
+
+The packaging run was repeated on 2026-10-27 after the environment-isolation
+changes, using a new result directory (`/tmp/go2lean-env-scrub-install`).
+Compilation again succeeded with the checkout hidden and networking disabled.
+A second invocation on that same directory was rejected before installation,
+as intended. The strict sandbox integration suite also passed with no skips;
+its negative run with `GO2LEAN_LEAN_SANDBOX=off` failed rather than passing
+without confinement. These are local results, not a claim of remote CI success.
 
 Local prerequisite diagnostics now exist (`go2lean doctor`), including a
 probe for the comparator's bubblewrap capabilities. On the evaluation host,

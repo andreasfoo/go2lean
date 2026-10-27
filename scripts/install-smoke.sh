@@ -5,7 +5,10 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 MODULE=$(cd "${1:?external module directory}" && pwd)
-WS=$(mkdir -p "${2:?new result directory}" && cd "$2" && pwd)
+# Never reuse an old binary, generated workspace or populated runtime cache as
+# evidence of a fresh install. mkdir (without -p) also rejects concurrent reuse.
+mkdir -- "${2:?new result directory}"
+WS=$(cd "$2" && pwd)
 case "$MODULE/" in "$ROOT/"*) echo 'module must be outside checkout' >&2; exit 1;; esac
 case "$WS/" in "$ROOT/"*) echo 'results must be outside checkout' >&2; exit 1;; esac
 mkdir -p "$WS/bin" "$WS/tmp" "$WS/go-build"

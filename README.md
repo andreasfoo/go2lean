@@ -80,6 +80,9 @@ required for isolated replay (together with `prlimit`); replay refuses an
 implicit unconfined fallback. Run `go2lean doctor` to check the local Go/Lean
 toolchains and sandbox capabilities, including proof-judge requirements.
 Builds still run outside the sandbox, so use trusted source and dependencies.
+Sandboxed replay and agent Lean checks do not inherit host credentials from
+the environment. Other readable host paths remain exposed; this is not a
+complete host-secret boundary.
 
 See the [usage guide](docs/usage.md) for sample output, agent setup, command
 options, and running against another module.

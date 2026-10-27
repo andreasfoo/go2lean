@@ -175,13 +175,13 @@ were written for the Go line, so this says little about the hand-written
 models on real code; running the comparison on tingly-box packages, and
 comparing return values, are next.
 
-## 6. The replay stage runs generated code without a sandbox
+## 6. Execution isolation and its limits
 
 The history records `log.Fatal`/`os.Exit` killing a test batch (four
 rounds), functions writing files, a 14 GB build cache filling the disk and a
 9 GB search killed by the OOM killer. The docs advise a scratch clone; the
-tool does not enforce isolation, and the `agent` subcommand has an LLM write
-specs that then run in the user's repository.
+original tool did not enforce isolation. The `agent` subcommand has an LLM
+write specs that are compiled with the user's repository.
 
 Since 2026-10-21 (`internal/sandbox`): the harness joins the package
 through `go test -overlay` (nothing is written into the package), the test
@@ -195,8 +195,11 @@ user namespaces disabled) replay now refuses execution by default.
 `GO2LEAN_SANDBOX=rlimits` explicitly permits limits-only execution if prlimit
 is available; `GO2LEAN_SANDBOX=off` disables confinement and limits. These
 opt-outs are for trusted code only. Replay also hides the host home directory
-in bwrap mode; the rest of the host remains read-only but readable, so this
-is not a boundary for all host secrets. `go2lean doctor` checks prerequisites. The C and TinyGo
+in bwrap mode and starts from a minimal environment, not the host's
+credentials. Agent Lean checks clear the inherited environment too, retaining
+only PATH, ELAN_HOME, a private HOME/TMPDIR and a fixed locale. The rest of
+the host remains read-only but readable, so this is not a boundary for all
+host secrets. `go2lean doctor` checks prerequisites. The C and TinyGo
 replays use the same runner (ASan runs without the address-space limit).
 The build step itself (`go test -c`) still runs cgo and the toolchain
 outside the sandbox, as any build does. Not covered: the `agent`

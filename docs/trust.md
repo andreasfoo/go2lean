@@ -120,7 +120,11 @@ Where its text runs:
   under `bwrap`: the file system read-only, the home directory hidden
   except the toolchain and go2lean's cache (both read-only), a private
   `/tmp`, no network. The library and model it imports are built before,
-  outside.
+  outside. The inherited environment is cleared: only PATH, ELAN_HOME,
+  a private HOME/TMPDIR and a fixed locale are provided. Host credentials
+  from other environment variables are not passed through. Readable files
+  outside the hidden home are still exposed; this is not full host-secret
+  isolation.
 - **Lean tools.** lean-lsp-mcp runs under the same confinement, on a
   disposable copy of the workspace's Lean project. That copy is the only
   writable directory.

@@ -34,7 +34,7 @@ func Confine(ro, rw []string, chdir string) ([]string, error) {
 		return nil, nil
 	}
 	bwrapOnce.Do(func() {
-		bwrapOK = exec.Command("bwrap", "--ro-bind", "/", "/", "--unshare-all", "--die-with-parent", "true").Run() == nil
+		bwrapOK = exec.Command("bwrap", "--ro-bind", "/", "/", "--clearenv", "--unshare-all", "--die-with-parent", "/bin/true").Run() == nil
 	})
 	if !bwrapOK {
 		return nil, ErrNoBwrap
@@ -43,7 +43,18 @@ func Confine(ro, rw []string, chdir string) ([]string, error) {
 	if home, err := os.UserHomeDir(); err == nil && home != "/" {
 		args = append(args, "--tmpfs", home)
 	}
-	args = append(args, "--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc")
+	args = append(args, "--tmpfs", "/tmp", "--dir", "/tmp/home", "--dev", "/dev", "--proc", "/proc", "--clearenv")
+	// Agent-written Lean can read environment variables. Never pass API keys,
+	// proxy credentials, LD_PRELOAD or arbitrary host toolchain overrides.
+	elanHome := os.Getenv("ELAN_HOME")
+	if elanHome == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			elanHome = filepath.Join(home, ".elan")
+		}
+	}
+	for _, pair := range [][2]string{{"PATH", os.Getenv("PATH")}, {"ELAN_HOME", elanHome}, {"HOME", "/tmp/home"}, {"LANG", "C.UTF-8"}} {
+		args = append(args, "--setenv", pair[0], pair[1])
+	}
 	for _, d := range ro {
 		if _, err := os.Stat(d); err == nil {
 			args = append(args, "--ro-bind", d, d)

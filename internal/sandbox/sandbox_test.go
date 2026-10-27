@@ -88,3 +88,14 @@ func TestRunHidesHome(t *testing.T) {
 		t.Fatalf("home visible: exit=%d err=%v stdout=%s stderr=%s", exit, err, out, stderr)
 	}
 }
+
+func TestRunHidesHostCredentials(t *testing.T) {
+	if Mode() != ModeBwrap {
+		t.Skip("requires bwrap")
+	}
+	t.Setenv("GO2LEAN_TEST_SECRET", "must-not-reach-replay")
+	out, stderr, exit, err := Run("/bin/sh", "", []string{"-c", `test -z "$GO2LEAN_TEST_SECRET" && echo scrubbed`}, nil, Default)
+	if err != nil || exit != 0 || !strings.Contains(out, "scrubbed") {
+		t.Fatalf("host environment exposed: %v exit=%d stdout=%s stderr=%s", err, exit, out, stderr)
+	}
+}

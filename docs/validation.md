@@ -98,3 +98,15 @@ The encoder now handles the model's canonical `knownFloat` representation
 inside interfaces. The strengthened six-seed run completed all 12 real
 comparisons (both properties), with zero different or other results.
 Existing partial results are not full-suite evidence.
+
+### Sandbox integration gate
+
+`GO2LEAN_REQUIRE_SANDBOX_TESTS=1 go test ./internal/sandbox -count=1 -v`
+requires working bubblewrap and prlimit, with no replay or Lean isolation
+opt-out. CI runs this separately so a machine without user namespaces
+cannot silently pass by skipping the isolation tests. The tests check replay
+copy/write isolation, hidden home directories, private Lean temporary
+storage, absence of inherited credential variables in both execution paths,
+and replay wall-clock termination. This is evidence for those boundaries,
+not a security audit or a full release gate. Local unit tests without this
+flag may still skip unavailable integration cases.
