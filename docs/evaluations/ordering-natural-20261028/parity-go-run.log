@@ -1,0 +1,4 @@
+=== RUN   TestGo2LeanExternalParity
+GO2LEAN_PARITY_RESULT matched=2000 mismatched=0 panics=0
+--- PASS: TestGo2LeanExternalParity (0.00s)
+PASS

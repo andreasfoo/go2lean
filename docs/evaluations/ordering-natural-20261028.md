@@ -113,6 +113,43 @@ out-of-fuel, moot/stuck or vacuous trials. This is **32,000 bounded model
 trials**, not 32,000 Go replays and not a proof that the proposed fix
 establishes ordering on all strings.
 
+## Separate model/Go parity audit
+
+An exploratory audit subsequently regenerated **all 2,000 seed-42 trials**,
+continuing past the first violation, using the frozen v2 search description
+and unchanged generated model sources. This did not modify the bound
+workspace, replace its oracle, inject a witness into search, or become a new
+claim of spec-free bug discovery. The audit driver duplicates the existing
+generator/check loop and records each trial rather than stopping on a finding.
+The trial-695 inputs and output were checked against the saved counterexample.
+
+For these 2,000 samples:
+
+- The actual generated ordering oracle completed on every trial: 1,997
+  returned true and three returned false.
+- There were zero model havoc reads, assumptions, stuck or out-of-fuel
+  outcomes. All samples had an oracle exit. The canonical oracle has no
+  `return true` precondition guard, so these are not guard-vacuous successes.
+- A generated Go audit test compared **all five integer results and the
+  actual generated oracle result** for every sample against the recorded
+  model observations. It ran through `sandbox.Run`, requiring bubblewrap.
+  All 2,000 samples matched, with zero mismatches or panics.
+
+The structured summary, sample-stream digest, unchanged model-source hashes,
+audit driver, Go-test generator and sandbox runner are retained as
+`parity-*` evidence files. The raw sample stream and generated 2,000-case test
+remain in the local evidence directory rather than being checked into the
+repository; the retained sources and frozen settings describe their
+regeneration. The renderer/generator explicitly rejects non-ASCII sampled
+inputs in this audit: this is **ASCII/numeric-pool sampled parity**, not
+arbitrary-byte equivalence or Unicode coverage. The native bridge's fixed
+byte-edge matrix is separate evidence, not broader target parity.
+
+This also gives structured accounting for the positive-search prefix, but
+it is a separate evaluation instrument. The shipped hunt records still do
+not persist that per-trial accounting; an integrated fail-closed acceptance
+evaluator remains work to do.
+
 ## Remaining acceptance work
 
 The optional installed path also completed on the unchanged target:
@@ -131,9 +168,9 @@ cached search. See `installed-*.json` and `installed-*.log` in the evidence
 directory. This validates the whole positive path under those conditions,
 not a clean-machine OS/toolchain install or the broader release matrix.
 
-- Persist and validate structured non-vacuity/termination accounting, including
-  the positive-search prefix; text summaries alone are insufficient.
-- Broader target model-versus-Go parity, not only the found witness.
+- Integrate persisted, validated non-vacuity/termination accounting into the
+  shipped search/evaluation records rather than relying on a separate audit.
+- Broader byte-domain/Unicode target parity and coverage beyond these samples.
 - A relevant independent external negative comparator control with semantic
   input coverage; the earlier `x/mod` model-only run is not yet one.
 - Expand the clean installed-binary evaluation beyond this single positive.

@@ -1,0 +1,19 @@
+{
+  "target_revision": "83eecaf9a40d7c4212e4518531111204418a4077",
+  "seed": 42,
+  "trials": 2000,
+  "first_violated_trial": 695,
+  "outcomes": {
+    "holds": 1997,
+    "violated": 3
+  },
+  "havoc_reads": 0,
+  "assumptions": 0,
+  "stuck": 0,
+  "out_of_fuel": 0,
+  "oracle_completed": 2000,
+  "ascii_only_inputs": true,
+  "model_jsonl_sha256": "1e354cd6fada533c75f7a3d59a3ae21c41acac649af8dc86bacbb8b69abfa9b1",
+  "generated_test_sha256": "61e6e4af0e463aec71450516a9330f0f5990e9a7598ae8767a8843630791c216",
+  "status": "2000-model-and-sandboxed-Go-samples-matched"
+}

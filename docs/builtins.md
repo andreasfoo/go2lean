@@ -204,6 +204,14 @@ recorded observations, not an upstream fix, arbitrary-input equivalence,
 or a proof of ordering. Source revisions, inputs, limitations and the local
 patch are in the evaluation record.
 
+A separate audit then regenerated all 2,000 seed-42 trials from unchanged
+models and compared all five return values and the generated oracle result
+with sandboxed Go: 2,000 matched, zero mismatches or panics. Structured
+observations reported 1,997 holding and three violating trials, with no
+havoc reads, assumptions, stuck or fuel exhaustion. This is sampled
+ASCII/numeric-pool parity and a separate evaluation instrument, not
+arbitrary-byte fidelity or shipped integrated search accounting.
+
 Unit tests check positive and negative binding cases, collisions, source
 provenance, immutable overlay copies and absence of checkout writes.
 The generated target and postcondition translate together through the existing

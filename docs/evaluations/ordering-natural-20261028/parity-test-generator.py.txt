@@ -1,0 +1,32 @@
+from pathlib import Path
+import json, hashlib, collections
+p=Path('/tmp/go2lean-order-eval-20261028')
+rows=[json.loads(s) for s in (p/'parity-model.jsonl').read_text().splitlines()]
+assert len(rows)==2000
+counts=collections.Counter(r['outcome'].rsplit('.',1)[-1] for r in rows)
+assert not (set(counts)-{'holds','violated'})
+assert all(r['model_output']['res']=='ok' and r['havoc_reads']==0 and not r['assumptions'] and not r['stuck'] and r['spec_exit'] is not None for r in rows)
+assert next(r['trial'] for r in rows if r['outcome'].endswith('.violated'))==695
+s='''package natural
+import ("fmt";"testing")
+func TestGo2LeanExternalParity(t *testing.T) {
+ cases:=[]struct{a,b,c string; want [5]int; holds bool}{
+'''
+for i,r in enumerate(rows):
+ assert r['trial']==i
+ values=[r['objects'][k] for k in ['a','b','c']]
+ assert all(v.isascii() for v in values), 'verify byte-preserving rendering before extending beyond ASCII'
+ expected=r['model_output']['value'];assert len(expected)==5
+ s+='{'+','.join(json.dumps(v) for v in values)+',[5]int{'+','.join(str(int(v)) for v in expected)+'},'+str(r['outcome'].endswith('.holds')).lower()+'},\n'
+s+='''}
+ for i,c:=range cases { aa,ab,ba,bc,ac:=go2leanBuiltinCompareOrderV1(c.a,c.b,c.c); got:=[5]int{aa,ab,ba,bc,ac}; if got!=c.want {t.Fatalf("trial %d model/Go return mismatch: got %v want %v",i,got,c.want)}; holds:=go2leanSpecCompareOrderV1(c.a,c.b,c.c,aa,ab,ba,bc,ac); if holds!=c.holds {t.Fatalf("trial %d oracle mismatch",i)} }
+ fmt.Println("GO2LEAN_PARITY_RESULT matched=2000 mismatched=0 panics=0")
+}
+'''
+(p/'parity-generated_test.go').write_text(s)
+helper=p/'detached-bundle/support/zz_go2lean_builtin_compare_order.go'
+ov={'Replace':{str(p/'detached-target/zz_go2lean_parity_test.go'):str(p/'parity-generated_test.go'),str(p/'detached-target/zz_go2lean_builtin_compare_order.go'):str(helper)}}
+(p/'parity-overlay.json').write_text(json.dumps(ov))
+summary={'target_revision':'83eecaf9a40d7c4212e4518531111204418a4077','seed':42,'trials':2000,'first_violated_trial':695,'outcomes':dict(counts),'havoc_reads':0,'assumptions':0,'stuck':0,'out_of_fuel':0,'oracle_completed':2000,'ascii_only_inputs':True,'model_jsonl_sha256':hashlib.sha256((p/'parity-model.jsonl').read_bytes()).hexdigest(),'generated_test_sha256':hashlib.sha256(s.encode()).hexdigest(),'status':'model-side-preconditions-checked-not-yet-Go-verified'}
+(p/'parity-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+print(summary)
