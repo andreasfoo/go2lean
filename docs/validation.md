@@ -162,11 +162,11 @@ real project's non-panic functional defect.
 The installed packaging gate (`scripts/install-smoke.sh <external-module>
 <new-results-directory> [--require-external-deps] [--compare-order Function]`) installs the binary with a
 fresh Go module/build cache and an empty HOME. It then provisions target dependencies into a separate
-fresh module cache, with target files read-only, before running diagnostics and
-compilation with the checkout hidden and networking disabled. That outer
-sandbox keeps the host PID namespace and `/proc`, so the sandboxes go2lean
-starts inside it (the proof judge's comparator probe, Lean checks, replay)
-can mount their own `/proc`. All stages use
+fresh module cache, with target files read-only, before running compilation
+with the checkout hidden and networking disabled. The diagnostics (`doctor`)
+run on the host instead, offline through Go's settings: they check that the
+host can give go2lean its own sandboxes, which a host that forbids nested user
+namespaces (GitHub's runners) would refuse inside the hiding sandbox. All stages use
 an allowlisted environment, ignoring host Go configuration, workspace selection,
 credentials and sandbox opt-outs. Installation and dependency preparation may
 use the network; their logs are separate from offline doctor/compile logs.

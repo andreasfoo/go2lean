@@ -17,9 +17,9 @@ name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == "bwrap":
     assert "--clearenv" in args
-    assert "--unshare-user" in args
+    assert "--unshare-all" in args
     assert "--tmpfs" in args
-    online = "--unshare-net" not in args
+    online = "--share-net" in args
     env = {}
     module = None
     i = 0
@@ -61,8 +61,27 @@ if name == "bwrap":
     assert env["GOENV"] == "off"
     assert env["GOWORK"] == "off"
     assert env["GOTOOLCHAIN"] == "local"
-    if not online and not (cache / "prepared").exists():
-        if command[5:] == ["doctor", "-deps", "./..."]:
+    if not online:
+        # doctor needs the host's own namespaces, so it never runs in here.
+        assert "doctor" not in command
+        assert (cache / "prepared").exists()
+    sys.exit(0)
+
+if name == "go2lean":
+    # Only doctor runs directly on the host, offline and allowlisted.
+    env = os.environ
+    for key in ("HOST_SECRET", "GOFLAGS", "GO2LEAN_LEAN_SANDBOX", "GO2LEAN_SANDBOX"):
+        assert key not in env, key
+    assert env["GOENV"] == "off"
+    assert env["GOWORK"] == "off"
+    assert env["GOTOOLCHAIN"] == "local"
+    assert env["GOPROXY"] == "off" and env["GOSUMDB"] == "off" and env["GOVCS"] == "*:off"
+    cache = Path(env["GOMODCACHE"])
+    assert cache.name == "target-modules"
+    module = Path.cwd()
+    assert args[0] == "doctor", args
+    if not (cache / "prepared").exists():
+        if args[1:] == ["-deps", "./..."]:
             if (module / "no-external-deps").exists():
                 print("ok    dependencies    no external dependencies")
                 sys.exit(0)
@@ -79,7 +98,9 @@ if name == "bwrap":
                 sys.exit(1)
             print("FAIL  dependency      external dependency not available offline")
             sys.exit(1)
-        assert command[5:] == ["doctor"]
+        assert args[1:] == [], args
+    else:
+        assert args[1:] == ["-deps", "./..."], args
     sys.exit(0)
 
 assert name == "go"
@@ -96,7 +117,9 @@ else:
     assert cache.name == "install-modules" and not list(cache.iterdir())
     assert not list(Path(os.environ["GOCACHE"]).iterdir())
     (cache / "installed").touch()
-    (Path(os.environ["GOBIN"]) / "go2lean").touch()
+    tool = Path(os.environ["GOBIN"]) / "go2lean"
+    tool.write_text(Path(sys.argv[0]).read_text())
+    tool.chmod(0o755)
 '''
 
 
