@@ -1,0 +1,252 @@
+[
+ {
+  "repo": "gin-gonic_gin",
+  "sha": "7d189814cbf6d4c55e8a47b06234736cb1e03457",
+  "subject": "fix: wrong when wildcard follows named param (#2983)"
+ },
+ {
+  "repo": "gin-gonic_gin",
+  "sha": "bb1fc2e0fe97c63dab1527baab88d01183853b8f",
+  "subject": "fix Request.Context() checks (#3512)"
+ },
+ {
+  "repo": "go-redis_redis",
+  "sha": "b0bb514059249e01ed7328c9094e5b8a439dfb12",
+  "subject": "fix: update COMMAND parser for Redis 7"
+ },
+ {
+  "repo": "spf13_cobra",
+  "sha": "4ba5566f5704a9c0d205e1ef3efc4896156d33fa",
+  "subject": "fix(bash): nounset unbound file filter variable on empty extension (#2228)"
+ },
+ {
+  "repo": "gin-gonic_gin",
+  "sha": "cc94aa2dd980bea28a543ab8488013d4c991a58e",
+  "subject": "Fixes pathFor()"
+ },
+ {
+  "repo": "BurntSushi_toml",
+  "sha": "13f832b769c555c3e082a0a5a8fdb35f80736937",
+  "subject": "fixing bug when encoding a key who's value is a zero value"
+ },
+ {
+  "repo": "gin-gonic_gin",
+  "sha": "1bd0ecf2d3e08da37efa270bb7be20c1eddb0d68",
+  "subject": "fix(context): load Keys under the mutex in Copy (#4854)"
+ },
+ {
+  "repo": "go-redis_redis",
+  "sha": "b7e0e5aa0d1796710c80dc4c135308e6be95533b",
+  "subject": "Don't use unsafe on appengine. Fixes #151."
+ },
+ {
+  "repo": "spf13_cobra",
+  "sha": "7bd35d3b95868553e9116dfc2a9fe03377e503a7",
+  "subject": "cmd: Fix incorrect cmd dir"
+ },
+ {
+  "repo": "gin-gonic_gin",
+  "sha": "0f951956d0b8b4b459a2f46bcd4e7118f0306210",
+  "subject": "[FIX] c.Request.FormFile maybe file, need close (#2114)"
+ },
+ {
+  "repo": "go-redis_redis",
+  "sha": "858ecda7fd359feab256c55665c32b71b82ccf10",
+  "subject": "fix: insert entry during iterating over a map (#3398)"
+ },
+ {
+  "repo": "spf13_cobra",
+  "sha": "f25a3c6e0b4220c616a3b342b57b055c1256d318",
+  "subject": "fix: conflict import name with variable (#1879)"
+ },
+ {
+  "repo": "prometheus_client_golang",
+  "sha": "7d0a0fbb7275346b1308eba832c93a4bd4426cd4",
+  "subject": "fix: replace fmt.Errorf with errors.New (#1689)"
+ },
+ {
+  "repo": "go-redis_redis",
+  "sha": "fb44c891ddccc854c418bca59d23bc58f751761a",
+  "subject": "Fix sporadic pool timeouts with IdleTimeout != 0. Fixes #195."
+ },
+ {
+  "repo": "go-redis_redis",
+  "sha": "f5ef5ed354f718ee452b138d704b97b1e9b1c18d",
+  "subject": "fix(csc): apply invalidation batches in one shard pass (#4033)"
+ },
+ {
+  "repo": "spf13_cobra",
+  "sha": "3c42f846c2b95e5a47f3793932a9f98f0e3cc49f",
+  "subject": "fix duplicated dir"
+ },
+ {
+  "repo": "spf13_cobra",
+  "sha": "6b0bd3076cfafd1c108264ed1e4aa0c0fe3f8537",
+  "subject": "fix: don't remove flag value that matches subcommand name (#1781)"
+ },
+ {
+  "repo": "go-chi_chi",
+  "sha": "6ca1005b79b8827a2b0fc9115d21fad1616e7847",
+  "subject": "Fix context value chaining"
+ },
+ {
+  "repo": "BurntSushi_toml",
+  "sha": "2ceedfee35ad3848e49308ab0c9a4f640cfb5fb2",
+  "subject": "Fix a nasty bug where an unclosed table name caused the lexer to not terminate."
+ },
+ {
+  "repo": "go-chi_chi",
+  "sha": "5f645ae32b572998bed8ceaf80318569ef3b69fc",
+  "subject": "Remove trailing space, fix #197 thanks @dim"
+ },
+ {
+  "repo": "go-chi_chi",
+  "sha": "adf3c28a98c68e52c8baa1bbf1221e72dec8b963",
+  "subject": "fixes #343, add documentation to note StripSlashes incompat with http.FileServer"
+ },
+ {
+  "repo": "prometheus_client_golang",
+  "sha": "f7f8f3a1e2c09da4b88b78b7e04a9252187cf71f",
+  "subject": "fix: Unset Content-Encoding header when uncompressed"
+ },
+ {
+  "repo": "prometheus_client_golang",
+  "sha": "79042c63b36ab52a7a780ed98e299d77ed6083a2",
+  "subject": "Fix bug unit cpu-seconds not a suffix of metric go_cpu_classes_gc_mark_assist_cpu_seconds (#1991)"
+ },
+ {
+  "repo": "prometheus_client_golang",
+  "sha": "958ea82988bac53670e9b9bc53f483fddc2eb609",
+  "subject": "Fix typos"
+ },
+ {
+  "repo": "prometheus_client_golang",
+  "sha": "59f2c7d8b06707f8cf14fe3b09c4dc61295d09fa",
+  "subject": "Fix a number of minor things."
+ },
+ {
+  "repo": "sahilm_fuzzy",
+  "sha": "17708e7b806356494e4b7d1d1096d9ecc4f0fde5",
+  "subject": "Fixed pattern length comparison with Unicode"
+ },
+ {
+  "repo": "gomarkdown_markdown",
+  "sha": "86bc6131dfc93b9cbb0ec0fefa12e56fe9427052",
+  "subject": "Whitelisted th and td to fix #79"
+ },
+ {
+  "repo": "duke-git_lancet",
+  "sha": "7a9b0847f96ae63d9e7ade7f4ca54f9c723004d9",
+  "subject": "fix: fix some go line issue in go report card"
+ },
+ {
+  "repo": "iancoleman_strcase",
+  "sha": "a6b8dcde35569b34185fc011be4f0f41cf393f3d",
+  "subject": "Fix incorrect delimiter between dot and cap"
+ },
+ {
+  "repo": "russross_blackfriday",
+  "sha": "8df342acd510645e8bbc608a209e788edd2667d6",
+  "subject": "Fix bug where newlines were inserted inside fenced code blocks."
+ },
+ {
+  "repo": "gookit_color",
+  "sha": "d6a4feb4049c07716378f6e08cd78692b9c7b848",
+  "subject": "fix: #14 IsConsole check error"
+ },
+ {
+  "repo": "facette_natsort",
+  "sha": "2cd4dd1e2dcba4d85d6d3ead4adf4cfd2b70caf2",
+  "subject": "Prevent crash with chunks having different lengths"
+ },
+ {
+  "repo": "mattn_go-shellwords",
+  "sha": "b074fa047f436778aa95c2c98617e85b28992e6b",
+  "subject": "fix: preserve parser compatibility for unmatched ')' handling"
+ },
+ {
+  "repo": "yuin_goldmark",
+  "sha": "67035183005309de2154c143ae3df05dfe096903",
+  "subject": "Issue #4: Fix invalid leading spaces with attributes"
+ },
+ {
+  "repo": "dsnet_compress",
+  "sha": "ad7c1cebfd548ad8c48dda1d6d5443810b1d20a1",
+  "subject": "testdata: fix ending index to be inclusive"
+ },
+ {
+  "repo": "andybalholm_brotli",
+  "sha": "ac459dee64f90b971e607d1838b66f8939c95e4c",
+  "subject": "Fix excessive allocations if sortHuffmanTreeItems."
+ },
+ {
+  "repo": "tidwall_sjson",
+  "sha": "ed74e8aec806f62f5247b014e5e757576b547ece",
+  "subject": "fixed misspellings closed #4"
+ },
+ {
+  "repo": "tdewolff_parse",
+  "sha": "66aef60153a7efca24949f32c46c4374b4a4dec6",
+  "subject": "JS: fix parsing of 'async(...a)' as a CallExpression"
+ },
+ {
+  "repo": "adrg_strutil",
+  "sha": "9a869f725f3df76257d0cd23d6e01ee03a70cc1f",
+  "subject": "Fix inconsistency in Sorensen-Dice similarity calculation"
+ },
+ {
+  "repo": "sergi_go-diff",
+  "sha": "ce24a72a4be8600afac73bcd347149d9c0ff32f3",
+  "subject": "fixed bug due to rounding/float/int conversion"
+ },
+ {
+  "repo": "jinzhu_inflection",
+  "sha": "ecea464f9269b90ebf9aa4fdc580d1961334807e",
+  "subject": "fix: comma error in line 123 inflections.go (#31)"
+ },
+ {
+  "repo": "gookit_goutil",
+  "sha": "f1ad3a69dda12a9104918d240a560fefed6f8703",
+  "subject": ":bug: fix: cflag - not add NewLine on each option description"
+ },
+ {
+  "repo": "rivo_uniseg",
+  "sha": "cd1c4a9fd870033702e45c5d89cad6cff904fef4",
+  "subject": "fix state transition when two any conditions were found"
+ },
+ {
+  "repo": "dustin_go-humanize",
+  "sha": "a78a9956727d74d52e51b4dbcb80530806f048cb",
+  "subject": "1 second fix. Closes #1"
+ },
+ {
+  "repo": "tdewolff_minify",
+  "sha": "2028e636bb308ad374847a515d2886fca4a7504d",
+  "subject": "Make M concurrent-safe, fixes #249"
+ },
+ {
+  "repo": "olekukonko_tablewriter",
+  "sha": "2fd13f5d7758f8327cd634d85e66ff375e907fce",
+  "subject": "Fix line print"
+ },
+ {
+  "repo": "golang_snappy",
+  "sha": "d1d908a252c22fd7afd36190d5cffb144aa8f777",
+  "subject": "Fix heuristic match skipping."
+ },
+ {
+  "repo": "fvbommel_sortorder",
+  "sha": "dee2f52d256abe242c15079c4caf425aed4ea998",
+  "subject": "Implement node.slice() and fix a few things."
+ },
+ {
+  "repo": "lucasb-eyer_go-colorful",
+  "sha": "d1be5f1fbc7f63e693f460df83d52772eae2ca54",
+  "subject": "Fix bug in CIE94 color distance #7 computation."
+ },
+ {
+  "repo": "tidwall_gjson",
+  "sha": "0608a3853a050afc7954e63354518a79af870ffe",
+  "subject": "wildcard: Fix wildcard match behavior to support wide range."
+ }
+]

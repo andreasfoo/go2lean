@@ -48,7 +48,7 @@ the judge alone must reject it. The script also:
   metaprogramming (an answer cannot), directly against the comparator;
 - checks that no file outside the sandboxes changed.
 
-It runs in CI.
+It runs in the proofs workflow (`.github/workflows/proofs.yml`, by hand).
 
 | attack | what it does | before (the old binary) | now: Lean's check in the workspace | now: the judge |
 |---|---|---|---|---|
@@ -161,14 +161,15 @@ Each proved property was restated in Go (`examples/*/proved_test.go`):
 
 These were checked two ways:
 
-- 200,000 random and boundary inputs each, in CI;
+- 200,000 random and boundary inputs each, in the proofs workflow;
 - `go test -fuzz` for 30 s per package: 2.4 M, 0.24 M, 2.0 M and 2.1 M
   executions for `proofs`, `loops`, `invariants` and `strloops`.
 
 No counterexample. The restatement is not checked against the Lean text;
 it is evidence that the model is the program, not a second proof.
 
-Semantic mutants (`testdata/mutants.txt`, `scripts/mutants.sh`, in CI).
+Semantic mutants (`testdata/mutants.txt`, `scripts/mutants.sh`, in the proofs
+workflow).
 For one mutant of each proved function, two things must hold:
 
 - the Go property test fails on the mutant (the property tells it apart);

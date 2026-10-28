@@ -1,0 +1,88 @@
+name: proofs
+
+# The Lean proofs and the proof judge's own checks, on demand only (Actions,
+# "proofs", Run workflow): run it for a change to the prover, the judge,
+# the Lean core or the proved examples. About 40 minutes. ci.yml runs the
+# rest on every change.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail
+
+jobs:
+  # The regression with its Lean proofs: every outcome, "proved" included,
+  # against testdata/regress/examples.golden.
+  regress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Ground-truth regression with Lean proofs
+        run: scripts/regress.sh "$RUNNER_TEMP/regress"
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            ${{ runner.temp }}/regress/run.log
+            ${{ runner.temp }}/regress/outcomes.txt
+          if-no-files-found: ignore
+
+  # Proofs (docs/trust.md): the judge runs Lean's comparator in bubblewrap,
+  # and Lean text an agent wrote runs only there.
+  proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Proved properties against the real Go code
+        run: go test ./examples/proofs ./examples/invariants ./examples/loops ./examples/strloops
+
+      - name: Functional proofs, judged (lean/Proofs/Functional.lean, examples/*/proofs.json)
+        run: scripts/proofs.sh "$RUNNER_TEMP/proofs"
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-logs
+          path: ${{ runner.temp }}/proofs/*.log
+          if-no-files-found: ignore
+
+  # The proof judge's own checks: attacks it must reject, mutants that
+  # must not prove.
+  judge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Red-team corpus of the proof judge (testdata/redteam)
+        run: scripts/redteam.sh "$RUNNER_TEMP/redteam" 4
+
+      - name: Semantic mutants of the proved functions (testdata/mutants.txt)
+        run: scripts/mutants.sh "$RUNNER_TEMP/mutants" 4
+
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: judge-logs
+          path: |
+            ${{ runner.temp }}/redteam/*.log
+            ${{ runner.temp }}/redteam/verdicts.txt
+            ${{ runner.temp }}/mutants/*.log
+            ${{ runner.temp }}/mutants/verdicts.txt
+          if-no-files-found: ignore

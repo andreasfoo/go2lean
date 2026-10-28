@@ -1,0 +1,51 @@
+#	repo	symptom	root cause	who could catch it
+1	gin	wrong result	router edge case (wildcard after named param)	spec: docs/router semantics
+2	gin	panic	nil field (Context without engine)	no-panic from entry, nil/zero receiver
+3	go-redis	wrong result/error	protocol changed (Redis 7 COMMAND reply)	spec: protocol
+4	cobra	wrong result	generated bash script, unset variable	spec (not Go)
+5	gin	wrong result + panic	wrong index variable (len(p) vs len(joined))	no-panic from entry
+6	toml	panic	nil interface -> invalid reflect.Value	no-panic from entry, nil input
+7	gin	data race	map read outside mutex	concurrency (race)
+8	go-redis	build failure	unsafe on appengine	platform/build
+9	cobra	wrong result	full path instead of base name	spec: docs
+10	gin	resource leak	multipart file not closed	linter
+11	go-redis	nondeterminism	map mutated during range	determinism (map order)
+12	cobra	not a bug	import shadowed by variable	-
+13	prometheus	not a bug	lint	-
+14	go-redis	timeouts	pool removes idle conns, waiters starve	concurrency (blocking)
+15	go-redis	stale data	lock granularity, invalidations fall behind	concurrency/perf
+16	cobra	wrong result	duplicated dir in path	spec: docs
+17	cobra	wrong result	flag value equal to subcommand name removed	spec: docs/CLI semantics
+18	chi	wrong result	context values not chained	spec: context contract
+19	toml	hang	lexer does not stop at EOF in table name	termination/resource on crafted input
+20	chi	wrong result	trailing space in content-type literal	spec: docs
+21	chi	not a bug	docs	-
+22	prometheus	wrong result	Content-Encoding set for identity	spec: HTTP semantics
+23	prometheus	wrong result	unit not sanitized to metric-name grammar	spec: output grammar
+24	prometheus	not a bug	typos	-
+25	prometheus	wrong result	consistency check incomplete, order-dependent hash	spec (+ permutation invariance)
+26	fuzzy	wrong result	len(pattern) bytes vs runes	bytes vs runes (multibyte input)
+27	markdown	wrong result	sanitizer whitelist missing td/th align	spec: policy
+28	lancet	not a bug	lint	-
+29	strcase	wrong result	delimiter logic	spec (idempotence might catch)
+30	blackfriday	wrong result	newline inserted in fenced code	spec: reference tests (CommonMark)
+31	color	wrong result	*os.File comparison on wrapped writer	platform/IO
+32	natsort	panic	index out of range, chunk counts differ	no-panic from entry
+33	shellwords	wrong result (security)	unmatched ')' handling	spec: reference (sh)
+34	goldmark	wrong result	off-by-one start offset	spec: reference tests (CommonMark)
+35	compress	not a bug	testdata only	-
+36	brotli	performance	heap escape of comparator args	perf (not semantic)
+37	sjson	not a bug	typos	-
+38	parse(JS)	wrong result	valid input rejected	spec: reference grammar
+39	strutil	wrong result	wrong formula, similarity > 1	invariant: range [0,1], reflexive
+40	go-diff	wrong result	byte vs rune lengths mixed	bytes vs runes (+ round trip)
+41	inflection	not a bug	syntax error	-
+42	goutil	wrong result	missing newline in help	spec: docs
+43	uniseg	wrong result	state transition wrong	spec: reference data (Unicode tests)
+44	humanize	wrong result	"1 seconds" at boundary	spec: docs
+45	minify	data race	map written without lock	concurrency (race)
+46	tablewriter	wrong result	writes to stdout instead of writer	side-effect check
+47	snappy	wrong result/perf	heuristic diverges from C++ reference	spec: reference implementation
+48	sortorder	unclear	refactor + misc fixes	-
+49	colorful	wrong result	formula scale wrong	spec: reference formula
+50	gjson	wrong result	swapped args (+ exponential matcher)	spec: docs

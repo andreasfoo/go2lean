@@ -30,7 +30,8 @@ by Lean's comparator against go2lean's own statement, in a sandbox, with a
 certificate.
 
 The hand proofs (`lean/Proofs/Functional.lean`) are the agent's worked
-examples. CI checks them by `#print axioms`, not by the judge.
+examples. The proofs workflow (run by hand) checks them by `#print axioms`,
+not by the judge.
 
 Missing:
 
