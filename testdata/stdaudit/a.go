@@ -1,5 +1,5 @@
-// Package stdaudit checks go2lean's models of strings, strconv and
-// unicode/utf8 against Go,
+// Package stdaudit checks go2lean's models of strings, strconv,
+// unicode/utf8 and encoding/binary's varints against Go,
 // as testdata/rediff does for regexp: every spec fails, so each search trial
 // is a counterexample whose model value (a probe) M3 compares with the real
 // one. Run with PKG=testdata/stdaudit DEPS=1 scripts/json-diff.sh; with
@@ -8,6 +8,7 @@
 package stdaudit
 
 import (
+	"encoding/binary"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -143,4 +144,28 @@ func decodeHi(a, c, d byte) string { return decodeRune([]byte{0x80 | a, c, d}) }
 
 func decodeStrHi(a, c, d byte) string {
 	return decodeRuneInString(string([]byte{0x80 | a, 0x80 | c, d}))
+}
+
+// Varints: the search draws small bytes first, so a, c and d carry the
+// continuation bit and e ends the varint (or not, by its high bit).
+func uvarint(p []byte) string {
+	n, k := binary.Uvarint(p)
+	return strconv.FormatUint(n, 10) + "|" + strconv.Itoa(k)
+}
+
+func Uvarint4(a, c, d, e byte) string { return uvarint([]byte{0x80 | a, 0x80 | c, 0x80 | d, e}) }
+
+func Uvarint11(a, e byte) string {
+	return uvarint([]byte{0x80 | a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x80 | e, e})
+}
+
+func Varint3(a, c, e byte) string {
+	n, k := binary.Varint([]byte{0x80 | a, 0x80 | c, e})
+	return strconv.FormatInt(n, 10) + "|" + strconv.Itoa(k)
+}
+
+func PutUvarint(x uint64) string {
+	buf := make([]byte, binary.MaxVarintLen64)
+	k := binary.PutUvarint(buf, x)
+	return uvarint(buf[:k])
 }

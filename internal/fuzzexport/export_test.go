@@ -81,3 +81,42 @@ func SpecBeforePlantedWrong(a, b string, ret bool) bool { return !ret || len(a) 
 		}
 	}
 }
+
+// TestExportVariadicTarget passes the spec's slice to a variadic target as
+// its variadic parameter.
+func TestExportVariadicTarget(t *testing.T) {
+	root, err := repo.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "examples", "strs")
+	overlay := map[string][]byte{
+		filepath.Join(dir, "zz_join.go"): []byte(`package strs
+
+func JoinAll(sep string, parts ...string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += sep
+		}
+		out += p
+	}
+	return out
+}
+`),
+		filepath.Join(dir, "zz_join_test.go"): []byte(`package strs
+
+// go2lean:spec JoinAll
+func SpecJoinAllLen(sep string, parts []string, ret string) bool { return len(parts) > 0 || ret == "" }
+`),
+	}
+	src, targets, skipped, err := Export(root, "github.com/andreasfoo/go2lean/examples/strs", overlay, []Spec{
+		{Property: "p_join", Kind: contract.KindPostcondition, Spec: "SpecJoinAllLen", Target: "JoinAll"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || len(skipped) != 0 || !strings.Contains(src, "JoinAll(p0, p1...)") {
+		t.Fatalf("targets %v skipped %v\n%s", targets, skipped, src)
+	}
+}

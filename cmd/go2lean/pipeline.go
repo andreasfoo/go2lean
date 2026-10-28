@@ -149,6 +149,7 @@ func cmdRun(args []string) error {
 	resume := fs.Bool("resume", false, "skip properties already searched and counterexamples already verified in the workspace")
 	fuzzSpecs := fs.Bool("fuzz-specs", true, "read the packages' Go fuzz targets (FuzzXxx) as specs")
 	tests := fs.Bool("tests", false, "make the packages' test functions (TestXxx(t *testing.T)) targets")
+	specsOnly := fs.Bool("specs-only", false, "search the packages' specs only, not the no_panic templates")
 	compareOrder := fs.String("compare-order", "", "explicitly select a pure, deterministic, total func(string,string) int ordering comparator (experimental; one package)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
@@ -158,7 +159,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	env.Deps, env.Resume, env.FuzzSpecs, env.Tests = *deps, *resume, *fuzzSpecs, *tests
+	env.Deps, env.Resume, env.FuzzSpecs, env.Tests, env.SpecsOnly = *deps, *resume, *fuzzSpecs, *tests, *specsOnly
 	if *compareOrder != "" {
 		env, err = pipeline.ConfigureCompareOrder(w, env, *compareOrder, fs.Args()...)
 		if err != nil {

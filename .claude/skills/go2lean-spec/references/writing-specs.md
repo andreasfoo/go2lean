@@ -80,6 +80,11 @@ Read a function body only:
 
 ## Spec review checklist
 
+- Does it hold on the trivial inputs (zero values, empty strings and
+  slices, nil)? Run it on them in a plain Go test before searching. In
+  evaluation 5 most of the fuzzer's first failures were wrong specs at its
+  first, zero-value input, and a search stops at its first failure.
+
 - Does the spec recompute the function? Then it is a tautology: rewrite it
   as a relation or a comparison with a reference.
 - Does it quote the doc line it encodes?

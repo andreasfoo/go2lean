@@ -54,6 +54,10 @@ var goCrash = regexp.MustCompile(`(?m)^(panic|fatal error): (.*)$`)
 // The column is missing when the compiler reports a long type mismatch.
 var compileErr = regexp.MustCompile(`zz_go2lean_poc_\d+_test\.go:\d+(:\d+)?: .*`)
 
+// buildErr matches a compiler error in any file: the package (or its own
+// test files) did not build with the harness.
+var buildErr = regexp.MustCompile(`(?m)^\S+\.go:\d+(:\d+)?: .*$`)
+
 func Verify(ws contract.Workspace, root, cxID string) (*contract.Verdict, error) {
 	vs, err := VerifyAll(ws, root, []string{cxID}, nil)
 	if err != nil {
@@ -518,6 +522,8 @@ func verdictOf(p *prepared, results map[string]result, cmd string, exit int, std
 		reason, note := "harness_failed", "no GO2LEAN_RESULT line; see stdout/stderr"
 		if m := compileErr.FindString(stderr); m != "" {
 			reason, note = "harness_compile_error", m
+		} else if m := buildErr.FindString(stderr); m != "" && stdout == "" {
+			reason, note = "package_build_error", "the package's tests did not build: "+m
 		} else if exit != 0 {
 			reason, note = "target_exited", "the test binary ended without reporting (log.Fatal or os.Exit in the target?)"
 		}

@@ -116,6 +116,8 @@ func bwrapArgs(w, bin string) []string {
 // BuildTest compiles pkg's tests plus the given files (base name to
 // source, placed in pkgDir through an overlay) into the binary out. The
 // package directory is not written. stderr holds the compiler's errors.
+// vet is off: a package's own test files often fail a newer Go's vet, and
+// that is no reason not to run the harness.
 func BuildTest(root, pkg, pkgDir string, files map[string][]byte, out string, flags ...string) (stderr string, exit int, err error) {
 	tmp, err := os.MkdirTemp("", "go2lean-overlay-")
 	if err != nil {
@@ -135,7 +137,7 @@ func BuildTest(root, pkg, pkgDir string, files map[string][]byte, out string, fl
 	if err := os.WriteFile(ovPath, ov, 0o644); err != nil {
 		return "", 0, err
 	}
-	args := append([]string{"test", "-c", "-overlay", ovPath, "-o", out}, flags...)
+	args := append([]string{"test", "-c", "-vet=off", "-overlay", ovPath, "-o", out}, flags...)
 	cmd := exec.Command("go", append(args, pkg)...)
 	cmd.Dir = root
 	var eb bytes.Buffer

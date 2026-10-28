@@ -36,7 +36,7 @@ Construct-by-construct detail: [docs/semantics.md](../docs/semantics.md).
 **Standard library and SDKs** (✅ unless noted)
 - `strings`: `HasPrefix` `HasSuffix` `Contains` `Index*` `LastIndex*` `Count` `Cut` `Trim*` `ReplaceAll` `Split` `Fields` `Join` `Repeat` `Builder` `Replacer` (literal pairs); `TrimSpace` `ToLower` `ToUpper` `EqualFold` ASCII only 🟡
 - `strconv`: `Atoi` `Itoa` `ParseInt` `ParseUint` `ParseBool` `ParseFloat` (decimal; inf/NaN/hex 🟡) `FormatInt` `FormatUint`
-- `unicode/utf8`, `unicode/utf16`, `net/url`: translated from their Go source
+- `unicode/utf8`, `unicode/utf16`, `net/url`, `encoding/binary` (the functions a package calls, such as the varints): translated from their Go source
 - `encoding/json`: `Marshal`, `Unmarshal`, `Valid`, `Encoder` to a `strings.Builder`; `encoding/base64` standard encodings; `encoding/hex.EncodeToString`
 - `regexp` with constant patterns; `fmt.Sprintf` with `%s %d %v %t` 🟡 otherwise; `reflect` `ValueOf` `IsZero` `Kind` `IsNil`
 - `sync/atomic` integer types and functions (`LoadInt32`, `AddInt64`, `CompareAndSwapUint32`, ...)

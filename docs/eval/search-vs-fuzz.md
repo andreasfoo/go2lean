@@ -123,12 +123,14 @@ punctuation, a nested array path, and so on). That was judged by reading each
 trigger against the spec, after the run.
 
 What decided most cases was not the search:
-- **A's first counterexample was often a model artifact.** 11 of A's
-  counterexamples did not reproduce in Go (spurious): the run went through
-  havoc or an under-approximation (an unmodelled `encoding/binary.Uvarint`,
-  `regexp`, `reflect.DeepEqual`, floats, a stuck `strings.Builder`), yet
-  it was reported as a counterexample and ended the search. B never has
-  this problem: it runs the real code.
+- **A's counterexample was often a model artifact.** 11 of A's
+  counterexamples did not reproduce in Go (spurious). Each read havoc or
+  took an under-approximation (an unmodelled `encoding/binary.Uvarint`,
+  `regexp`, `reflect.DeepEqual`, floats, a stuck `strings.Builder`): the
+  random engine reports such a counterexample only as a fallback, when none
+  of its 2,000 trials gave a clean one. The model gaps on the target's
+  path, not an early stop, are the cause. B never has this problem: it runs
+  the real code.
 - **B's first failure was often a wrong spec.** 14 of B's failing inputs
   also fail at the fix commit, most of them at the fuzzer's first, zero-value
   input. A hit a wrong spec 3 times.
@@ -161,9 +163,8 @@ Floats: A found none of the three float defects; B found all three.
 
 ### Tool issues (stage 1 and harness, from this run)
 
-1. A counterexample that went through havoc or an assumption ends the
-   search like a real one; it should be set aside and the search go on
-   (11 spurious results).
+1. Model gaps on the targets' paths (11 spurious results, each a
+   havoc-dependent fallback after a clean search found nothing).
 2. `go test`'s vet is not turned off in the replay and the fuzz export; the
    failure is reported as "the target exited" (7 cases).
 3. `go2lean fuzz` skips variadic targets (2 cases).
@@ -184,6 +185,6 @@ the float ones, and none of its finds were model artifacts. go2lean found 3
 that the fuzzer did not reach within 5 minutes; each needed a specific
 combination of literals. The larger lesson is that both searches mostly
 stopped at the wrong thing: model artifacts for go2lean, wrong specs for the
-fuzzer. Fixing tool issue 1 (do not stop at a havoc-dependent
-counterexample) and checking specs against the fuzzer's trivial inputs
-before searching would have changed more outcomes than either search.
+fuzzer. Closing the model gaps on the targets' paths, and checking specs
+against trivial inputs before searching, would have changed more outcomes
+than either search.

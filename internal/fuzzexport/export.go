@@ -283,7 +283,7 @@ func (g *gen) target(s Spec) (string, error) {
 			tsig = m.Type().(*types.Signature)
 			nIn = tsig.Params().Len() + 1
 			call = func(args []string) string {
-				return fmt.Sprintf("%s.%s(%s)", args[0], method, strings.Join(args[1:], ", "))
+				return fmt.Sprintf("%s.%s(%s)", args[0], method, strings.Join(spread(tsig, args[1:]), ", "))
 			}
 		} else {
 			fn, ok := g.pkg.Scope().Lookup(name).(*types.Func)
@@ -292,10 +292,7 @@ func (g *gen) target(s Spec) (string, error) {
 			}
 			tsig = fn.Type().(*types.Signature)
 			nIn = tsig.Params().Len()
-			call = func(args []string) string { return fmt.Sprintf("%s(%s)", name, strings.Join(args, ", ")) }
-		}
-		if tsig.Variadic() {
-			return "", fmt.Errorf("target %s is variadic", name)
+			call = func(args []string) string { return fmt.Sprintf("%s(%s)", name, strings.Join(spread(tsig, args), ", ")) }
 		}
 		nRes = tsig.Results().Len()
 		for i := 0; i < nRes; i++ {
@@ -356,4 +353,15 @@ func (g *gen) target(s Spec) (string, error) {
 	}
 	fmt.Fprintf(&b, "\t\tif !%s(%s) {\n\t\t\tt.Fatalf(\"go2lean: %s is false\")\n\t\t}\n\t})\n}\n", s.Spec, strings.Join(specArgs, ", "), s.Spec)
 	return b.String(), nil
+}
+
+// spread passes a variadic target's last argument, a slice like the spec's
+// parameter, as its variadic parameter.
+func spread(sig *types.Signature, args []string) []string {
+	if !sig.Variadic() || len(args) == 0 {
+		return args
+	}
+	out := append([]string{}, args...)
+	out[len(out)-1] += "..."
+	return out
 }
