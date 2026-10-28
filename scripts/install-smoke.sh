@@ -61,14 +61,21 @@ isolated() {
   local network=$1
   shift
   local net_args=()
-  if [[ "$network" == online ]]; then net_args=(--share-net); fi
+  if [[ "$network" != online ]]; then net_args=(--unshare-net); fi
   local env_args=()
   for pair in "${CLEAN_ENV[@]}"; do
     env_args+=(--setenv "${pair%%=*}" "${pair#*=}")
   done
-  bwrap --ro-bind / / --dev /dev --proc /proc --clearenv \
+  # go2lean starts its own bwrap sandboxes inside this one (doctor's
+  # comparator probe, Lean checks, replay), and those mount a fresh /proc.
+  # The kernel refuses that under an outer PID namespace with its own /proc
+  # ("Can't mount proc ... Operation not permitted"), so this layer keeps the
+  # host PID namespace and /proc. It still hides the checkout and, offline,
+  # the network.
+  bwrap --ro-bind / / --dev /dev --bind /proc /proc --clearenv \
     --bind "$WS" "$WS" --tmpfs "$ROOT" --chdir "$MODULE" \
-    --unshare-all "${net_args[@]}" --die-with-parent \
+    --unshare-user --unshare-ipc --unshare-uts --unshare-cgroup-try \
+    "${net_args[@]}" --die-with-parent \
     "${env_args[@]}" \
     --setenv GOCACHE "$WS/go-build" \
     --setenv GOMODCACHE "$WS/target-modules" \

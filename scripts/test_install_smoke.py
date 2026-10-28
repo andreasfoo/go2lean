@@ -17,9 +17,9 @@ name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == "bwrap":
     assert "--clearenv" in args
-    assert "--unshare-all" in args
+    assert "--unshare-user" in args
     assert "--tmpfs" in args
-    online = "--share-net" in args
+    online = "--unshare-net" not in args
     env = {}
     module = None
     i = 0
