@@ -38,6 +38,14 @@ case "$MODULE/" in "$ROOT/"*) echo 'module must be outside checkout' >&2; exit 1
 case "$WS/" in "$ROOT/"*) echo 'results must be outside checkout' >&2; exit 1;; esac
 case "$MODULE/" in "$WS/"*) echo 'module and results must not overlap' >&2; exit 1;; esac
 case "$WS/" in "$MODULE/"*) echo 'module and results must not overlap' >&2; exit 1;; esac
+# On failure, show the stage's own log: CI keeps it only as an artifact.
+on_error() {
+  local rc=$? last
+  last=$(ls -t "$WS"/*.log 2>/dev/null | head -n 1)
+  echo "install-smoke failed (exit $rc)${last:+; last log: $last}" >&2
+  [[ -n "$last" ]] && tail -n 60 "$last" >&2
+}
+trap on_error ERR
 mkdir -p "$WS/bin" "$WS/tmp" "$WS/go-build" "$WS/home" \
   "$WS/install-modules" "$WS/install-go-build" "$WS/target-modules"
 # Toolchains are explicit prerequisites, not evidence of fresh installation.
