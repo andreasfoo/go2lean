@@ -140,6 +140,16 @@ and records real-world case studies. CI pins expected regression outcomes and re
 every differential property and requested seed;
 these checks are evidence, not a general correctness guarantee.
 
+**Concurrency, on GoKer** (the kernel half of GoBench: 103 small programs
+extracted from real concurrency bugs in Kubernetes, etcd, gRPC, Docker,
+CockroachDB and others). With each kernel's test as the target, go2lean
+finds and `go test` confirms the bug in **60 of the 68 blocking kernels**
+(deadlocks, goroutine leaks) and **27 of the 35 non-blocking ones** (24 of
+them data races), with 4 spurious results across all 103
+([details](docs/concurrency.md#goker)). About 6 of the blocking bugs show
+up in Go only with the model's schedule replayed. GoKer is small (a median of 86 lines a kernel) and dates from 2021;
+recent concurrency bugs in real projects are measured next.
+
 [Validation and regression cases](docs/validation.md) ·
 [semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md) ·
 [proofs on real code](docs/eval/prove-blind.md) ·
