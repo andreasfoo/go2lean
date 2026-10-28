@@ -1,0 +1,128 @@
+package version
+
+import (
+	"strconv"
+	"strings"
+)
+
+// ident makes a SemVer pre-release identifier from s: [0-9A-Za-z-], at most
+// 5 characters, numeric ones without leading zeros.
+func ident(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '-' {
+			b.WriteRune(r)
+			if b.Len() == 5 {
+				break
+			}
+		}
+	}
+	id := b.String()
+	if id == "" {
+		return "a"
+	}
+	if n, err := strconv.Atoi(id); err == nil && n >= 0 && !strings.HasPrefix(id, "-") {
+		return strconv.Itoa(n)
+	}
+	return id
+}
+
+func isNum(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func cmpInt(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+// semverCmp is SemVer 2.0.0 section 11 precedence.
+func semverCmp(a, b [3]int, pa, pb []string) int {
+	for i := 0; i < 3; i++ {
+		if c := cmpInt(a[i], b[i]); c != 0 {
+			return c
+		}
+	}
+	if len(pa) == 0 || len(pb) == 0 {
+		return -cmpInt(len(pa), len(pb)) // no pre-release ranks higher
+	}
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		x, y := pa[i], pb[i]
+		switch {
+		case isNum(x) && isNum(y):
+			nx, _ := strconv.Atoi(x)
+			ny, _ := strconv.Atoi(y)
+			if c := cmpInt(nx, ny); c != 0 {
+				return c
+			}
+		case isNum(x):
+			return -1
+		case isNum(y):
+			return 1
+		default:
+			if c := strings.Compare(x, y); c != 0 {
+				return c
+			}
+		}
+	}
+	return cmpInt(len(pa), len(pb))
+}
+
+// go2lean:sequence Version.Compare
+// SeqCompareSemver: "Compare compares this version to another version. This
+// returns -1, 0, or 1 if this version is smaller, equal, or larger than the
+// other version, respectively." For SemVer versions MAJOR.MINOR.PATCH with
+// an optional pre-release, the order is SemVer 2.0.0's precedence (section
+// 11): numeric identifiers compare numerically, alphanumeric ones in ASCII
+// order, numeric ones are lower than alphanumeric ones, a larger set of
+// identifiers is higher when all before are equal, and a pre-release is
+// lower than the normal version.
+func SeqCompareSemver(core []uint8, pa, pb []string) bool {
+	_ = specSeeds()
+	var a, b [3]int
+	for i := 0; i < 3; i++ {
+		if i < len(core) {
+			a[i] = int(core[i] % 4)
+		}
+		if i+3 < len(core) {
+			b[i] = int(core[i+3] % 4)
+		}
+	}
+	norm := func(p []string) []string {
+		var out []string
+		for i := 0; i < len(p) && i < 3; i++ {
+			out = append(out, ident(p[i]))
+		}
+		return out
+	}
+	pa, pb = norm(pa), norm(pb)
+	str := func(v [3]int, p []string) string {
+		s := strconv.Itoa(v[0]) + "." + strconv.Itoa(v[1]) + "." + strconv.Itoa(v[2])
+		if len(p) > 0 {
+			s += "-" + strings.Join(p, ".")
+		}
+		return s
+	}
+	va, err := NewVersion(str(a, pa))
+	if err != nil {
+		return false
+	}
+	vb, err := NewVersion(str(b, pb))
+	if err != nil {
+		return false
+	}
+	return va.Compare(vb) == semverCmp(a, b, pa, pb)
+}
+
+// specSeeds are literals for the search: SemVer's own examples.
+func specSeeds() []string { return []string{"alpha", "beta", "rc", "1", "11", "2", "0", "x-y", "alpha1"} }

@@ -1,0 +1,24 @@
+package metrics
+
+// go2lean:spec SorensenDice.Compare
+// SpecSorensenDiceDoc: "Compare returns the Sorensen-Dice similarity
+// coefficient of a and b. The returned similarity is a number between 0
+// and 1. Larger similarity numbers indicate closer matches." The
+// coefficient (2|X ∩ Y| / (|X| + |Y|)) is symmetric, and a string is a
+// perfect match for itself.
+func SpecSorensenDiceDoc(m *SorensenDice, a, b string, ret float64) bool {
+	_ = specSeeds()
+	if m == nil || m.NgramSize < 0 || m.NgramSize > 4 {
+		return true
+	}
+	if !(ret >= 0 && ret <= 1) {
+		return false
+	}
+	if m.Compare(b, a) != ret {
+		return false
+	}
+	return len(a) < 4 || m.Compare(a, a) == 1
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"night", "nacht", "aaaa", "abab", "ab", "日本"} }

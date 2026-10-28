@@ -1,0 +1,23 @@
+package snappy
+
+import "bytes"
+
+// go2lean:spec Decode
+// SpecDecodeDoc: "Decode returns the decoded form of src" and "Encode
+// returns the encoded form of src": decoding what Encode produced gives the
+// data back, and a block Decode accepts decodes to the length its preamble
+// states ("DecodedLen returns the length of the decoded block").
+func SpecDecodeDoc(dst, src []byte, ret0 []byte, ret1 error) bool {
+	if ret1 == nil {
+		n, err := DecodedLen(src)
+		if err != nil || len(ret0) != n {
+			return false
+		}
+	}
+	enc, err := Encode(nil, src)
+	if err != nil {
+		return false
+	}
+	dec, err := Decode(nil, enc)
+	return err == nil && bytes.Equal(dec, src)
+}

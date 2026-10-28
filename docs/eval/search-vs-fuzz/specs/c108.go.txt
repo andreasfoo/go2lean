@@ -1,0 +1,141 @@
+package jsonparser
+
+import (
+	"encoding/json"
+	"reflect"
+	"strconv"
+	"strings"
+)
+
+// jkey makes a JSON object key from s: printable ASCII without quotes or
+// backslashes, at most 6 bytes; "k" when empty.
+func jkey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r > ' ' && r < 0x7f && r != '"' && r != '\\' {
+			b.WriteRune(r)
+			if b.Len() == 6 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "k"
+	}
+	return b.String()
+}
+
+// go2lean:sequence Get
+// SeqGetAgreesWithEncodingJSON: Get "Receives data structure, and key path
+// to extract value from. Returns: `value` - Pointer to original data
+// structure containing key value ... `dataType` - Can be: `NotExist`,
+// `String`, `Number`, `Object`, `Array`, `Boolean` or `Null` ... `err` - If
+// key not found or any other parsing issue it should return error. If key
+// not found it also sets `dataType` to `NotExist`. Accept multiple keys to
+// specify path to JSON value (in case of quering nested structures)."
+// Reference: RFC 8259 (insignificant whitespace may surround any value or
+// structural character) and encoding/json, on a document built from the
+// inputs: an object with three keys, each value a scalar or an object, with
+// whitespace between tokens.
+func SeqGetAgreesWithEncodingJSON(keys []string, vals []int, nested, ws, sel int) bool {
+	_ = specSeeds()
+	k := [4]string{"a", "b", "c", "x"}
+	for i := 0; i < 4 && i < len(keys); i++ {
+		k[i] = jkey(keys[i])
+	}
+	for i := 1; i < 4; i++ { // distinct keys at each level
+		for j := 0; j < i; j++ {
+			if k[i] == k[j] {
+				k[i] += strconv.Itoa(i)
+			}
+		}
+	}
+	spaces := []string{"", " ", "\n", "\t", "\r\n ", "  "}
+	bit := 0
+	sp := func() string {
+		bit++
+		return spaces[(ws>>uint(bit%30)&7)%len(spaces)]
+	}
+	scalar := func(i int) string {
+		v := 0
+		if i < len(vals) {
+			v = vals[i]
+		}
+		switch (v%6 + 6) % 6 {
+		case 0:
+			return strconv.Itoa(v)
+		case 1:
+			return `"s` + strconv.Itoa(v) + `"`
+		case 2:
+			return "true"
+		case 3:
+			return "null"
+		case 4:
+			return "[" + sp() + "1" + sp() + "," + sp() + `"x"` + sp() + "]"
+		default:
+			return "-1.5e3"
+		}
+	}
+	var doc strings.Builder
+	doc.WriteString(sp() + "{")
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			doc.WriteString(sp() + ",")
+		}
+		doc.WriteString(sp() + `"` + k[i] + `"` + sp() + ":" + sp())
+		if nested>>uint(i)&1 == 1 {
+			doc.WriteString("{" + sp() + `"` + k[3] + `"` + sp() + ":" + sp() + scalar(i+3) + sp() + "}")
+		} else {
+			doc.WriteString(scalar(i))
+		}
+	}
+	doc.WriteString(sp() + "}" + sp())
+	data := doc.String()
+	var root map[string]interface{}
+	if json.Unmarshal([]byte(data), &root) != nil {
+		return true
+	}
+	s := (sel%24 + 24) % 24
+	path := []string{k[s%3]}
+	if (s/3)%2 == 1 {
+		path = append(path, k[3])
+	}
+	if s/6 == 0 {
+		path[len(path)-1] += "z" // a key that is not there
+	}
+	// The expected value, by encoding/json.
+	var want interface{} = root
+	found := true
+	for _, p := range path {
+		m, ok := want.(map[string]interface{})
+		if !ok {
+			found = false
+			break
+		}
+		if want, ok = m[p]; !ok {
+			found = false
+			break
+		}
+	}
+	value, dataType, _, err := Get([]byte(data), path...)
+	if !found {
+		return err != nil && dataType == NotExist
+	}
+	if err != nil {
+		return false
+	}
+	var got interface{}
+	if dataType == String {
+		var str string
+		if json.Unmarshal([]byte(`"`+string(value)+`"`), &str) != nil {
+			return false
+		}
+		got = str
+	} else if json.Unmarshal(value, &got) != nil {
+		return false
+	}
+	return reflect.DeepEqual(got, want)
+}
+
+// specSeeds are literals for the search: keys that prefix each other.
+func specSeeds() []string { return []string{"a", "ab", "abc", "b", "key", "kéy", "x"} }

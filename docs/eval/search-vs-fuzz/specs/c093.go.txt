@@ -1,0 +1,159 @@
+package version
+
+import (
+	"strconv"
+	"strings"
+)
+
+// specDebPart keeps the characters of s allowed in a Debian version part (at
+// most 6): letters, digits and the given punctuation.
+func specDebPart(s, punct, fallback string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || strings.ContainsRune(punct, r) {
+			b.WriteRune(r)
+			if b.Len() == 6 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return fallback
+	}
+	return b.String()
+}
+
+func specIsDigit(c byte) bool { return c >= '0' && c <= '9' }
+func specIsAlpha(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+
+// specOrder is dpkg's: '~' before everything, even the end of the part; letters
+// before non-letters.
+func specOrder(s string, i int) int {
+	if i >= len(s) {
+		return 0
+	}
+	c := s[i]
+	switch {
+	case specIsDigit(c):
+		return 0
+	case specIsAlpha(c):
+		return int(c)
+	case c == '~':
+		return -1
+	default:
+		return int(c) + 256
+	}
+}
+
+// specVerrevcmp is the comparison of Debian Policy 5.6.12 (dpkg's verrevcmp).
+func specVerrevcmp(a, b string) int {
+	i, j := 0, 0
+	for i < len(a) || j < len(b) {
+		firstDiff := 0
+		for (i < len(a) && !specIsDigit(a[i])) || (j < len(b) && !specIsDigit(b[j])) {
+			ac, bc := specOrder(a, i), specOrder(b, j)
+			if ac != bc {
+				return ac - bc
+			}
+			i++
+			j++
+		}
+		for i < len(a) && a[i] == '0' {
+			i++
+		}
+		for j < len(b) && b[j] == '0' {
+			j++
+		}
+		for i < len(a) && specIsDigit(a[i]) && j < len(b) && specIsDigit(b[j]) {
+			if firstDiff == 0 {
+				firstDiff = int(a[i]) - int(b[j])
+			}
+			i++
+			j++
+		}
+		if i < len(a) && specIsDigit(a[i]) {
+			return 1
+		}
+		if j < len(b) && specIsDigit(b[j]) {
+			return -1
+		}
+		if firstDiff != 0 {
+			return firstDiff
+		}
+	}
+	return 0
+}
+
+func specSign(n int) int {
+	if n < 0 {
+		return -1
+	}
+	if n > 0 {
+		return 1
+	}
+	return 0
+}
+
+type specDebVer struct {
+	epoch              int
+	upstream, revision string
+}
+
+func (v specDebVer) String() string {
+	s := v.upstream
+	if v.revision != "" {
+		s += "-" + v.revision
+	}
+	if v.epoch > 0 {
+		s = strconv.Itoa(v.epoch) + ":" + s
+	}
+	return s
+}
+
+func specDebCmp(a, b specDebVer) int {
+	if a.epoch != b.epoch {
+		return specSign(a.epoch - b.epoch)
+	}
+	if c := specVerrevcmp(a.upstream, b.upstream); c != 0 {
+		return specSign(c)
+	}
+	return specSign(specVerrevcmp(a.revision, b.revision))
+}
+
+// go2lean:sequence Version.Compare
+// SeqCompareDebian: "Compare returns an integer comparing two version
+// according to deb-version. The result will be 0 if v1==v2, -1 if v1 < v2,
+// and +1 if v1 > v2." The order is Debian Policy 5.6.12's: epochs
+// numerically, then the upstream version and the revision, each compared
+// part by part: non-digit parts by a modified ASCII order in which letters
+// sort before non-letters and a tilde before anything, even the end of the
+// part; digit parts numerically.
+func SeqCompareDebian(e1, e2 uint8, u1, u2, r1, r2 string) bool {
+	_ = specSeeds()
+	mk := func(e uint8, u, r string) specDebVer {
+		v := specDebVer{epoch: int(e % 3), revision: specDebPart(r, ".+~", "")}
+		punct := ".+~"
+		if v.revision != "" {
+			punct = ".+~-"
+		}
+		u = specDebPart(u, punct, "0")
+		if !specIsDigit(u[0]) {
+			u = "1" + u
+		}
+		v.upstream = u
+		return v
+	}
+	a, b := mk(e1, u1, r1), mk(e2, u2, r2)
+	va, err := NewVersion(a.String())
+	if err != nil {
+		return true
+	}
+	vb, err := NewVersion(b.String())
+	if err != nil {
+		return true
+	}
+	return va.Compare(vb) == specDebCmp(a, b)
+}
+
+// specSeeds are literals for the search: Debian's own ordering examples.
+func specSeeds() []string { return []string{"~", "~~", "~~a", "a", "1.0", "1.0~rc1", "1.0+b1", "2", "10", "0"} }

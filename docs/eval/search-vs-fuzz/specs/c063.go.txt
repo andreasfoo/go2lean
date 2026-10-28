@@ -1,0 +1,46 @@
+package markdown
+
+import "strings"
+
+// token keeps s's characters except whitespace and characters with meaning
+// in Markdown or HTML (at most 8), so the generated text is one plain word
+// that may contain punctuation.
+func token(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r <= ' ' || r >= 0x7f || strings.ContainsRune("*_`<>&[]\\\"':!#|~=+-{}", r) {
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() == 8 {
+			break
+		}
+	}
+	if b.Len() == 0 {
+		return "foo"
+	}
+	return b.String()
+}
+
+// go2lean:sequence ToHTML
+// SeqEmphasis: CommonMark, "Emphasis and strong emphasis": a delimiter run
+// of * or _ preceded by whitespace and not followed by whitespace is
+// left-flanking and can open emphasis; one followed by whitespace and not
+// preceded by whitespace is right-flanking and can close it. One delimiter
+// gives <em>, two give <strong>. ToHTML with nil parser and renderer uses
+// the common extensions and flags.
+func SeqEmphasis(w string, kind int) bool {
+	_ = specSeeds()
+	w = token(w)
+	delims := []string{"*", "_", "**", "__"}
+	d := delims[(kind%4+4)%4]
+	tag := "em"
+	if len(d) == 2 {
+		tag = "strong"
+	}
+	out := string(ToHTML([]byte("x "+d+w+d+" y\n"), nil, nil))
+	return strings.Contains(out, "<"+tag+">"+w+"</"+tag+">")
+}
+
+// specSeeds are literals for the search: words with punctuation.
+func specSeeds() []string { return []string{"foo", "(foo)", "foo.", ".foo", "a,b", "1.2", "$x", "%", "foo?"} }

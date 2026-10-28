@@ -1,0 +1,21 @@
+package snappy
+
+import "encoding/binary"
+
+// go2lean:spec DecodedLen
+// SpecDecodedLenPreamble: "DecodedLen returns the length of the decoded
+// block." Snappy's format description: the stream starts with the length of
+// the uncompressed data, stored as a little-endian varint, which "may not be
+// larger than 2^32 - 1". So a valid preamble gives its value, and a missing,
+// malformed or too large one is an error.
+func SpecDecodedLenPreamble(src []byte, ret0 int, ret1 error) bool {
+	_ = specSeeds()
+	n, k := binary.Uvarint(src)
+	if k <= 0 || n > 0xffffffff {
+		return ret1 != nil
+	}
+	return ret1 == nil && ret0 == int(n)
+}
+
+// specSeeds are literals for the search: varint bytes and boundaries.
+func specSeeds() []int { return []int{0x7f, 0x80, 0xff, 0xffffffff, 0x100000000, 1 << 31} }

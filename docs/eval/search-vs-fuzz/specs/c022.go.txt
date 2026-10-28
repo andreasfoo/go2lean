@@ -1,0 +1,35 @@
+package language
+
+// go2lean:sequence CanonType.Canonicalize
+// SeqCanonicalizeDoc: "Canonicalize returns the canonicalized equivalent of
+// the tag", and c.Parse's doc: "The resulting tag is canonicalized using the
+// canonicalization type c." So canonicalizing a raw parse with c gives what
+// c.Parse gives, and canonicalizing again changes nothing.
+func SeqCanonicalizeDoc(mask int, s string) bool {
+	_ = specSeeds()
+	c := CanonType(mask) & (All | CLDR)
+	raw, err := Raw.Parse(s)
+	if err != nil {
+		return true
+	}
+	got, err := c.Canonicalize(raw)
+	if err != nil {
+		return true
+	}
+	want, err := c.Parse(s)
+	if err != nil {
+		return true
+	}
+	if got.String() != want.String() {
+		return false
+	}
+	again, err := c.Canonicalize(got)
+	return err == nil && again.String() == got.String()
+}
+
+// specSeeds are literals for the search: BCP 47 tags, with deprecated,
+// legacy, macro-language and redundant-script subtags.
+func specSeeds() []string {
+	return []string{"en", "en-US", "zh-Hant-TW", "cmn", "iw", "in", "sh", "mo", "no", "nb", "tl", "fil",
+		"en-Latn", "sr-Latn", "art-lojban", "i-klingon", "zh-min-nan", "de-DD", "en-BU", "und", "x-foo", "en-u-co-phonebk"}
+}

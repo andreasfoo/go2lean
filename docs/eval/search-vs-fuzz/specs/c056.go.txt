@@ -1,0 +1,26 @@
+package slice
+
+// go2lean:sequence LastIndexOf
+// SeqLastIndexOfDoc: "LastIndexOf returns the index at which the last
+// occurrence of the item is found in a slice or return -1 if the then cannot
+// be found."
+func SeqLastIndexOfDoc(xs []int, x int) bool {
+	i := LastIndexOf(xs, x)
+	if i == -1 {
+		for _, v := range xs {
+			if v == x {
+				return false
+			}
+		}
+		return true
+	}
+	if i < 0 || i >= len(xs) || xs[i] != x {
+		return false
+	}
+	for _, v := range xs[i+1:] {
+		if v == x {
+			return false
+		}
+	}
+	return true
+}

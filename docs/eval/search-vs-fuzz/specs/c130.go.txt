@@ -1,0 +1,33 @@
+package phonenumbers
+
+import "strconv"
+
+// go2lean:sequence Parse
+// SeqParseExtension: Parse "Parses a string and returns it in proto buffer
+// format"; PhoneNumber.Extension holds the extension, "a series of numbers
+// with a maximum length of 40 digits". Reference: Google libphonenumber's
+// PhoneNumberUtil.parse, which reads an extension written after the number
+// with the usual markers ("ext", "ext.", "x", "extn", "#"), keeps the
+// national number as it is without the extension, and stores the
+// extension's digits.
+func SeqParseExtension(which, marker int, ext uint32) bool {
+	_ = specSeeds()
+	numbers := [][2]string{{"03 331 6005", "NZ"}, {"+1 650 253 0000", "US"}, {"020 7031 3000", "GB"}, {"(650) 253-0000", "US"}}
+	markers := []string{" ext. ", " ext ", " x", " x ", " extn. ", " #", "#", " Ext. ", " EXT "}
+	n := numbers[(which%len(numbers)+len(numbers))%len(numbers)]
+	m := markers[(marker%len(markers)+len(markers))%len(markers)]
+	e := strconv.FormatUint(uint64(ext%10000000), 10)
+	base, err := Parse(n[0], n[1])
+	if err != nil {
+		return false
+	}
+	num, err := Parse(n[0]+m+e, n[1])
+	if err != nil {
+		return false
+	}
+	return num.GetExtension() == e && num.GetNationalNumber() == base.GetNationalNumber() &&
+		num.GetCountryCode() == base.GetCountryCode()
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"1", "0", "123", "4567"} }

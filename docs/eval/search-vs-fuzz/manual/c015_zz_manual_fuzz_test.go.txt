@@ -1,0 +1,20 @@
+package gjson
+
+import (
+	"strings"
+	"testing"
+)
+
+// Evaluation 5, arm B by hand: go2lean fuzz skips variadic targets. The
+// paths are the fuzzer's string split at zero bytes.
+func FuzzManualGetMany(f *testing.F) {
+	f.Fuzz(func(t *testing.T, json string, raw string) {
+		paths := strings.Split(raw, "\x00")
+		if raw == "" {
+			paths = nil
+		}
+		if !SpecGetManyAgreesWithGet(json, paths, GetMany(json, paths...)) {
+			t.Fatalf("SpecGetManyAgreesWithGet is false")
+		}
+	})
+}

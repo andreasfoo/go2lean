@@ -145,7 +145,8 @@ these checks are evidence, not a general correctness guarantee.
 [proofs on real code](docs/eval/prove-blind.md) ·
 [proofs on panic fixes](docs/eval/prove-fixes.md) ·
 [concurrency evaluation](docs/eval/conc.md) ·
-[what defects Go code has](docs/eval/go-defects.md)
+[what defects Go code has](docs/eval/go-defects.md) ·
+[go2lean's search against fuzzing](docs/eval/search-vs-fuzz.md)
 
 ## Documentation
 

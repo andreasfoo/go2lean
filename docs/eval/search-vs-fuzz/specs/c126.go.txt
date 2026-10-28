@@ -1,0 +1,105 @@
+package purell
+
+import "strings"
+
+// rfcRemoveDotSegments is RFC 3986 section 5.2.4's algorithm.
+func rfcRemoveDotSegments(in string) string {
+	out := ""
+	for in != "" {
+		switch {
+		case strings.HasPrefix(in, "../"):
+			in = in[3:]
+		case strings.HasPrefix(in, "./"):
+			in = in[2:]
+		case strings.HasPrefix(in, "/./"):
+			in = in[2:]
+		case in == "/.":
+			in = "/"
+		case strings.HasPrefix(in, "/../"):
+			in = in[3:]
+			if i := strings.LastIndex(out, "/"); i >= 0 {
+				out = out[:i]
+			} else {
+				out = ""
+			}
+		case in == "/..":
+			in = "/"
+			if i := strings.LastIndex(out, "/"); i >= 0 {
+				out = out[:i]
+			} else {
+				out = ""
+			}
+		case in == "." || in == "..":
+			in = ""
+		default:
+			start := 0
+			if in[0] == '/' {
+				start = 1
+			}
+			j := strings.Index(in[start:], "/")
+			if j < 0 {
+				out += in
+				in = ""
+			} else {
+				out += in[:start+j]
+				in = in[start+j:]
+			}
+		}
+	}
+	return out
+}
+
+// go2lean:sequence NormalizeURLString
+// SeqRemoveDotSegments: "NormalizeURLString returns the normalized string
+// ... It takes an URL string as input, as well as the normalization flags",
+// with FlagRemoveDotSegments. Reference: RFC 3986 section 6.2.2.3 (path
+// segment normalization) by section 5.2.4's remove_dot_segments, on paths
+// made of ".", "..", empty and plain segments.
+func SeqRemoveDotSegments(segs []int, names []string) bool {
+	_ = specSeeds()
+	if len(segs) == 0 {
+		return true
+	}
+	var path strings.Builder
+	for i, s := range segs {
+		if i == 6 {
+			break
+		}
+		path.WriteString("/")
+		switch (s%4 + 4) % 4 {
+		case 0:
+			path.WriteString(".")
+		case 1:
+			path.WriteString("..")
+		case 2:
+			name := "seg"
+			if i < len(names) {
+				name = pWord(names[i], "seg")
+			}
+			path.WriteString(name)
+		}
+	}
+	p := path.String()
+	got, err := NormalizeURLString("http://example.com"+p, FlagRemoveDotSegments)
+	return err == nil && got == "http://example.com"+rfcRemoveDotSegments(p)
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"a", "b", "c", "index", "x"} }
+
+// pWord keeps the lowercase letters and digits of s (at most 6).
+func pWord(s, fallback string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() == 6 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return fallback
+	}
+	return b.String()
+}

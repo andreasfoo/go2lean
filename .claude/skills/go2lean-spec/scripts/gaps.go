@@ -14,7 +14,7 @@
 //   - the model report's issues for each property's target function.
 //
 // Gaps are ordered by the number of written specs they affected, then by
-// all properties (template properties such as no_panic included).
+// all properties (the no_panic templates included).
 package main
 
 import (
@@ -31,7 +31,7 @@ import (
 type property struct {
 	ID     string `json:"id"`
 	Target string `json:"target"`
-	Source string `json:"source"`
+	Kind   string `json:"kind"`
 }
 
 type target struct {
@@ -308,7 +308,7 @@ func print() {
 		var ids []string
 		for id := range g.props {
 			ids = append(ids, id)
-			if p, ok := props[id]; ok && p.Source != "template" {
+			if p, ok := props[id]; ok && p.Kind != "no_panic" {
 				r.specs++
 			}
 		}

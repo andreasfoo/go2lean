@@ -1,0 +1,27 @@
+package gjson
+
+// go2lean:spec GetMany
+// SpecGetManyAgreesWithGet: "GetMany searches json for the multiple paths.
+// The return value is a Result array where the number of items will be
+// equal to the number of input paths." Each item is what Get returns for
+// that path.
+func SpecGetManyAgreesWithGet(json string, paths []string, ret []Result) bool {
+	_ = specSeeds()
+	if len(ret) != len(paths) {
+		return false
+	}
+	for i, p := range paths {
+		want := Get(json, p)
+		if ret[i].Type != want.Type || ret[i].Raw != want.Raw || ret[i].Str != want.Str {
+			return false
+		}
+	}
+	return true
+}
+
+// specSeeds are literals for the search: JSON documents and paths from the
+// package documentation.
+func specSeeds() []string {
+	return []string{`{"name":{"first":"Tom","last":"Anderson"},"age":37,"children":["Sara","Alex","Jack"]}`,
+		"name.last", "age", "children", "children.#", "children.1", "child*.2", "c?ildren.0", "name", "first"}
+}
