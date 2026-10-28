@@ -147,9 +147,8 @@ finds and `go test` confirms the bug in **60 of the 68 blocking kernels**
 (deadlocks, goroutine leaks) and **27 of the 35 non-blocking ones** (24 of
 them data races), with 4 spurious results across all 103
 ([details](docs/concurrency.md#goker)). About 6 of the blocking bugs show
-up in Go only with the model's schedule replayed. How plain
-`go test -race` and goleak, run many times, do on the same kernels:
-[evaluation 6](docs/eval/goker-baseline.md).
+up in Go only with the model's schedule replayed. GoKer is small (a median of 86 lines a kernel) and dates from 2021;
+recent concurrency bugs in real projects are measured next.
 
 [Validation and regression cases](docs/validation.md) ·
 [semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md) ·
