@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/andreasfoo/go2lean/internal/constraint"
 	"github.com/andreasfoo/go2lean/internal/contract"
@@ -150,6 +151,7 @@ func cmdRun(args []string) error {
 	fuzzSpecs := fs.Bool("fuzz-specs", true, "read the packages' Go fuzz targets (FuzzXxx) as specs")
 	tests := fs.Bool("tests", false, "make the packages' test functions (TestXxx(t *testing.T)) targets")
 	specsOnly := fs.Bool("specs-only", false, "search the packages' specs only, not the no_panic templates")
+	runRe := fs.String("run", "", "search only the properties of target functions matching this regexp (as go test -run; methods as T.M)")
 	compareOrder := fs.String("compare-order", "", "explicitly select a pure, deterministic, total func(string,string) int ordering comparator (experimental; one package)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
@@ -160,6 +162,13 @@ func cmdRun(args []string) error {
 		return err
 	}
 	env.Deps, env.Resume, env.FuzzSpecs, env.Tests, env.SpecsOnly = *deps, *resume, *fuzzSpecs, *tests, *specsOnly
+	if *runRe != "" {
+		re, err := regexp.Compile(*runRe)
+		if err != nil {
+			return fmt.Errorf("run: -run: %v", err)
+		}
+		env.Run = re
+	}
 	if *compareOrder != "" {
 		env, err = pipeline.ConfigureCompareOrder(w, env, *compareOrder, fs.Args()...)
 		if err != nil {
