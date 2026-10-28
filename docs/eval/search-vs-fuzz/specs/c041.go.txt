@@ -1,0 +1,53 @@
+package xstrings
+
+import "strings"
+
+// letters keeps the lowercase ASCII letters of s (at most 6); "xy" if fewer
+// than two.
+func letters(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+			if b.Len() == 6 {
+				break
+			}
+		}
+	}
+	if b.Len() < 2 {
+		return "xy"
+	}
+	return b.String()
+}
+
+// go2lean:sequence ToSnakeCase
+// SeqToSnakeCaseDoc: "ToSnakeCase can convert all upper case characters in
+// a string to snake case format", with the samples
+//   "FirstName" => "first_name", "GO_PATH" => "go_path",
+//   "GO PATH" => "go_path" (space is converted to underscore),
+//   "GO-PATH" => "go_path" (hyphen is converted to underscore);
+// and ToCamelCase's samples "some_words" => "SomeWords", "http_server" =>
+// "HttpServer". For words of two or more letters: capitalized and
+// concatenated, or upper-cased and joined by a space, hyphen or underscore,
+// they snake-case to the words joined by underscores.
+func SeqToSnakeCaseDoc(words []string, sep int) bool {
+	_ = specSeeds()
+	if len(words) == 0 {
+		return true
+	}
+	ws := make([]string, len(words))
+	var camel strings.Builder
+	for i, w := range words {
+		ws[i] = letters(w)
+		camel.WriteString(strings.ToUpper(ws[i][:1]) + ws[i][1:])
+	}
+	want := strings.Join(ws, "_")
+	if ToSnakeCase(camel.String()) != want {
+		return false
+	}
+	s := []string{" ", "-", "_"}[(sep%3+3)%3]
+	return ToSnakeCase(strings.ToUpper(strings.Join(ws, s))) == want
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"first", "name", "go", "path", "http", "server"} }

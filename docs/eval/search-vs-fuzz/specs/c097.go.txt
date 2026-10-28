@@ -1,0 +1,30 @@
+package js
+
+import parse "github.com/tdewolff/parse/v2"
+
+// go2lean:sequence AST.JSString
+// SeqJSStringReparses: JSString "returns a string of JavaScript" for the
+// AST, "the full ECMAScript abstract syntax tree". Reference: the ECMAScript
+// specification, under which printed JavaScript must be a program that
+// parses to the same tree: printing, parsing the print and printing again
+// changes nothing, and the two trees are the same.
+func SeqJSStringReparses(src string) bool {
+	_ = specSeeds()
+	ast1, err := Parse(parse.NewInputString(src), Options{})
+	if err != nil {
+		return true
+	}
+	js1 := ast1.JSString()
+	ast2, err := Parse(parse.NewInputString(js1), Options{})
+	if err != nil {
+		return false
+	}
+	return ast2.JSString() == js1 && ast2.String() == ast1.String()
+}
+
+// specSeeds are literals for the search: JavaScript fragments.
+func specSeeds() []string {
+	return []string{"a=b+c", "if(a){b}else{c}", "x=>x*2", "`t${a}u`", "a?.b", "new A()", "(a,b)", "/re/g",
+		"-(-a)", "a- -b", "a+ +b", "let {a,b}=c", "class A extends B{}", "for(;;){}", "(-a)**b", "typeof a",
+		"!(a in b)", "a\n++b", "async function f(){await x}", "({a:1})", "function*g(){yield 1}", "'\\''", "1..toString()"}
+}

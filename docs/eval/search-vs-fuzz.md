@@ -96,3 +96,94 @@ separate binary. Go and Lean as in the earlier evaluations.
 
 No LLM is called by either arm. The screening agent is one run, about
 0.5 to 0.8 M tokens; the specs are written in the evaluating session.
+
+## Results
+
+Run on 2026-10-28 with the frozen tool (`e5feedc`). Screening examined all
+135 candidates and accepted 29 (rejections in `search-vs-fuzz/screen.jsonl`).
+Per case: `search-vs-fuzz/results.tsv`. The specs are in
+`search-vs-fuzz/specs/` (as `.go.txt`), the cases and the ground truth in `cases.jsonl` and
+`truth.jsonl`, and the scripts beside them.
+
+**Found** means a failing input of the spec at the parent for which the spec
+holds at the fix commit (`score.sh` replays it there).
+
+| | cases |
+|---|---|
+| found by A (go2lean) | 7 |
+| found by B (fuzz) | 11 (3 of them floats) |
+| both | 4: c029, c032, c056, c094 |
+| A only | 3: c053, c108, c121 |
+| B only | 7: c039, c069, c088 (floats), c062, c104, c118, c126 |
+| neither | 15 |
+
+Of the 15 found by neither, 8 specs could not have caught the defect: the
+trigger lies outside what the spec generates (no trailing newline, non-ASCII
+punctuation, a nested array path, and so on). That was judged by reading each
+trigger against the spec, after the run.
+
+What decided most cases was not the search:
+- **A's first counterexample was often a model artifact.** 11 of A's
+  counterexamples did not reproduce in Go (spurious): the run went through
+  havoc or an under-approximation (an unmodelled `encoding/binary.Uvarint`,
+  `regexp`, `reflect.DeepEqual`, floats, a stuck `strings.Builder`), yet
+  it was reported as a counterexample and ended the search. B never has
+  this problem: it runs the real code.
+- **B's first failure was often a wrong spec.** 14 of B's failing inputs
+  also fail at the fix commit, most of them at the fuzzer's first, zero-value
+  input. A hit a wrong spec 3 times.
+- **Both stop at the first failure.** So a wrong corner of a spec, or a
+  model artifact, hides whether the defect itself would have been found:
+  in all three A-only cases B's first failure was a wrong spec, and in one
+  of B's (c126) A's was.
+
+Where A found what B did not: a multibyte pattern equal to the data
+(c053), a key present only in a nested object (c108), and https with port
+443 (c121). The first two came from the spec's own literals and the
+code's constants combined; the third from the code's constants.
+
+Floats: A found none of the three float defects; B found all three.
+
+### Deviations
+
+- The screening agent put the area of some bugs into the public oracle
+  field ("omit the scheme's default port", "testParseExtensions"), so those
+  specs were not fully blind. Both arms got the same spec. One gjson body
+  was glimpsed (two lines of `GetMany`) while reading its docs.
+- `go2lean fuzz` skips specs of variadic targets: for c015 and c094, B is a
+  hand-written fuzz target over the same spec (`search-vs-fuzz/manual/`, as `.go.txt`),
+  fuzzed 5 minutes.
+- Old test files fail Go 1.24's `vet`, which `go test` runs: in 7 cases the
+  replay (A) and the fuzzing build (B) failed. They were rerun with
+  `GOFLAGS=-vet=off`; c104 also with the right import path.
+- c118's A run hit the 30-minute limit: `go2lean run` searches every
+  template property of the package with the same budget before the spec.
+
+### Tool issues (stage 1 and harness, from this run)
+
+1. A counterexample that went through havoc or an assumption ends the
+   search like a real one; it should be set aside and the search go on
+   (11 spurious results).
+2. `go test`'s vet is not turned off in the replay and the fuzz export; the
+   failure is reported as "the target exited" (7 cases).
+3. `go2lean fuzz` skips variadic targets (2 cases).
+4. `go2lean run` cannot be limited to the specs; template properties take
+   the budget first (c118 timed out, c024 took 12 minutes).
+5. The model runs out of fuel on byte-wise parsers (`ansi.Truncate`: 1940 of
+   2000 trials).
+6. Unmodelled in the specs' paths: `encoding/binary.Uvarint`, `regexp`
+   (`FindIndex`), `reflect.DeepEqual`, `fmt.Sprintf` widths, floats.
+7. Before the run, on a toy package: a spec's call to a generic function of
+   the package under test was havoc without `-deps`, and
+   `io.ReadAll(strings.NewReader(s))` disagreed with Go under `-deps`.
+
+### What this says about the question
+
+On the same specs, Go's fuzzer found more defects (11 against 7), all of
+the float ones, and none of its finds were model artifacts. go2lean found 3
+that the fuzzer did not reach within 5 minutes; each needed a specific
+combination of literals. The larger lesson is that both searches mostly
+stopped at the wrong thing: model artifacts for go2lean, wrong specs for the
+fuzzer. Fixing tool issue 1 (do not stop at a havoc-dependent
+counterexample) and checking specs against the fuzzer's trivial inputs
+before searching would have changed more outcomes than either search.

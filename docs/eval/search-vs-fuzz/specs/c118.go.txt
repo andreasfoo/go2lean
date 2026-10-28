@@ -1,0 +1,24 @@
+package color
+
+import "fmt"
+
+// go2lean:spec RgbToHex
+// SpecRgbToHexDoc: "RgbToHex convert RGB-code to hex-code ... hex :=
+// RgbToHex([]int{170, 187, 204}) // hex: "aabbcc"": two lowercase hex digits
+// per component, in order; and it is the inverse of HexToRgb ("rgb :=
+// HexToRgb("aabbcc") // rgb: [170 187 204]").
+func SpecRgbToHexDoc(rgb []int, ret string) bool {
+	if len(rgb) != 3 {
+		return true
+	}
+	for _, v := range rgb {
+		if v < 0 || v > 255 {
+			return true
+		}
+	}
+	if ret != fmt.Sprintf("%02x%02x%02x", rgb[0], rgb[1], rgb[2]) {
+		return false
+	}
+	back := HexToRgb(ret)
+	return len(back) == 3 && back[0] == rgb[0] && back[1] == rgb[1] && back[2] == rgb[2]
+}

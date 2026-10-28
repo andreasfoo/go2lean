@@ -1,0 +1,22 @@
+package colorful
+
+import "math"
+
+// unit maps x into [0, 1] (NaN and infinities to 0).
+func unit(x float64) float64 {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return 0
+	}
+	return math.Abs(math.Mod(x, 1))
+}
+
+// go2lean:spec Color.BlendHcl
+// SpecBlendHclEnds: "BlendHcl blends two colors in the CIE-L*C*h°
+// color-space, which should result in a smoother blend. t == 0 results in
+// c1, t == 1 results in c2", for colours that exist in RGB space, within
+// the package's own tolerance (AlmostEqualRgb).
+func SpecBlendHclEnds(col1 Color, col2 Color, t float64, ret Color) bool {
+	col1 = Color{unit(col1.R), unit(col1.G), unit(col1.B)}
+	col2 = Color{unit(col2.R), unit(col2.G), unit(col2.B)}
+	return col1.BlendHcl(col2, 0).AlmostEqualRgb(col1) && col1.BlendHcl(col2, 1).AlmostEqualRgb(col2)
+}

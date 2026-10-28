@@ -1,0 +1,48 @@
+package blackfriday
+
+import "strings"
+
+// word keeps the letters and digits of s (at most 8), so the generated text
+// is plain and needs no escaping.
+func word(s string, fallback string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() == 8 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return fallback
+	}
+	return b.String()
+}
+
+// go2lean:sequence MarkdownBasic
+// SeqReferenceLink: Markdown's reference-style links (Gruber, "Markdown:
+// Syntax", Links): "[text][id]" with a definition "[id]: url" on a line of
+// its own is a link to url with the text; "Link definition names ... are
+// not case sensitive", and the definition may come before or after the
+// link. MarkdownBasic renders with no extensions.
+func SeqReferenceLink(text, id, url string, upper, before bool) bool {
+	_ = specSeeds()
+	text, id = word(text, "text"), word(id, "id")
+	url = "http://example.com/" + word(url, "p")
+	ref := id
+	if upper {
+		ref = strings.ToUpper(id)
+	}
+	link := "See [" + text + "][" + ref + "] here.\n"
+	def := "[" + id + "]: " + url + "\n"
+	doc := link + "\n" + def
+	if before {
+		doc = def + "\n" + link
+	}
+	out := string(MarkdownBasic([]byte(doc)))
+	return strings.Contains(out, `<a href="`+url+`">`+text+`</a>`)
+}
+
+// specSeeds are literals for the search: link texts and ids.
+func specSeeds() []string { return []string{"foo", "Foo", "1", "a b", "ID", "link"} }

@@ -1,0 +1,62 @@
+package xstrings
+
+import "strings"
+
+// lower keeps the lowercase ASCII letters of s (at most 6); "x" if none.
+func lower(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+			if b.Len() == 6 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "x"
+	}
+	return b.String()
+}
+
+// go2lean:sequence ToCamelCase
+// SeqToCamelCaseDoc: "ToCamelCase can convert all lower case characters
+// behind underscores to upper case character. Underscore character will be
+// removed in result except following cases.
+//   - More than 1 underscore. "a__b" => "A_B"
+//   - At the beginning of string. "_a" => "_A"
+//   - At the end of string. "ab_" => "Ab_""
+// Words of lowercase letters joined by one or two underscores, with an
+// optional leading and trailing underscore.
+func SeqToCamelCaseDoc(words []string, doubles int, lead, trail bool) bool {
+	_ = specSeeds()
+	if len(words) == 0 {
+		return true
+	}
+	var in, want strings.Builder
+	if lead {
+		in.WriteString("_")
+		want.WriteString("_")
+	}
+	for i, w := range words {
+		w = lower(w)
+		if i > 0 {
+			if doubles>>uint(i%30)&1 == 1 {
+				in.WriteString("__")
+				want.WriteString("_")
+			} else {
+				in.WriteString("_")
+			}
+		}
+		in.WriteString(w)
+		want.WriteString(strings.ToUpper(w[:1]) + w[1:])
+	}
+	if trail {
+		in.WriteString("_")
+		want.WriteString("_")
+	}
+	return ToCamelCase(in.String()) == want.String()
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"a", "b", "ab", "some", "words"} }

@@ -1,0 +1,18 @@
+package shellquote
+
+// go2lean:spec Join
+// SpecJoinRoundTrip: "Join quotes each argument and joins them with a
+// space. If passed to /bin/sh, the resulting string will be split back into
+// the original arguments." Split implements /bin/sh's word splitting.
+func SpecJoinRoundTrip(args []string, ret string) bool {
+	words, err := Split(ret)
+	if err != nil || len(words) != len(args) {
+		return false
+	}
+	for i := range args {
+		if words[i] != args[i] {
+			return false
+		}
+	}
+	return true
+}

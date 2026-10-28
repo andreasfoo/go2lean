@@ -1,0 +1,73 @@
+package dns
+
+import (
+	"strconv"
+	"strings"
+)
+
+// label keeps the lowercase letters and digits of s (at most 8).
+func label(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() == 8 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "a"
+	}
+	return b.String()
+}
+
+// go2lean:sequence ParseZone
+// SeqZoneBlankOwner: RFC 1035 section 5.1, master file format:
+//
+//	<domain-name><rr> [<comment>]
+//	<blank><rr> [<comment>]
+//	<rr> contents take one of the following forms:
+//	[<TTL>] [<class>] <type> <RDATA>
+//	[<class>] [<TTL>] <type> <RDATA>
+//
+// "If the line begins with a blank, then the owner is assumed to be the
+// same as that of the previous RR. Omitted class and TTL values are default
+// to the last explicitly stated values." ParseZone: "ParseZone reads a RFC
+// 1035 zone from r. It returns Tokens on the returned channel, which
+// consist out the parsed RR or an error."
+func SeqZoneBlankOwner(name string, ttl1, ttl2 uint16, mode int) bool {
+	_ = specSeeds()
+	owner := label(name) + ".example."
+	t1, t2 := strconv.Itoa(int(ttl1)), strconv.Itoa(int(ttl2))
+	var rr string
+	wantTTL := uint32(ttl1)
+	switch (mode%5 + 5) % 5 {
+	case 0:
+		rr = "A 10.0.0.2"
+	case 1:
+		rr, wantTTL = t2+" A 10.0.0.2", uint32(ttl2)
+	case 2:
+		rr = "IN A 10.0.0.2"
+	case 3:
+		rr, wantTTL = t2+" IN A 10.0.0.2", uint32(ttl2)
+	case 4:
+		rr, wantTTL = "IN "+t2+" A 10.0.0.2", uint32(ttl2)
+	}
+	zone := owner + " " + t1 + " IN A 10.0.0.1\n" + "    " + rr + "\n"
+	var rrs []RR
+	for tok := range ParseZone(strings.NewReader(zone), "", "") {
+		if tok.Error != nil {
+			return false
+		}
+		rrs = append(rrs, tok.RR)
+	}
+	if len(rrs) != 2 {
+		return false
+	}
+	h := rrs[1].Header()
+	return h.Name == owner && h.Class == ClassINET && h.Rrtype == TypeA && h.Ttl == wantTTL
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"www", "mail", "ns1", "a1"} }

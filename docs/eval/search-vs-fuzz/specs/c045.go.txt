@@ -1,0 +1,27 @@
+package ansi
+
+import "github.com/rivo/uniseg"
+
+// go2lean:spec StringWidth
+// SpecStringWidthDoc: "StringWidth returns the width of a string in cells.
+// This is the number of cells that the string will occupy when printed in a
+// terminal. ANSI escape codes are ignored and wide characters (such as East
+// Asians and emojis) are accounted for." Reference: uniseg.StringWidth, the
+// grapheme-aware width of plain text.
+func SpecStringWidthDoc(s string, ret int) bool {
+	_ = specSeeds()
+	// Escape codes are ignored: wrapping s in SGR codes changes nothing.
+	if StringWidth("\x1b[1;31m"+s+"\x1b[0m") != ret {
+		return false
+	}
+	// Plain printable text (no escape or control bytes) has the reference width.
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return true
+		}
+	}
+	return ret == uniseg.StringWidth(s)
+}
+
+// specSeeds are literals for the search: wide, combining and emoji text.
+func specSeeds() []string { return []string{"日本語", "😀", "👍🏽", "é", "‍", "한"} }

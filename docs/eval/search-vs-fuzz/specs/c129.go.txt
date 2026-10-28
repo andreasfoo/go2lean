@@ -1,0 +1,86 @@
+package gjson
+
+import (
+	"encoding/json"
+	"reflect"
+	"strconv"
+	"strings"
+)
+
+// gKey keeps the letters of s (at most 6); "k" if none.
+func gKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			b.WriteRune(r)
+			if b.Len() == 6 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "k"
+	}
+	return b.String()
+}
+
+// go2lean:sequence Get
+// SeqGetArrays: "A path is a series of keys seperated by a dot ... To
+// access an array value use the index as the key. To get the number of
+// elements in an array use the '#' character", as in "children.#" >> 3 and
+// "children.1" >> "Alex". Reference: encoding/json, on an object whose key
+// holds an array of n elements (scalars, arrays or objects), with
+// whitespace between tokens.
+func SeqGetArrays(key string, elems []int, ws int, idx int) bool {
+	_ = specSeeds()
+	key = gKey(key)
+	spaces := []string{"", " ", "\n", "\t "}
+	bit := 0
+	sp := func() string {
+		bit += 2
+		return spaces[(ws>>uint(bit%30))&3]
+	}
+	var arr []string
+	for i, e := range elems {
+		if i == 5 {
+			break
+		}
+		var s string
+		switch (e%5 + 5) % 5 {
+		case 0:
+			s = strconv.Itoa(e)
+		case 1:
+			s = `"s` + strconv.Itoa(i) + `"`
+		case 2:
+			s = "[" + sp() + "1" + sp() + "," + sp() + "2" + sp() + "]"
+		case 3:
+			s = "{" + sp() + `"a"` + sp() + ":" + sp() + "[]" + sp() + "}"
+		default:
+			s = "null"
+		}
+		arr = append(arr, sp()+s+sp())
+	}
+	doc := "{" + sp() + `"` + key + `"` + sp() + ":" + sp() + "[" + strings.Join(arr, ",") + "]" + sp() + "}"
+	var root map[string][]interface{}
+	if json.Unmarshal([]byte(doc), &root) != nil {
+		return true
+	}
+	n := len(root[key])
+	count := Get(doc, key+".#")
+	if count.Type != Number || count.Raw != strconv.Itoa(n) {
+		return false
+	}
+	i := (idx%6 + 6) % 6
+	r := Get(doc, key+"."+strconv.Itoa(i))
+	if i >= n {
+		return !r.Exists()
+	}
+	var got interface{}
+	if json.Unmarshal([]byte(r.Raw), &got) != nil {
+		return false
+	}
+	return reflect.DeepEqual(got, root[key][i])
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"children", "friends", "a", "#"} }

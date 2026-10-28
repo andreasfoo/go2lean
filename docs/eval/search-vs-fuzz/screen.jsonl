@@ -1,0 +1,135 @@
+{"id": "c001", "accepted": false, "reason": "not_wrong_result panic-only"}
+{"id": "c002", "accepted": false, "reason": "not_defect whitespace-only src change"}
+{"id": "c003", "accepted": false, "reason": "not_defect new feature"}
+{"id": "c004", "accepted": false, "reason": "not_wrong_result no externally failing test on parent (internal tests only)"}
+{"id": "c005", "accepted": false, "reason": "not_defect license"}
+{"id": "c006", "accepted": false, "reason": "not_wrong_result out-of-bounds read"}
+{"id": "c007", "accepted": false, "reason": "no_oracle undocumented option semantics"}
+{"id": "c008", "accepted": true, "reason": ""}
+{"id": "c009", "accepted": false, "reason": "not_reachable unexported codec, semantics change"}
+{"id": "c010", "accepted": false, "reason": "not_reachable callbacks/global state"}
+{"id": "c011", "accepted": false, "reason": "not_reachable environment variable dependent"}
+{"id": "c012", "accepted": false, "reason": "not_wrong_result infinite recursion crash"}
+{"id": "c013", "accepted": false, "reason": "not_defect lint/comments"}
+{"id": "c014", "accepted": false, "reason": "not_defect policy change (accept more segments)"}
+{"id": "c015", "accepted": true, "reason": ""}
+{"id": "c016", "accepted": false, "reason": "no_oracle naming-convention policy"}
+{"id": "c017", "accepted": false, "reason": "no_oracle malformed-input error classification"}
+{"id": "c018", "accepted": false, "reason": "not_wrong_result panic"}
+{"id": "c019", "accepted": false, "reason": "not_reachable filesystem error handling"}
+{"id": "c020", "accepted": false, "reason": "not_wrong_result compression ratio"}
+{"id": "c021", "accepted": false, "reason": "not_defect style"}
+{"id": "c022", "accepted": true, "reason": ""}
+{"id": "c023", "accepted": false, "reason": "not_reachable complex config/streaming table writer"}
+{"id": "c024", "accepted": true, "reason": ""}
+{"id": "c025", "accepted": false, "reason": "not_defect API addition + policy change"}
+{"id": "c026", "accepted": false, "reason": "not_wrong_result panic (index out of range); other diffs equal-length"}
+{"id": "c027", "accepted": false, "reason": "not_reachable requires struct types with tags"}
+{"id": "c028", "accepted": false, "reason": "not_defect docs/tests"}
+{"id": "c029", "accepted": true, "reason": ""}
+{"id": "c030", "accepted": false, "reason": "not_wrong_result infinite loop"}
+{"id": "c031", "accepted": false, "reason": "not_reachable unexported router tree, no oracle"}
+{"id": "c032", "accepted": true, "reason": ""}
+{"id": "c033", "accepted": false, "reason": "not_reachable server internals, goroutines"}
+{"id": "c034", "accepted": false, "reason": "not_defect security hardening/new field"}
+{"id": "c035", "accepted": false, "reason": "not_wrong_result panic"}
+{"id": "c036", "accepted": false, "reason": "not_defect test/gendoc"}
+{"id": "c037", "accepted": false, "reason": "no_oracle undocumented ANSI writer state"}
+{"id": "c038", "accepted": false, "reason": "not_wrong_result crash fix"}
+{"id": "c039", "accepted": true, "reason": ""}
+{"id": "c040", "accepted": false, "reason": "no_oracle parent docs document the old behaviour (policy)"}
+{"id": "c041", "accepted": true, "reason": ""}
+{"id": "c042", "accepted": false, "reason": "not_wrong_result hang/OOM on parent"}
+{"id": "c043", "accepted": false, "reason": "not_defect API redesign of limit enforcement"}
+{"id": "c044", "accepted": false, "reason": "not_defect new feature (CSS nesting)"}
+{"id": "c045", "accepted": true, "reason": ""}
+{"id": "c046", "accepted": false, "reason": "not_wrong_result infinite loop"}
+{"id": "c047", "accepted": false, "reason": "not_reachable global option state, no oracle"}
+{"id": "c048", "accepted": false, "reason": "not_reachable unexported internals, threshold var"}
+{"id": "c049", "accepted": false, "reason": "no_oracle naming-convention edge"}
+{"id": "c050", "accepted": false, "reason": "not_defect refactor/rename"}
+{"id": "c051", "accepted": false, "reason": "not_defect behaviour policy change"}
+{"id": "c052", "accepted": false, "reason": "other asm encoder regression, platform-specific data in zip"}
+{"id": "c053", "accepted": true, "reason": ""}
+{"id": "c054", "accepted": false, "reason": "not_reachable handlers/HTTP server"}
+{"id": "c055", "accepted": false, "reason": "not_reachable multi-object writer/reader cycle, no docs"}
+{"id": "c056", "accepted": true, "reason": ""}
+{"id": "c057", "accepted": false, "reason": "not_wrong_result nil deref panic"}
+{"id": "c058", "accepted": false, "reason": "no_oracle lexicon exception for one word"}
+{"id": "c059", "accepted": false, "reason": "not_reachable clock-dependent (time.Now)"}
+{"id": "c060", "accepted": false, "reason": "not_defect behaviour policy revert"}
+{"id": "c061", "accepted": false, "reason": "not_wrong_result divide-by-zero panic"}
+{"id": "c062", "accepted": true, "reason": ""}
+{"id": "c063", "accepted": true, "reason": ""}
+{"id": "c064", "accepted": false, "reason": "not_reachable needs minifier plumbing and option; weak oracle"}
+{"id": "c065", "accepted": false, "reason": "other asm, multi-GB inputs"}
+{"id": "c066", "accepted": false, "reason": "not_wrong_result panic"}
+{"id": "c067", "accepted": false, "reason": "not_defect redesign; needs struct types"}
+{"id": "c068", "accepted": false, "reason": "not_reachable executes shell commands"}
+{"id": "c069", "accepted": true, "reason": ""}
+{"id": "c070", "accepted": false, "reason": "not_reachable cobra command help plumbing, annotation-specific"}
+{"id": "c071", "accepted": false, "reason": "not_defect new CLI feature"}
+{"id": "c072", "accepted": false, "reason": "not_defect new colorspace feature"}
+{"id": "c073", "accepted": true, "reason": ""}
+{"id": "c074", "accepted": false, "reason": "no_oracle header title formatting rules"}
+{"id": "c075", "accepted": false, "reason": "not_reachable progress renderer with goroutines/clock; no oracle"}
+{"id": "c076", "accepted": false, "reason": "not_reachable depends on environment variables; shell-lexing rewrite"}
+{"id": "c077", "accepted": false, "reason": "not_reachable network/CLI concurrency"}
+{"id": "c078", "accepted": false, "reason": "not_reachable streaming pipe/goroutines"}
+{"id": "c079", "accepted": true, "reason": ""}
+{"id": "c080", "accepted": false, "reason": "no_oracle odd mixed-case ordinal edge"}
+{"id": "c081", "accepted": false, "reason": "other rewrite/optimization, no specific failing test"}
+{"id": "c082", "accepted": false, "reason": "not_defect testability/API addition"}
+{"id": "c083", "accepted": false, "reason": "not_defect platform/type compat"}
+{"id": "c084", "accepted": false, "reason": "not_defect API/format change"}
+{"id": "c085", "accepted": false, "reason": "not_defect test fix"}
+{"id": "c086", "accepted": false, "reason": "not_defect gofmt style"}
+{"id": "c087", "accepted": false, "reason": "not_defect rename/export"}
+{"id": "c088", "accepted": true, "reason": ""}
+{"id": "c089", "accepted": false, "reason": "not_reachable middleware/HTTP handler"}
+{"id": "c090", "accepted": false, "reason": "not_reachable unexported rope nodes"}
+{"id": "c091", "accepted": false, "reason": "no_oracle markdown re-render whitespace policy"}
+{"id": "c092", "accepted": false, "reason": "not_wrong_result panic"}
+{"id": "c093", "accepted": true, "reason": ""}
+{"id": "c094", "accepted": true, "reason": ""}
+{"id": "c095", "accepted": false, "reason": "not_defect Go API migration (build)"}
+{"id": "c096", "accepted": false, "reason": "no_oracle parameter semantics redefined"}
+{"id": "c097", "accepted": true, "reason": ""}
+{"id": "c098", "accepted": false, "reason": "no_oracle scoring heuristic details"}
+{"id": "c099", "accepted": false, "reason": "not_defect test/unused import"}
+{"id": "c100", "accepted": false, "reason": "not_reachable HTTP routing with handlers"}
+{"id": "c101", "accepted": false, "reason": "not_defect new feature (SortKeys/Prefix)"}
+{"id": "c102", "accepted": false, "reason": "no_oracle table render formatting policy"}
+{"id": "c103", "accepted": false, "reason": "no_oracle boundary inclusivity of relative-time buckets"}
+{"id": "c104", "accepted": true, "reason": ""}
+{"id": "c105", "accepted": false, "reason": "not_defect concurrency feature"}
+{"id": "c106", "accepted": false, "reason": "other multiple small fixes, likely panic; no clear single oracle"}
+{"id": "c107", "accepted": false, "reason": "harness pre-Go1 code (os.Error), unclear defect"}
+{"id": "c108", "accepted": true, "reason": ""}
+{"id": "c109", "accepted": true, "reason": ""}
+{"id": "c110", "accepted": false, "reason": "other build-tag specific (portable non-amd64 decoder path)"}
+{"id": "c111", "accepted": false, "reason": "not_wrong_result panic"}
+{"id": "c112", "accepted": false, "reason": "not_reachable unexported transform"}
+{"id": "c113", "accepted": false, "reason": "no_oracle naming-convention policy"}
+{"id": "c114", "accepted": false, "reason": "not_wrong_result infinite loop"}
+{"id": "c115", "accepted": false, "reason": "not_defect new function"}
+{"id": "c116", "accepted": true, "reason": ""}
+{"id": "c117", "accepted": false, "reason": "not_wrong_result hang/panic on fuzz inputs"}
+{"id": "c118", "accepted": true, "reason": ""}
+{"id": "c119", "accepted": false, "reason": "not_defect behaviour removal (policy)"}
+{"id": "c120", "accepted": false, "reason": "not_reachable unexported rope internals / panic"}
+{"id": "c121", "accepted": true, "reason": ""}
+{"id": "c122", "accepted": false, "reason": "not_defect 32-bit platform specific"}
+{"id": "c123", "accepted": false, "reason": "no_oracle naming-convention initialism policy"}
+{"id": "c124", "accepted": false, "reason": "no_oracle lexicon exception for single word"}
+{"id": "c125", "accepted": false, "reason": "not_reachable package-level regexp variable, no function"}
+{"id": "c126", "accepted": true, "reason": ""}
+{"id": "c127", "accepted": false, "reason": "no_oracle degenerate-input convention / panic"}
+{"id": "c128", "accepted": false, "reason": "harness test passes at parent in this environment"}
+{"id": "c129", "accepted": true, "reason": ""}
+{"id": "c130", "accepted": true, "reason": ""}
+{"id": "c131", "accepted": false, "reason": "not_defect comments only"}
+{"id": "c132", "accepted": false, "reason": "harness fix commit itself still panics in PatchApply; unstable early code"}
+{"id": "c133", "accepted": false, "reason": "not_reachable unexported dictDecoder"}
+{"id": "c134", "accepted": false, "reason": "not_wrong_result panic"}
+{"id": "c135", "accepted": false, "reason": "not_defect rename refactor"}

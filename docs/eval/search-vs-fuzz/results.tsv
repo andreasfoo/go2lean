@@ -1,0 +1,30 @@
+id	target	A (go2lean)	B (fuzz)	spec can catch the defect (by reading the trigger)	note
+c008	ansi.Truncate	none (1940 of 2000 trials out of fuel)	spec wrong	yes	
+c015	gjson.GetMany	none	spec wrong	yes	B by hand: go2lean fuzz skips variadic targets
+c022	CanonType.Canonicalize	spurious	spec wrong	no	the bug is in Extensions(); the spec compares String()
+c024	MarkdownBasic	spurious	none	no	the spec always ends the definition with a newline
+c029	dns.ParseZone	FOUND	FOUND	yes	rerun with -vet=off
+c032	ToCamelCase	FOUND	FOUND	yes	
+c039	Color.DistanceCIE94	none (float)	FOUND	yes	float
+c041	ToSnakeCase	none	none	no	the spec uses ASCII letters only
+c045	ansi.StringWidth	none (most trials stuck)	spec wrong	no	
+c053	fuzzy.Find	FOUND	spec wrong	yes	
+c056	slice.LastIndexOf	FOUND	FOUND	yes	generic target
+c062	snappy.DecodedLen	spurious (havoc: binary.Uvarint)	FOUND	yes	
+c063	markdown.ToHTML	spurious	spec wrong	no	the spec never puts punctuation after the closing delimiter
+c069	SorensenDice.Compare	spurious (float)	FOUND	yes	float
+c073	jsonparser.Get	spec wrong	spec wrong	yes	rerun with -vet=off
+c079	Version.Compare (SemVer)	spurious	spec wrong	yes	rerun with -vet=off
+c088	Color.BlendHcl	none (float)	FOUND	yes	float
+c093	Version.Compare (Debian)	spurious	unclear	yes	B's input makes the fix commit hang
+c094	shellquote.Join	FOUND	FOUND	yes	B by hand: go2lean fuzz skips variadic targets
+c097	AST.JSString	spurious	spec wrong	yes	
+c104	snappy.Decode	spurious (havoc: binary.Uvarint)	FOUND	yes	rerun; the case list had the wrong import path
+c108	jsonparser.Get	FOUND	spec wrong	yes	rerun with -vet=off
+c109	blackfriday.Markdown	spurious	spec wrong	no	the spec never puts '!' before a footnote reference
+c116	ansi.Truncate	none (out of fuel)	spec wrong	yes	
+c118	RgbToHex	none (stuck at fmt.Sprintf; run timed out)	FOUND	yes	
+c121	NormalizeURLString	FOUND	spec wrong	yes	
+c126	NormalizeURLString	spec wrong	FOUND	yes	
+c129	gjson.Get	spec wrong	spec wrong	no	the spec has no nested array path
+c130	phonenumbers.Parse	spurious	none	no	the spec never puts trailing characters after the extension

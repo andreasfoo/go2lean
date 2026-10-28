@@ -1,0 +1,44 @@
+package colorful
+
+import "math"
+
+// unit maps x into [0, 1] (NaN and infinities to 0).
+func unit(x float64) float64 {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return 0
+	}
+	return math.Abs(math.Mod(x, 1))
+}
+
+// cie94 is the CIE94 colour difference (CIE 116-1995, graphic arts: kL = kC
+// = kH = 1, K1 = 0.045, K2 = 0.015) of two colours given in L*a*b* with L*
+// in [0, 100].
+func cie94(l1, a1, b1, l2, a2, b2 float64) float64 {
+	dl := l1 - l2
+	c1 := math.Sqrt(a1*a1 + b1*b1)
+	c2 := math.Sqrt(a2*a2 + b2*b2)
+	dc := c1 - c2
+	da, db := a1-a2, b1-b2
+	dh2 := da*da + db*db - dc*dc
+	if dh2 < 0 {
+		dh2 = 0
+	}
+	sc := 1 + 0.045*c1
+	sh := 1 + 0.015*c1
+	return math.Sqrt(dl*dl + (dc/sc)*(dc/sc) + dh2/(sh*sh))
+}
+
+// go2lean:spec Color.DistanceCIE94
+// SpecDistanceCIE94Formula: "Uses the CIE94 formula to calculate color
+// distance." The package's L*a*b* values are on a 0..1 scale for L* (Lab's
+// and Hcl's docs), so the formula is applied on the 0..100 scale and the
+// result scaled back.
+func SpecDistanceCIE94Formula(cl Color, cr Color, ret float64) bool {
+	cl = Color{unit(cl.R), unit(cl.G), unit(cl.B)}
+	cr = Color{unit(cr.R), unit(cr.G), unit(cr.B)}
+	ret = cl.DistanceCIE94(cr)
+	l1, a1, b1 := cl.Lab()
+	l2, a2, b2 := cr.Lab()
+	want := cie94(l1*100, a1*100, b1*100, l2*100, a2*100, b2*100) / 100
+	return math.Abs(ret-want) <= 1e-9+1e-6*want
+}

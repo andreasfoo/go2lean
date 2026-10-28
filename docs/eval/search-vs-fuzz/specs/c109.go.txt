@@ -1,0 +1,54 @@
+package blackfriday
+
+import "strings"
+
+// fnWord keeps the letters and digits of s (at most 8).
+func fnWord(s, fallback string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() == 8 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return fallback
+	}
+	return b.String()
+}
+
+// go2lean:sequence Markdown
+// SeqFootnotes: "Markdown is the main rendering function. It parses and
+// renders a block of markdown-encoded text ... extensions dictates which
+// non-standard extensions are enabled"; EXTENSION_FOOTNOTES enables
+// "Pandoc-style footnotes". Reference: PHP Markdown Extra / Pandoc
+// footnotes: a reference [^id] in the text and a definition "[^id]: text"
+// on a line of its own make a link to a footnote holding the text,
+// wherever the definition is. Two footnotes, defined in either order.
+func SeqFootnotes(id1, id2, t1, t2 string, swap bool) bool {
+	_ = specSeeds()
+	id1, id2 = fnWord(id1, "a"), fnWord(id2, "b")
+	if id1 == id2 {
+		id2 += "x"
+	}
+	t1, t2 = "note"+fnWord(t1, "one"), "note"+fnWord(t2, "two")
+	if t1 == t2 {
+		t2 += "x"
+	}
+	d1 := "[^" + id1 + "]: " + t1 + "\n"
+	d2 := "[^" + id2 + "]: " + t2 + "\n"
+	defs := d1 + "\n" + d2
+	if swap {
+		defs = d2 + "\n" + d1
+	}
+	doc := "First[^" + id1 + "] and second[^" + id2 + "].\n\n" + defs
+	out := string(Markdown([]byte(doc), HtmlRenderer(0, "", ""), EXTENSION_FOOTNOTES))
+	return strings.Contains(out, "#fn:"+id1) && strings.Contains(out, "#fn:"+id2) &&
+		strings.Count(out, t1) == 1 && strings.Count(out, t2) == 1 &&
+		!strings.Contains(out, "[^")
+}
+
+// specSeeds are literals for the search.
+func specSeeds() []string { return []string{"1", "2", "a", "note", "x1", "Ab"} }

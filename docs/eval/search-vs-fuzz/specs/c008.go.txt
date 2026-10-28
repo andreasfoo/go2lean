@@ -1,0 +1,29 @@
+package ansi
+
+import "strings"
+
+// go2lean:spec Truncate
+// SpecTruncateDoc: "Truncate truncates a string to a given length, adding a
+// tail to the end if the string is longer than the given length. This
+// function is aware of ANSI escape codes and will not break them, and
+// accounts for wide-characters (such as East Asians and emojis)."
+// Lengths are in cells, as StringWidth measures them.
+func SpecTruncateDoc(s string, length int, tail string, ret string) bool {
+	_ = specSeeds()
+	if length < 0 {
+		return true
+	}
+	if StringWidth(s) <= length {
+		// Not longer than the length: unchanged, no tail.
+		return ret == s
+	}
+	if !strings.HasSuffix(ret, tail) {
+		return false
+	}
+	kept := strings.TrimSuffix(ret, tail)
+	// What is kept fits in the length and is the start of s's text.
+	return StringWidth(kept) <= length && strings.HasPrefix(Strip(s), Strip(kept))
+}
+
+// specSeeds are literals for the search: escape codes and wide characters.
+func specSeeds() []string { return []string{"\x1b[31m", "\x1b[0m", "日本語", "😀", "é"} }

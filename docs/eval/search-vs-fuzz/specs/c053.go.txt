@@ -1,0 +1,87 @@
+package fuzzy
+
+import "strings"
+
+// matchesAt reports whether the characters of s at idx, in order, are those
+// of pattern (case-insensitively), reading idx as byte offsets (bytes) or
+// rune positions.
+func matchesAt(s, pattern string, idx []int, bytes bool) bool {
+	p := []rune(strings.ToLower(pattern))
+	if len(idx) != len(p) {
+		return false
+	}
+	rs := []rune(s)
+	prev := -1
+	for i, k := range idx {
+		if k <= prev {
+			return false
+		}
+		prev = k
+		var r rune
+		if bytes {
+			if k < 0 || k >= len(s) {
+				return false
+			}
+			r = []rune(s[k:])[0]
+		} else {
+			if k < 0 || k >= len(rs) {
+				return false
+			}
+			r = rs[k]
+		}
+		if []rune(strings.ToLower(string(r)))[0] != p[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isSubsequence reports whether pattern's characters occur in s in order.
+func isSubsequence(pattern, s string) bool {
+	p := []rune(pattern)
+	i := 0
+	for _, r := range s {
+		if i < len(p) && r == p[i] {
+			i++
+		}
+	}
+	return i == len(p)
+}
+
+// go2lean:spec Find
+// SpecFindDoc: "Find looks up pattern in data and returns matches", where a
+// Match is "Str: The matched string. Index: The index of the matched string
+// in the supplied slice. MatchedIndexes: The indexes of matched
+// characters." A fuzzy match is the pattern's characters in order. For a
+// lowercase pattern, every string of data that contains it as a
+// (case-insensitive) subsequence is matched, once.
+func SpecFindDoc(pattern string, data []string, ret []Match) bool {
+	_ = specSeeds()
+	if pattern == "" {
+		return true
+	}
+	seen := map[int]bool{}
+	for _, m := range ret {
+		if m.Index < 0 || m.Index >= len(data) || data[m.Index] != m.Str || seen[m.Index] {
+			return false
+		}
+		seen[m.Index] = true
+		if !matchesAt(m.Str, pattern, m.MatchedIndexes, true) && !matchesAt(m.Str, pattern, m.MatchedIndexes, false) {
+			return false
+		}
+	}
+	if pattern != strings.ToLower(pattern) {
+		return true
+	}
+	for i, s := range data {
+		if isSubsequence(pattern, strings.ToLower(s)) && !seen[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// specSeeds are literals for the search: file names and symbols.
+func specSeeds() []string {
+	return []string{"main.go", "fuzzy_test.go", "FooBar", "foo_bar", "ünïcode", "日本語.txt", "mg", "fb", "/a/b"}
+}
