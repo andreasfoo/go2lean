@@ -139,7 +139,7 @@ go2lean props   [-workspace out] -package <path>  template properties from the m
 go2lean hunt    [-workspace out] [-property id] [-engine random|exhaustive|all] [-jobs n] [-budget s]
                 [-seed n] [-trials n] [-fuel n] [-maxlen n] [-exhaust-len n] [-exhaust-limit n]
 go2lean poc     [-workspace out] -counterexample id [more ids...]   one go test per package
-go2lean run     [-workspace out] [-nil-inputs] [-deps] [-specs-only] <packages...>   compile, props, hunt, poc (./... allowed)
+go2lean run     [-workspace out] [-nil-inputs] [-deps] [-specs-only] [-run regexp] <packages...>   compile, props, hunt, poc (./... allowed)
 go2lean agent   [-workspace out] [-llm claude|mock:<path>] [-model id] [-base-url url] [-thinking]
                 [-repairs n] [-report] <package>
 go2lean prove   [-workspace out] -goals goals.json | -func F -post P  [-llm claude-code|claude|mock:<path>]

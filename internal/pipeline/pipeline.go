@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ type Env struct {
 	// templates: on a large package the templates otherwise take the
 	// budget first.
 	SpecsOnly bool
+	// Run, when set, keeps the properties whose target function (or
+	// method, as T.M) it matches, as go test -run selects tests.
+	Run *regexp.Regexp
 	// CompareOrder requires a static call-graph assessment of the supplied
 	// canonical generated overlay before emitting a model. The field alone
 	// does not activate a property; ConfigureCompareOrder additionally binds
@@ -495,6 +499,9 @@ func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts
 	if env.SpecsOnly {
 		props = specsOnly(props)
 	}
+	if env.Run != nil {
+		props = matchingTargets(w, props, env.Run)
+	}
 	fmt.Fprintln(out, "== Spec & search stage: hunt")
 	cxs, err := HuntAll(w, env, props, opts, out)
 	if err != nil {
@@ -523,6 +530,17 @@ func specsOnly(props []*contract.Property) []*contract.Property {
 	var out []*contract.Property
 	for _, p := range props {
 		if p.Kind != contract.KindNoPanic {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// matchingTargets keeps the properties whose target's function matches re.
+func matchingTargets(w contract.Workspace, props []*contract.Property, re *regexp.Regexp) []*contract.Property {
+	var out []*contract.Property
+	for _, p := range props {
+		if t, err := w.Target(p.Target); err == nil && re.MatchString(t.Func) {
 			out = append(out, p)
 		}
 	}
