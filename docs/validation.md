@@ -79,3 +79,144 @@ outcome (confirmed, certified, none) with
 | `examples/stream` | a converter that assembles content-block events into one message drops the open block's text when a second `Start` arrives; properties of the event sequence, written as `go2lean:sequence` specs | `SeqComplete` (every byte received is in the message at the end of the stream) confirmed on a 7-event sequence found by random search; `SeqBounded` (an invariant after every event) holds on all 538,084 sequences of up to 3 events |
 | `examples/conc` | goroutines, channels and locks: `Notify` sends on an unbuffered channel nobody reads when `n > 10`; `First` returns before reading a second result; `AddMore` locks a held mutex; `Drain` closes a channel twice; `ReadWhileWriting` takes a read lock while a writer waits (writer preference); `Bump` locks a package-level mutex twice; `WithDeadline` and `Timeout` leave a sender blocked when the deadline or the `time.After` timer wins; `LostWakeup` waits on a `sync.Cond` once, after the `Signal` was sent; `RacyCount`, `CountHits` (a package variable), `FillAndPeek` (a map read without the lock), `SnapshotRacy` (an atomic add against a plain copy) and `AddInside` (`WaitGroup.Add` inside the goroutine it counts) race, and `PeekEarly` reads a result before waiting for it | `Notify`, `AddMore`, `Bump`, `LostWakeup` (deadlock), `First`, `WithDeadline`, `Timeout` (goroutine leak) and `Drain` (`close of closed channel`) confirmed by `go test`; the six races confirmed by `go test -race`; `ReadWhileWriting` found by the model and confirmed, by Go's scheduler or, when it does not take the interleaving, by replaying the model's schedule; `Pipe`, `Sum`, `TrySend` (`select` with `default`), `Once`, `SumGen` (`range` over a channel `gen` returns), `CountAtomic`, `BumpAll`, `Cancelled` (a worker that watches `ctx.Done()`), `TimeoutBuffered`, `Poll` (a ticker), `Handoff` (`Cond.Wait` in a loop), `LockedCount`, `AtomicCount`, `Publish` and `FillAndRead` (race-free), `SnapshotAtomic`, `AddBefore`, `LazyClose` (a channel made on first use, closed after a nil check) and the rest hold on every input, most under every schedule (C3) |
 | `examples/portable` | constructs that gave spurious or missed results on one-api and spf13/cast: `URL` slices the `BaseURL` of a `*meta.Meta` (a struct of exported fields from another package, which has a function returning one); `Pick` indexes with `rand.Intn(len(xs))`; `Parse` and `parse` (ids differ only in case) divide by `strconv.Atoi`'s result; `Port` calls the generic `Must`; `Unit` reads group 2 of a one-group regexp; `Minor` divides by group 2 of a version, read through a helper that takes the regexp; `Head` divides by the first element after checking a sentinel error; `Per` divides by a `uint8` case of a type switch on `any`; `Label` reads a field of a handle (`*meta.Session`), then divides by a name's length; `Tokens` divides through a pointer only `InitEncoder` sets; `ring.push` would panic on a ring with an empty buffer, which only a receiver built field by field has; `Shrink` and `Budget` use `min`/`max`; `Drain` divides by an `atomic.Int64`; `Kind.String` and `Label2` read a stringer's index table | `URL`, `Pick` (Go's own `invalid argument to Intn`), `Parse`, `parse`, `Port` (via `Must[int]`), `Head`, `Per` (with `uint8(0)`), `Unit`, `Minor` (`"v0.0"`, a string the search drew from the pattern), `Label`, `Shrink`, `Drain`, `Label2` and `Tokens` confirmed (`Tokens` with the note `reads_unknown_state`: the program may call `InitEncoder` first, as one-api's `CountToken*` rely on `InitTokenEncoders`); `Count` (`errors.Is` on the sentinel `first` returns covers the empty slice), `Digit` (`rand.Intn` stays below its bound), `IntPart` (a one-group match has two elements), `PerMB` (`var mb = kb * 1024` folded), `PerMax` (`Atoi` of an out-of-range number is `MaxInt64`, not 0) and `Month` (both ends of a regexp group checked) certified (`Fill`, through `newRing`, `Budget` and `Kind.String` too); `ring.push` is no target (its unexported type is built by `newRing` only); the helper `group` as a target of its own is inconclusive (a `*regexp.Regexp` input cannot be generated) |
+
+### Differential gate completeness
+
+`scripts/json-diff.sh <workspace> <seeds>` fails on compile, property,
+search or replay command errors. Its comparator requires at least one
+differential property, confirmed model-versus-Go comparisons for every
+property and each seed in `1..seeds`, and zero different, inconclusive or
+missing verdicts. Zero samples and duplicate artifacts do not pass.
+`scripts/test_json_diff_compare.py` exercises these failure paths in CI.
+A passing run remains evidence only for those modeled probes and inputs;
+it is not a correctness proof or a real-project release evaluation.
+
+The strengthened gate exposed a missing case in the number round-trip suite:
+`numdiff.Any` previously produced only stuck trials when re-encoding decoded
+interface numbers, while the old script reported success using `Field` alone.
+The encoder now handles the model's canonical `knownFloat` representation
+inside interfaces. The strengthened six-seed run completed all 12 real
+comparisons (both properties), with zero different or other results.
+Existing partial results are not full-suite evidence.
+
+### Sandbox integration gate
+
+`GO2LEAN_REQUIRE_SANDBOX_TESTS=1 go test ./internal/sandbox ./internal/poc -count=1 -v`
+requires working bubblewrap and prlimit, with no replay or Lean isolation
+opt-out. CI runs this separately so a machine without user namespaces
+cannot silently pass by skipping the isolation tests. The tests check replay
+copy/write isolation, hidden home directories, private Lean temporary
+storage, absence of inherited credential variables in both execution paths,
+and replay wall-clock termination. This is evidence for those boundaries,
+not a security audit or a full release gate. Local unit tests without this
+flag may still skip unavailable integration cases.
+
+### Generated-source artifact completeness
+
+The experimental ordering mode has a separate mandatory integration gate:
+`GO2LEAN_REQUIRE_BUILTIN_TESTS=1 GO2LEAN_REQUIRE_SANDBOX_TESTS=1 go test
+./internal/pipeline -run TestBuiltinSearchReplayFromPersistedSnapshot -count=1 -v`.
+It uses actual Lean search to generate a witness for a deliberately invalid
+unit comparator and independently replays it in sandboxed Go from the persisted
+snapshot, without passing the original overlay. No witness is supplied by the
+test. This proves the unit path works, **not** that an external project's
+contract was inferred or a release gate was met. Snapshot tests separately
+cover changed source/embed data/configuration, model/property tampering, moved
+identical clones, immutable compilation and stale cached results.
+
+The mandatory isolation gate also runs `./internal/poc`. Its trusted packaging
+fixture first builds/runs a generated oracle through the normal replay path,
+copies the delivered bundle to a different directory, removes the original
+target and workspace, and discards the in-memory overlay. It then builds the
+bundle's standalone preparer, prepares an overlay for a fresh source clone,
+builds the observation test with Go, and runs it under real isolation. The
+test requires the actual oracle/result observation, not just exit zero.
+A harness-only negative control must fail compilation without the helpers.
+The fixture's oracle **holds**: these are spurious candidates, not invented
+confirmed bugs or external-project release evidence.
+
+Other tests cover all package-local helpers, exclusion of unrelated package
+overlays, rewrite precedence, `-race` flag preservation, invalidation of an old
+manifest after a failed update, hash mismatches, omitted/missing files,
+unsupported manifest versions/fields, duplicate destinations, unsafe relative
+paths, symlinks and refusal to overwrite output. Portable preparation ignores
+the legacy absolute-path schedule overlay.
+
+This verifies the package-local Go-source delivery mechanism described in
+[the pipeline](pipeline.md#generated-support-sources), not arbitrary dependency
+overlays, a hostile-filesystem race boundary, model correctness, resumed
+command bindings, or the still-missing real external non-panic release case.
+
+### Offline dependency diagnostics
+
+`go2lean doctor -deps ./...` inspects the target's package and test import
+graph, without compiling or executing it. Unit/integration tests cover missing
+test dependencies, command and JSON failures, partially empty package
+selections, host download/build-setting overrides, bounded output, and local
+workspace `use`/`replace` resolution without changing module or workspace
+files. Real Go metadata probes use an `init` marker and a cgo `pkg-config`
+marker to check that neither target execution nor target build tooling runs.
+These fixtures test the diagnostic, not the release requirement to find a
+real project's non-panic functional defect.
+
+The installed packaging gate (`scripts/install-smoke.sh <external-module>
+<new-results-directory> [--require-external-deps] [--compare-order Function]`) installs the binary with a
+fresh Go module/build cache and an empty HOME. It then provisions target dependencies into a separate
+fresh module cache, with target files read-only, before running compilation
+with the checkout hidden and networking disabled. The diagnostics (`doctor`)
+run on the host instead, offline through Go's settings: they check that the
+host can give go2lean its own sandboxes, which a host that forbids nested user
+namespaces (GitHub's runners) would refuse inside the hiding sandbox. All stages use
+an allowlisted environment, ignoring host Go configuration, workspace selection,
+credentials and sandbox opt-outs. Installation and dependency preparation may
+use the network; their logs are separate from offline doctor/compile logs.
+`scripts/test_install_smoke.py` checks environment allowlisting, separate
+initially empty caches, online/offline phase selection, and rejection of
+reused result directories using mock tools. Those tests check orchestration,
+not real namespace isolation or successful dependency downloads.
+
+With `--require-external-deps`, tool/isolation prerequisites must first pass.
+Offline dependency diagnostics against the initially empty target cache must
+then fail with a dependency diagnostic. A successful diagnostic or an unrelated
+failure is not accepted as missing-dependency evidence. Only then does the gate
+provision dependencies and require offline diagnostics and compilation to pass.
+Mock tests cover both rejected cases as well as the expected failure/success
+transition. A missing module can stop `go list` before it emits package JSON;
+the gate accepts that path only with the explicit offline module-lookup
+diagnostic, not an arbitrary command failure.
+
+CI uses the pinned external uuid and stdr modules; stdr exercises the required
+missing-dependency transition. Go, elan, the pinned Lean toolchain,
+system tools and their PATH remain preinstalled prerequisites; other host paths
+remain readable. This tests clean Go dependency/cache setup and standalone
+packaging, **not** installation of OS/Lean prerequisites on a clean machine,
+every target build configuration, or the full release gate. By default it
+does not search/replay. The optional `--compare-order Function` explicitly
+asserts the experimental comparator role and additionally runs a fresh
+seed-42 ordering search/replay and resume, offline with the checkout hidden.
+Inspect the saved hunt and verdict records: command success alone does not
+mean a defect was found or the comparator passed. The
+[natural-order evaluation](evaluations/ordering-natural-20261028.md) records
+a real installed non-panic positive with this option; it is not the full
+acceptance matrix.
+
+Local checkpoint (2026-10-27): the gate passed on uuid revision
+`2d3c2a9cc518326daf99a383f07c4d3c44317e4d`, with deliberately invalid host
+`GOFLAGS`, `GOENV` and `GOWORK`, host sandbox opt-outs, and a credential
+sentinel. Doctor reported 143 locally available packages and working replay,
+Lean and comparator isolation. The external checkout remained unchanged.
+The fresh **tool installation** downloaded go2lean's dependencies; this uuid
+revision has no module dependencies to download, so it does not exercise
+provisioning a third-party target dependency. Compilation still reports
+unsupported model operations; successful packaging is not full model support.
+
+The same checkpoint passed on stdr v1.2.2, revision
+`521af2addfa7c81c8a65d0e85ed34bb6bb6dc262`, with the same hostile host settings
+and `--require-external-deps`. Tool/isolation prerequisites passed; offline
+doctor first rejected the empty cache because `github.com/go-logr/logr@v1.2.2`
+was unavailable. After network-enabled preparation populated the separate
+target cache, offline doctor reported 131 available packages and compilation
+passed with the checkout hidden. The external checkout remained unchanged.
+The compile report includes unmodeled calls/state, so this is dependency
+provisioning and packaging evidence only, not functional validation of stdr.
+CI retains both packaging cases' logs on success as well as failure.

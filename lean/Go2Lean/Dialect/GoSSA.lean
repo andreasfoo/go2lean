@@ -1848,6 +1848,9 @@ partial def jEnc (t : JTable) (heap : Heap Val) (d : Nat) (v : Val) : Except Boo
     | none, s@(.str ..) => (strBytes heap s).elim (.error false) (.ok ∘ goJsonQuote)
     | none, .bool b => .ok (asciiBytes (if b then "true" else "false"))
     | none, .int _ x => .ok (bvDec true x)
+    -- Decoded interface numbers use knownFloat's canonical JSON bytes,
+    -- even when the program never explicitly boxes a float64 itself.
+    | none, .tuple [.arr bs] => .ok (bs.map fun | .int _ b => b.toNat | _ => 0)
     -- A map[string]interface{} or []interface{} the program does not box
     -- itself (a decoded JSON object, a generated input): its members are
     -- interface values again.

@@ -1,0 +1,30 @@
+compare-order opt-in: asserting a pure, deterministic, total three-way ordering over all byte strings
+== Compile stage
+compare-order: static-model-eligible (9 required functions, 14 call fallback sites); assessment: /tmp/go2lean-natural-installed-20261028/ordering/builtins/compare-order-d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2.json
+compiled github.com/maruel/natural -> /tmp/go2lean-natural-installed-20261028/ordering/lean/Go2Lean/Generated/gossa/github_com_maruel_natural.lean
+  Compare      complete  func(a string, b string) int
+  Less         complete  func(a string, b string) bool
+  StringSlice.Len complete  func (p github.com/maruel/natural.StringSlice) Len() int
+  StringSlice.Less complete  func (p github.com/maruel/natural.StringSlice) Less(i int, j int) bool
+  StringSlice.Swap complete  func (p github.com/maruel/natural.StringSlice) Swap(i int, j int)
+  commonPrefix complete  func(a string, b string) int
+  compareNumericStrings complete  func(a string, b string) int
+  digits       complete  func(s string) int
+  go2leanBuiltinCompareOrderV1 complete  func(a string, b string, c string) (aa int, ab int, ba int, bc int, ac int)
+  go2leanSpecCompareOrderV1 complete  func(a string, b string, c string, aa int, ab int, ba int, bc int, ac int) bool  [spec for go2leanBuiltinCompareOrderV1]
+  less         complete  func(a string, b string) bool
+  trimLeadingZeros complete  func(s string) string
+compiled internal/bytealg -> /tmp/go2lean-natural-installed-20261028/ordering/lean/Go2Lean/Generated/gossa/internal_bytealg.lean
+  CompareString complete  func(a string, b string) int
+compiled strings -> /tmp/go2lean-natural-installed-20261028/ordering/lean/Go2Lean/Generated/gossa/strings.lean
+  Compare      complete  func(a string, b string) int
+compiled builtin snapshot: 7e3d9583740437da9a94a965ea6f862bf6a43aee4c7750a5802ca4c45d431ff4 (explicit ordering/purity/totality assumptions; not a passed check)
+######## github.com/maruel/natural
+== Spec & search stage: properties
+  p_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2 postcondition  explicitly selected github.com/maruel/natural.Compare obeys compare-order v1 over all byte strings (assuming purity, determinism and totality)
+== Spec & search stage: hunt
+  p_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2 random: found at trial 695 -> cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42
+      inputs map[] model ok [0, -9223372036854775808, -9223372036854775808, -9, 9223372036854775799] 
+== Replay stage: generate PoC and verify
+  cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42 confirmed    real: map[ret:0 -9223372036854775808 -9223372036854775808 -9 9223372036854775799]
+      PoC: /tmp/go2lean-natural-installed-20261028/ordering/poc/cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42

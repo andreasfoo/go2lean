@@ -107,9 +107,10 @@ func (w Workspace) ABI(t *Target, frontend string) (*ABI, error) {
 // HuntRecord says that a property was searched and what came of it, so a
 // resumed run can skip it.
 type HuntRecord struct {
-	Property       string `json:"property"`
-	Summary        string `json:"summary"`
-	Counterexample string `json:"counterexample,omitempty"`
+	Property              string `json:"property"`
+	Summary               string `json:"summary"`
+	Counterexample        string `json:"counterexample,omitempty"`
+	BuiltinSnapshotSHA256 string `json:"builtin_snapshot_sha256,omitempty"`
 }
 
 func (w Workspace) WriteHuntRecord(r *HuntRecord) error {

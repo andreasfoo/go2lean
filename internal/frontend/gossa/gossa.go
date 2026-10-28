@@ -927,10 +927,33 @@ func invokedNames(sprog *ssa.Program) map[string]bool {
 // without a Go body) that the standard library's string and byte code
 // bottoms out in: the only hand-written part of strings, bytes and strconv
 // when those are translated from source. The []byte forms read the bytes
-// as a string. Compare stays unmodelled.
+// as a string. The runtime string comparator uses the same unsigned byte
+// ordering as Go's string operators; it returns exactly -1, 0 or 1.
 func (t *fnState) bytealgCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 	if callee.Pkg == nil || callee.Pkg.Pkg.Path() != "internal/bytealg" || len(callee.Blocks) > 0 {
 		return false, nil
+	}
+	if callee.Name() == "abigen_runtime_cmpstring" && len(x.Call.Args) == 2 &&
+		isString(x.Call.Args[0].Type()) && isString(x.Call.Args[1].Type()) {
+		a, err := t.val(x.Call.Args[0])
+		if err != nil {
+			return true, err
+		}
+		b, err := t.val(x.Call.Args[1])
+		if err != nil {
+			return true, err
+		}
+		less, greater := t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: less, Op: ir.Simple("ult"), Args: []ir.Var{a, b}})
+		t.emit(ir.Instr{Dst: greater, Op: ir.Simple("ugt"), Args: []ir.Var{a, b}})
+		minus, zero, plus := t.fresh(), t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: minus, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "18446744073709551615"}}})
+		t.emit(ir.Instr{Dst: zero, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
+		t.emit(ir.Instr{Dst: plus, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "1"}}})
+		nonLess := t.fresh()
+		t.emit(ir.Instr{Dst: nonLess, Op: ir.Simple("ite"), Args: []ir.Var{greater, plus, zero}})
+		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("ite"), Args: []ir.Var{less, minus, nonLess}})
+		return true, nil
 	}
 	ops := map[string]string{"IndexByteString": "strIndexByte", "IndexString": "strIndexOf", "CountString": "strCountByte",
 		"IndexByte": "strIndexByte", "Index": "strIndexOf", "Count": "strCountByte"}

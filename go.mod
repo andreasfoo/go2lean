@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.82.0
+	golang.org/x/mod v0.42.0
 	golang.org/x/tools v0.52.0
 	tinygo.org/x/go-llvm v0.0.0-20261019104553-b75cf7a8b7bc
 )
@@ -25,6 +26,5 @@ require (
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 )

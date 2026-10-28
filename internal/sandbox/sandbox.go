@@ -8,8 +8,8 @@
 // testdata). Isolation is bubblewrap (`bwrap`, the unprivileged sandbox
 // Flatpak uses): the file system read-only except that copy, a private
 // /tmp, no network, its own PID namespace, killed with go2lean. Resource
-// limits are `prlimit`'s. Without bwrap only the limits apply, and Mode
-// says so.
+// limits are `prlimit`'s. Execution fails closed without isolation unless
+// the user explicitly selects GO2LEAN_SANDBOX=rlimits or off.
 package sandbox
 
 import (
@@ -60,7 +60,7 @@ func Mode() string {
 	modeOnce.Do(func() {
 		mode = detect()
 		if mode != ModeBwrap {
-			fmt.Fprintf(os.Stderr, "go2lean: sandbox: %s (bwrap missing or not usable; install bubblewrap): generated tests can reach the network and the file system; run on a scratch clone\n", mode)
+			fmt.Fprintf(os.Stderr, "go2lean: sandbox: %s (bwrap/prlimit missing, disabled, or not usable); replay refuses implicit fallback; weak-mode opt-outs permit host file/network access\n", mode)
 		}
 	})
 	return mode
@@ -84,11 +84,23 @@ func detect() string {
 	return ModeBwrap
 }
 
+// requireIsolation rejects implicit fallback. Weak modes require explicit
+// consent and are never described as isolated execution.
+func requireIsolation(mode, consent string) error {
+	if mode == ModeBwrap || consent == "off" || (mode == ModeLimits && consent == "rlimits") {
+		return nil
+	}
+	return fmt.Errorf("replay refused: isolation is %s; install working bubblewrap and prlimit (go2lean doctor), or explicitly set GO2LEAN_SANDBOX=rlimits/off for trusted code only", mode)
+}
+
 // bwrapArgs isolates a run: everything read-only, a private /tmp, the work
 // directory w writable, the binary's directory visible, no network.
 func bwrapArgs(w, bin string) []string {
-	return []string{
-		"--ro-bind", "/", "/",
+	args := []string{"--ro-bind", "/", "/"}
+	if home, err := os.UserHomeDir(); err == nil && home != "/" {
+		args = append(args, "--tmpfs", home)
+	}
+	return append(args, []string{
 		"--dev", "/dev",
 		"--proc", "/proc",
 		"--tmpfs", "/tmp",
@@ -98,7 +110,7 @@ func bwrapArgs(w, bin string) []string {
 		"--unshare-all",
 		"--die-with-parent",
 		"--new-session",
-	}
+	}...)
 }
 
 // BuildTest compiles pkg's tests plus the given files (base name to
@@ -148,6 +160,9 @@ func Run(bin, dir string, args, env []string, lim Limits) (stdout, stderr string
 // collect, a directory relative to the copy of dir (a fuzzer's
 // testdata/fuzz), keyed by their path relative to it.
 func RunCollect(bin, dir string, args, env []string, lim Limits, collect string) (stdout, stderr string, exit int, files map[string][]byte, err error) {
+	if err := requireIsolation(Mode(), os.Getenv("GO2LEAN_SANDBOX")); err != nil {
+		return "", "", 0, nil, err
+	}
 	w, err := os.MkdirTemp("", "go2lean-sbx-")
 	if err != nil {
 		return "", "", 0, nil, err

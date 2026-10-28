@@ -1,0 +1,36 @@
+import Go2Lean.Driver
+import Go2Lean.Generated.Registry
+open Lean Go2Lean Go2Lean.Search
+
+def main (args : List String) : IO UInt32 := do
+  let path := args.head!
+  let txt ← IO.FS.readFile path
+  let spec ← match Json.parse txt >>= specOfJson Go2Lean.Generated.jsonTables with
+    | .ok s => pure s
+    | .error e => throw (IO.userError e)
+  let p ← match link Go2Lean.Generated.registry spec.prog with
+    | some p => pure p
+    | none => throw (IO.userError "missing linked program")
+  let pool := spec.strs.map fun s => s.toUTF8.toList.map (·.toNat)
+  let mut g := mkStdGen spec.seed
+  for trial in [0:spec.trials] do
+    let (pfn, g') := randNat g 0 2
+    g := g'
+    let pf := Profile.ofNat pfn
+    let tseed := (mixHash (UInt64.ofNat spec.seed) (UInt64.ofNat trial)).toNat
+    let or := oracleOf pf spec.extra tseed
+    let h := havocOf tseed p.havocWidths
+    let (args, g', heap) := genArgs pf spec.extra g spec.gens pool spec.table spec.allowNil
+    g := g'
+    let alts := [havocOf (tseed + 7919) p.havocWidths, havocOf (tseed + 104729) p.havocWidths]
+    let (o, s, ret) := check p or h spec.prop args spec.fuel heap alts
+    IO.println (Json.mkObj [
+      ("trial", trial), ("seed", spec.seed),
+      ("objects", Json.mkObj (objectsOf heap spec.gens args)),
+      ("outcome", Json.str (reprStr o)),
+      ("model_output", modelOutput o ret),
+      ("havoc_reads", s.log.size),
+      ("assumptions", Json.arr (s.assumed.map Json.str)),
+      ("spec_exit", (specExit spec.prop o s).map Json.str |>.getD Json.null),
+      ("stuck", s.stuck.map Json.str |>.getD Json.null)]).compress
+  return 0

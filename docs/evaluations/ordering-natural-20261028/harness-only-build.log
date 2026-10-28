@@ -1,0 +1,3 @@
+# github.com/maruel/natural [github.com/maruel/natural.test]
+../detached-bundle/zz_go2lean_poc_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42_test.go:33:34: undefined: go2leanBuiltinCompareOrderV1
+../detached-bundle/zz_go2lean_poc_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42_test.go:37:24: undefined: go2leanSpecCompareOrderV1

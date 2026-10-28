@@ -1,5 +1,4 @@
-// Package repo locates the go2lean checkout and its Lean project from any
-// working directory inside it.
+// Package repo locates Go modules and materializes the bundled Lean runtime.
 package repo
 
 import (
@@ -13,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	leanassets "github.com/andreasfoo/go2lean/lean"
 )
 
 // Root walks up from the working directory to the directory holding go.mod.
@@ -33,57 +34,41 @@ func Root() (string, error) {
 	}
 }
 
-// LeanDir is the lake project of go2lean's core Lean library, as checked
-// out. Runs build and use a snapshot of it (CoreDir).
+// LeanDir is the source checkout location (not needed by installed binaries).
 func LeanDir(root string) string { return filepath.Join(root, "lean") }
 
 // keepCores is how many core snapshots CoreDir keeps.
 const keepCores = 4
 
-// CoreDir is the core lake project a run builds and its workspaces require:
-// a copy of the checkout's core sources under the user cache directory
-// ($GO2LEAN_CACHE, else os.UserCacheDir()/go2lean), named by a hash of
-// their contents. Runs of the same sources share its build; editing the
-// checkout makes a new snapshot instead of changing the one a running
-// search links against. The most recently used keepCores are kept.
+// CoreDir materializes the bundled Lean sources under $GO2LEAN_CACHE (or
+// os.UserCacheDir()/go2lean), keyed by their contents. root is retained for
+// caller compatibility; the current directory never selects trusted sources.
 func CoreDir(root string) (string, error) {
-	src := LeanDir(root)
 	files, err := CoreFiles(root)
 	if err != nil {
 		return "", err
 	}
 	h := sha256.New()
 	for _, f := range files {
-		b, err := os.ReadFile(filepath.Join(src, f))
+		b, err := leanassets.Core.ReadFile(f)
 		if err != nil {
 			return "", err
 		}
 		fmt.Fprintf(h, "%s\x00%d\x00", f, len(b))
 		h.Write(b)
 	}
-	return coreSnapshot(src, files, h.Sum(nil))
+	return coreSnapshot(files, h.Sum(nil))
 }
 
-// CoreFiles are the core library's files in the checkout (relative to
-// LeanDir): its sources, lakefile, toolchain and manifest, without the
-// generated models, the search engines' sources or the hand proofs.
+// CoreFiles lists bundled runtime files in stable order, relative to CoreDir.
 func CoreFiles(root string) ([]string, error) {
-	src := LeanDir(root)
 	var files []string
-	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(leanassets.Core, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(src, path)
-		if d.IsDir() {
-			switch rel {
-			case ".lake", "Search", "Proofs", filepath.Join("Go2Lean", "Generated"):
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(rel, ".lean") || rel == "lakefile.toml" || rel == "lean-toolchain" || rel == "lake-manifest.json" {
-			files = append(files, rel)
+		if !d.IsDir() {
+			files = append(files, path)
 		}
 		return nil
 	})
@@ -94,7 +79,7 @@ func CoreFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func coreSnapshot(src string, files []string, sum []byte) (string, error) {
+func coreSnapshot(files []string, sum []byte) (string, error) {
 	base := os.Getenv("GO2LEAN_CACHE")
 	if base == "" {
 		c, err := os.UserCacheDir()
@@ -105,10 +90,16 @@ func coreSnapshot(src string, files []string, sum []byte) (string, error) {
 	}
 	dir := filepath.Join(base, "core-"+hex.EncodeToString(sum)[:16])
 	if _, err := os.Stat(filepath.Join(dir, ".complete")); err != nil {
-		tmp := fmt.Sprintf("%s.tmp-%d", dir, os.Getpid())
-		os.RemoveAll(tmp)
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			return "", err
+		}
+		tmp, err := os.MkdirTemp(base, filepath.Base(dir)+".tmp-")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(tmp)
 		for _, f := range files {
-			b, err := os.ReadFile(filepath.Join(src, f))
+			b, err := leanassets.Core.ReadFile(f)
 			if err != nil {
 				return "", err
 			}

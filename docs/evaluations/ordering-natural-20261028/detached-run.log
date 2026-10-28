@@ -1,0 +1,5 @@
+=== RUN   TestGo2LeanPoC_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42
+GO2LEAN_RESULT {"panicked":false,"ret":"0 -9223372036854775808 -9223372036854775808 -9 9223372036854775799","spec":false}
+--- PASS: TestGo2LeanPoC_cx_builtin_compare_order_d4078ad10a0ebfa96fc979d467f990f5a32ec7f94d740219841020ec35965aa2_random_s42 (0.00s)
+PASS
+DETACHED_CONFIRMED_NON_PANIC

@@ -41,6 +41,7 @@ Lean finds the inputs; `go test` is the judge.
   properties over bounded streams of calls.
 - **Real Go replay** — turn candidate counterexamples into runnable tests and
   distinguish confirmed findings from spurious or inconclusive results.
+  Package-local generated helpers travel with their replay artifacts.
 - **Concurrency bugs** — deadlocks, goroutine leaks and data races, found in
   the model and confirmed by `go test` (with `-race`, and the model's
   schedule replayed when Go's scheduler does not take it); for small
@@ -59,6 +60,12 @@ Lean finds the inputs; `go test` is the judge.
 
 Requires **Git, Go 1.26 and [elan](https://github.com/leanprover/elan)**.
 The pinned Lean toolchain is fetched on the first build. No LLM API key is needed.
+The binary bundles its Lean sources and can be installed with
+`go install github.com/andreasfoo/go2lean/cmd/go2lean@latest`; it does not
+need a source checkout at runtime. From a Go module, use
+`go2lean run ./...` (automatic templates are panic checks).
+An [experimental explicit ordering mode](docs/builtins.md) supplies non-panic
+laws for a selected comparator under documented role/domain assumptions.
 
 ```sh
 git clone https://github.com/andreasfoo/go2lean.git
@@ -72,7 +79,17 @@ runnable test plus reproduction instructions to `out/poc/`.
 
 **Run against a scratch clone:** replay executes real code and may have side
 effects. On Linux, [bubblewrap](https://github.com/containers/bubblewrap) is
-recommended for isolation; without it, replay uses resource limits only.
+required for isolated replay (together with `prlimit`); replay refuses an
+implicit unconfined fallback. Run `go2lean doctor` to check the local Go/Lean
+toolchains and sandbox capabilities, including proof-judge requirements.
+Use `go2lean doctor -deps ./...` to also check the target's cached dependencies
+offline, without compiling or running it.
+The [installation regression](docs/validation.md#offline-dependency-diagnostics)
+checks fresh Go caches and missing-then-provisioned external dependencies.
+Builds still run outside the sandbox, so use trusted source and dependencies.
+Sandboxed replay and agent Lean checks do not inherit host credentials from
+the environment. Other readable host paths remain exposed; this is not a
+complete host-secret boundary.
 
 See the [usage guide](docs/usage.md) for sample output, agent setup, command
 options, and running against another module.
@@ -119,7 +136,8 @@ alone would miss it. [More about specs →](docs/pipeline.md#writing-a-spec)
 ## Validation
 
 The project checks known-bug examples, compares model behavior with real Go,
-and records real-world case studies. CI pins expected regression outcomes;
+and records real-world case studies. CI pins expected regression outcomes and requires real replay coverage for
+every differential property and requested seed;
 these checks are evidence, not a general correctness guarantee.
 
 [Validation and regression cases](docs/validation.md) ·
@@ -142,6 +160,7 @@ these checks are evidence, not a general correctness guarantee.
 | [Project reference](docs/reference.md) | Repository layout and roadmap |
 | [Design](docs/design.md) | Architecture and technical decisions |
 | [Concurrency](docs/concurrency.md) | Concurrent Go modeling and its limits |
+| [Experimental ordering checks](docs/builtins.md) | Explicit opt-in, frozen bindings, real-project finding and remaining release gates |
 | [Related work](docs/related-work.md) | Context and comparisons |
 
 ## License

@@ -21,6 +21,8 @@ func main() {
 	startMemProfile()
 	var err error
 	switch os.Args[1] {
+	case "doctor":
+		err = cmdDoctor(os.Args[2:])
 	case "compile":
 		err = cmdCompile(os.Args[2:])
 	case "props":
@@ -56,12 +58,16 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
+  go2lean doctor [-deps [./...]]               diagnose prerequisites; optional offline target dependency check
   common flags: -workspace out   -module <dir of the Go module to analyse>
   go2lean compile [-workspace out] <packages...>  compile stage: Go -> Lean model, ABI, targets (./... allowed)
   go2lean props   [-workspace out]                spec & search stage: template properties from the model report
   go2lean hunt    [-workspace out] [-property id] spec & search stage: search for counterexamples
   go2lean poc     [-workspace out] -counterexample id   replay stage: realise and verify in Go
   go2lean run     [-workspace out] <package>      all of the above
+  experimental: compile/run -compare-order Func <one package>
+                explicitly assert pure, deterministic, total func(string,string) int ordering;
+                default native 64-bit build, no go.work/GOFLAGS, fresh dedicated workspace
   go2lean fuzz    [-workspace out] [-fuzztime 30s] [-spec-file f] <package>   the package's specs as go test -fuzz targets
   go2lean prove   [-workspace out] -goals f.json | -func F -post P  <package>
                                                   state functional theorems (wpFun contracts) and prove them
@@ -86,21 +92,24 @@ type commonFlags struct {
 func workspaceFlag(fs *flag.FlagSet) *commonFlags {
 	return &commonFlags{
 		workspace: fs.String("workspace", "out", "workspace directory for JSON records"),
-		module:    fs.String("module", "", "directory of the Go module to analyse (default: this checkout)"),
+		module:    fs.String("module", "", "directory of the Go module to analyse (default: current module)"),
 	}
 }
 
-// openWorkspace resolves the workspace and the environment. The Lean project
-// always lives in the go2lean checkout; -module points package loading and
-// go test at another Go module.
+// openWorkspace resolves paths from the invoking directory. The trusted Lean
+// runtime is bundled; -module selects the module for loading and Go replay.
 func openWorkspace(cf *commonFlags) (contract.Workspace, pipeline.Env, error) {
-	root, err := repo.Root()
+	cwd, err := os.Getwd()
 	if err != nil {
 		return contract.Workspace{}, pipeline.Env{}, err
 	}
+	root, err := repo.Root()
+	if err != nil {
+		root = cwd // -module also works from a directory with no go.mod
+	}
 	path := *cf.workspace
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, path)
+		path = filepath.Join(cwd, path)
 	}
 	env := pipeline.Env{Root: root}
 	if *cf.module != "" {
@@ -117,6 +126,7 @@ func cmdCompile(args []string) error {
 	ws := workspaceFlag(fs)
 	deps := fs.Bool("deps", false, "also model the functions of dependency packages the compiled packages call")
 	tests := fs.Bool("tests", false, "make the packages' test functions (TestXxx(t *testing.T)) targets")
+	compareOrder := fs.String("compare-order", "", "explicitly select a pure, deterministic, total func(string,string) int ordering comparator (experimental; one package)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		return fmt.Errorf("compile: at least one package pattern expected (e.g. ./...)")
@@ -126,6 +136,13 @@ func cmdCompile(args []string) error {
 		return err
 	}
 	env.Deps, env.Tests = *deps, *tests
+	if *compareOrder != "" {
+		env, err = pipeline.ConfigureCompareOrder(w, env, *compareOrder, fs.Args()...)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "compare-order opt-in: asserting a pure, deterministic, total three-way ordering over all byte strings")
+	}
 	_, err = pipeline.CompileAll(w, env, os.Stdout, fs.Args()...)
 	return err
 }

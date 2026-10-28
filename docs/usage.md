@@ -10,11 +10,68 @@
 
 Requirements: Git, Go 1.26 and [elan](https://github.com/leanprover/elan). The Lean
 toolchain pinned in `lean/lean-toolchain` is fetched on the first build.
-Recommended on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
-(`apt install bubblewrap`), which isolates tests during the replay stage; without
-it they run with resource limits only.
+Required for isolated replay on Linux: [bubblewrap](https://github.com/containers/bubblewrap)
+(`apt install bubblewrap`, plus `prlimit` from util-linux), which isolates tests
+during the replay stage. Missing isolation refuses replay by default. For
+**trusted code only**, `GO2LEAN_SANDBOX=rlimits` explicitly permits resource
+limits without isolation, and `GO2LEAN_SANDBOX=off` permits unconfined execution.
+Neither weak mode is safe for arbitrary code. Build steps still run outside
+confinement (including cgo), so a scratch clone is not a complete security boundary.
 
-### 2. Clone and run the included example
+Run `go2lean doctor` to check local tools, Go 1.26 or newer (with automatic
+toolchain downloads disabled for the version probe), the bundled Lean toolchain pin, and usable
+isolation, including the `--clearenv` capability required by Lean's comparator
+(older bubblewrap may support replay but not proof judging).
+`COMPARATOR_BWRAP` selects the comparator sandbox executable, as in Lake. It returns nonzero when prerequisites are missing or isolation is
+unavailable. It does not download tools, load target packages or execute target
+code by default. Add `-deps` to inspect target package and test dependencies:
+
+```sh
+go2lean doctor -deps ./...
+```
+
+This runs offline `go list` metadata loading with the local toolchain, module
+proxy/checksum/VCS downloads disabled, host GOFLAGS/GOENV overrides ignored,
+and `-mod=readonly`. Workspace resolution is preserved through a disposable
+copy of `go.work` (with absolute local paths) and its sums, since Go may update
+workspace sums even in readonly mode. Target module/workspace files are not
+rewritten. Missing dependencies, package-loading errors and empty matches fail
+the check; use trusted tooling to prepare dependencies separately. It does not
+compile or run target code, check types, install dependencies, inspect every
+build-tag configuration, or establish model support. Cache metadata may be
+written. The metadata command has a 30-second timeout and a 16 MiB output
+limit; use narrower package patterns if either limit is reached.
+It is not a clean-machine installation test.
+
+### 2. Install, or clone and run the included example
+
+For an explicitly selected pure/total string ordering comparator, the
+[experimental ordering mode](builtins.md#experimental-usage) supplies a
+non-panic law without handwritten spec code. It requires a dedicated workspace
+and default native build configuration; it is not automatic contract inference
+or a completed real-project release evaluation.
+
+```sh
+go install github.com/andreasfoo/go2lean/cmd/go2lean@latest
+cd /path/to/your/go/module
+go2lean compile ./...
+```
+
+The binary embeds the trusted Lean core sources. It materializes them in
+`$GO2LEAN_CACHE` (default: the user cache directory's `go2lean/`) and builds
+there; no go2lean checkout is required. Changes to embedded sources require
+rebuilding the binary. The target module's `lean/` directory is never used
+as the trusted runtime. Compilation alone does not run the search or replay.
+Lean/Lake must still be installed for search and proof commands.
+[Standalone packaging evaluation](eval/install.md) records the isolated
+external-module compile check and its limits.
+
+Relative `-workspace` paths are resolved from the invoking directory.
+Without `-module`, package loading uses the enclosing Go module. With
+`-module /path/to/module`, commands can also be invoked outside any Go module.
+The latter flag does not change how workspace paths are resolved.
+
+To run the included example instead:
 
 ```sh
 git clone https://github.com/andreasfoo/go2lean.git

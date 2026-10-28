@@ -27,7 +27,43 @@ jobs:
         run: go vet ./...
 
       - name: Unit tests
-        run: go test ./internal/...
+        run: go test ./internal/... ./cmd/go2lean
+
+      - name: Sandbox integration (missing isolation must fail, not skip)
+        env:
+          GO2LEAN_REQUIRE_SANDBOX_TESTS: "1"
+        run: go test ./internal/sandbox ./internal/poc -count=1 -v
+
+      - name: Builtin snapshot model search and independent Go replay
+        env:
+          GO2LEAN_REQUIRE_SANDBOX_TESTS: "1"
+          GO2LEAN_REQUIRE_BUILTIN_TESTS: "1"
+        run: go test ./internal/pipeline -run TestBuiltinSearchReplayFromPersistedSnapshot -count=1 -v
+
+      - name: Installed binary with checkout hidden (packaging only)
+        run: |
+          git clone https://github.com/google/uuid.git "$RUNNER_TEMP/install-uuid"
+          git -C "$RUNNER_TEMP/install-uuid" checkout --detach 2d3c2a9cc518326daf99a383f07c4d3c44317e4d
+          scripts/install-smoke.sh "$RUNNER_TEMP/install-uuid" "$RUNNER_TEMP/install-smoke"
+
+      - name: Installed binary with missing then provisioned external dependencies
+        run: |
+          git clone https://github.com/go-logr/stdr.git "$RUNNER_TEMP/install-stdr"
+          git -C "$RUNNER_TEMP/install-stdr" checkout --detach 521af2addfa7c81c8a65d0e85ed34bb6bb6dc262
+          scripts/install-smoke.sh "$RUNNER_TEMP/install-stdr" "$RUNNER_TEMP/install-stdr-smoke" --require-external-deps
+
+      - name: Installed packaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-packaging
+          path: |
+            ${{ runner.temp }}/install-smoke/*.log
+            ${{ runner.temp }}/install-stdr-smoke/*.log
+          if-no-files-found: ignore
+
+      - name: Differential gate unit tests
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Ground-truth regression (testdata/regress/examples.golden)
         run: scripts/regress.sh "$RUNNER_TEMP/regress"
@@ -74,6 +110,9 @@ jobs:
       - name: strings, strconv and utf8 models against Go
         run: DEPS=1 PKG=testdata/stdaudit scripts/json-diff.sh "$RUNNER_TEMP/std-audit" 6 | tail -5
 
+      - name: Native string comparison bridge against Go
+        run: DEPS=1 PKG=testdata/stringcmpdiff scripts/json-diff.sh "$RUNNER_TEMP/stringcmp-diff" 6 | tail -5
+
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -88,6 +127,7 @@ jobs:
             ${{ runner.temp }}/url-diff/*.log
             ${{ runner.temp }}/misc-diff/*.log
             ${{ runner.temp }}/std-audit/*.log
+            ${{ runner.temp }}/stringcmp-diff/*.log
           if-no-files-found: ignore
 
   # Proofs (docs/trust.md): the judge runs Lean's comparator in bubblewrap,

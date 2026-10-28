@@ -1,0 +1,23 @@
+Frozen evaluation protocol v1, 2026-10-28
+Tool revision: 05da2a0 (current CLI /tmp/go2lean-snapshot-current-cli-20261027).
+Functional ordering-law evaluation only, local scratch clones; no tracker postings.
+Candidates:
+ github.com/maruel/natural @ 83eecaf9a40d7c4212e4518531111204418a4077, Compare
+ github.com/fvbommel/sortorder @ edc3fa94c108b5d9a4ee8931e2920aea61647c87, NaturalCompare
+Contract justification: public production comments describe natural string ordering,
+with sorting adapters; no restricted input grammar, locale or state is specified.
+Domain: all Go byte strings, exact existing compare-order builtin v1 laws.
+No handwritten oracle or upstream test corpus. Historical test payloads have not
+been inspected. Production code and commit subjects have been inspected.
+First run for each: engine=random, seed=42, trials=2000, maxlen=8, fuel=1000,
+budget=60 seconds, mutation and proof disabled. Fresh independent workspaces.
+No unsupported callee may be bypassed. Record capability rejection as unsupported.
+If eligible and no witness: additional precommitted seeds 7,19,2026 with
+trials=10000, maxlen=32, fuel=10000, budget=120 seconds per property, same law.
+Use only built-in generator, no candidate-specific strings or historical seeds.
+A positive requires saved model-generated witness plus sandboxed real Go
+non-panic violation, then independent moved-bundle replay. No counterexample
+is only bounded model evidence, not a pass/proof/accepted negative control.
+Fixed-revision comparison is only selected after a confirmed positive;
+any change in protocol will be recorded as a new exploratory protocol, not
+retroactively included in this frozen run.

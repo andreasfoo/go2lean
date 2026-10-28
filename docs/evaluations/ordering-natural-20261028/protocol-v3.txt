@@ -1,0 +1,9 @@
+Protocol v3, frozen before local fix run, 2026-10-28
+Compare the same law and v2 binary with a locally proposed source fix.
+This is NOT an upstream fixed revision. No upstream test payloads used.
+Replace uint64 subtraction converted to int with explicit sign branches.
+First run identical v2 settings seed42 trials2000 maxlen8 fuel1000 budget60.
+If no witness: seeds7,19,2026 trials10000 maxlen32 fuel10000 budget120.
+An additional finding rejects the proposed fix; do not hide it.
+6a49812a8aa2d590e47bb278d263a93eaae9facdb6fcd9129dd796b789fdbaf0  /tmp/go2lean-order-eval-20261028/local-fix.patch
+d9ee0eb21d6a52183b51be07713d8b0f707addac5394d76096ab4ce7125c81ad  /tmp/go2lean-order-eval-20261028/go2lean
