@@ -223,3 +223,27 @@ func SpecDecodeStrHiDiff(a, c, d byte, ret string) bool {
 	go2leanProbe("v", ret)
 	return false
 }
+
+// go2lean:spec Uvarint4
+func SpecUvarint4Diff(a, c, d, e byte, ret string) bool {
+	go2leanProbe("v", ret)
+	return false
+}
+
+// go2lean:spec Uvarint11
+func SpecUvarint11Diff(a, e byte, ret string) bool {
+	go2leanProbe("v", ret)
+	return false
+}
+
+// go2lean:spec Varint3
+func SpecVarint3Diff(a, c, e byte, ret string) bool {
+	go2leanProbe("v", ret)
+	return false
+}
+
+// go2lean:spec PutUvarint
+func SpecPutUvarintDiff(x uint64, ret string) bool {
+	go2leanProbe("v", ret)
+	return false
+}

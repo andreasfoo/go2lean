@@ -42,6 +42,10 @@ type Env struct {
 	Overlay map[string][]byte
 	// Tests makes test functions targets (gossa.Options.Tests).
 	Tests bool
+	// SpecsOnly searches the packages' specs only, not the no_panic
+	// templates: on a large package the templates otherwise take the
+	// budget first.
+	SpecsOnly bool
 	// CompareOrder requires a static call-graph assessment of the supplied
 	// canonical generated overlay before emitting a model. The field alone
 	// does not activate a property; ConfigureCompareOrder additionally binds
@@ -488,6 +492,9 @@ func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts
 	if err != nil {
 		return nil, err
 	}
+	if env.SpecsOnly {
+		props = specsOnly(props)
+	}
 	fmt.Fprintln(out, "== Spec & search stage: hunt")
 	cxs, err := HuntAll(w, env, props, opts, out)
 	if err != nil {
@@ -509,4 +516,15 @@ func runReport(w contract.Workspace, env Env, report *contract.ModelReport, opts
 	}
 	res.Verdicts = vs
 	return res, nil
+}
+
+// specsOnly drops the no_panic templates.
+func specsOnly(props []*contract.Property) []*contract.Property {
+	var out []*contract.Property
+	for _, p := range props {
+		if p.Kind != contract.KindNoPanic {
+			out = append(out, p)
+		}
+	}
+	return out
 }

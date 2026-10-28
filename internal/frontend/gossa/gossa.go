@@ -1031,6 +1031,9 @@ var modelledStdlib = map[string]bool{
 	"net/url":              true,
 	"unicode/utf8":         true,
 	"unicode/utf16":        true,
+	// Only the functions a package calls are translated: the varints,
+	// not the reflection-based Read and Write.
+	"encoding/binary": true,
 }
 
 func isStdlib(path string) bool {

@@ -256,3 +256,19 @@ func TestHarnessTestEntryConc(t *testing.T) {
 		t.Fatalf("rank of a failing test = %+v", got)
 	}
 }
+
+// TestVerdictReasonsForBuildFailures tells the harness's own compile error
+// from a package whose tests do not build and from a target that exited.
+func TestVerdictReasonsForBuildFailures(t *testing.T) {
+	p := &prepared{cx: &contract.Counterexample{ID: "cx1"}}
+	for _, c := range []struct{ stdout, stderr, want string }{
+		{"", "./zz_go2lean_poc_12_test.go:3:2: undefined: x", "harness_compile_error"},
+		{"", "# example.com/p\n./p_test.go:114:11: Errorf call has arguments but no formatting directives", "package_build_error"},
+		{"=== RUN   TestGo2LeanPoC_cx1\n", "exit status 3", "target_exited"},
+	} {
+		v := verdictOf(p, nil, "go test", 1, c.stdout, c.stderr, "")
+		if v.Diagnosis == nil || v.Diagnosis.Reason != c.want {
+			t.Errorf("stderr %q: diagnosis %+v, want %s", c.stderr, v.Diagnosis, c.want)
+		}
+	}
+}
