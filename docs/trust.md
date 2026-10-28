@@ -176,7 +176,8 @@ judge's directory and in the proof record. It holds:
 
 ## Evidence
 
-- **Red-team corpus** (`testdata/redteam`, `scripts/redteam.sh`, in CI).
+- **Red-team corpus** (`testdata/redteam`, `scripts/redteam.sh`, in the
+  proofs workflow, run by hand).
   Each attack claims something false of `Max2` (that it never returns, or
   returns less than both arguments). Every attack must be rejected, a true
   control goal accepted, and no file outside the sandboxes changed. The
@@ -193,7 +194,7 @@ judge's directory and in the proof record. It holds:
   examples are restated in Go and run on random, boundary and fuzzed
   inputs (`examples/*/proved_test.go`). A semantic mutant of each proved
   function must fail that test and fail to prove (`scripts/mutants.sh`).
-  Both run in CI: `docs/eval/proof-trust.md`.
+  Both run in the proofs workflow: `docs/eval/proof-trust.md`.
 
 ## Outside the boundary
 
@@ -209,5 +210,5 @@ These are not covered by the judge:
   stronger than the binaries it runs.
 - **The bounded `bv_decide` route** and the hand proofs in
   `lean/Proofs/Functional.lean`. The hand proofs are checked by `#print
-  axioms` in CI, not by the judge. They hold for every oracle and havoc
+  axioms` in the proofs workflow, not by the judge. They hold for every oracle and havoc
   function, but most do not state `assumed`.

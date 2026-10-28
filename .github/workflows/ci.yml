@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to a pull request cancels its run in progress.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -13,10 +18,36 @@ defaults:
   run:
     shell: bash   # -eo pipefail
 
-# Four jobs in parallel; the wall time is the longest one (the regression,
-# about 18 minutes). Each sets up through .github/actions/setup.
+# Two jobs in parallel, about 10 minutes; a change to documentation only
+# (docs/, .claude/, *.md) runs neither, and skipped jobs count as passed.
+# The Lean proofs and the proof judge's checks run on demand only
+# (proofs.yml). Each job sets up through .github/actions/setup.
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.c.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ] || ! files=$(git diff --name-only "$BASE" HEAD); then
+            echo code=true
+          elif grep -qvE '^(docs/|\.claude/)|\.md$' <<< "$files"; then
+            echo code=true
+          else
+            echo code=false
+          fi | tee -a "$GITHUB_OUTPUT"
+
   check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -65,7 +96,9 @@ jobs:
       - name: Differential gate unit tests
         run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
 
-      - name: Ground-truth regression (testdata/regress/examples.golden)
+      - name: Ground-truth regression without Lean proofs (testdata/regress/examples.golden)
+        env:
+          PROVE: "0"
         run: scripts/regress.sh "$RUNNER_TEMP/regress"
 
       - name: Logs
@@ -80,6 +113,8 @@ jobs:
 
   # The library models against Go (scripts/json-diff.sh).
   models:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -128,54 +163,4 @@ jobs:
             ${{ runner.temp }}/misc-diff/*.log
             ${{ runner.temp }}/std-audit/*.log
             ${{ runner.temp }}/stringcmp-diff/*.log
-          if-no-files-found: ignore
-
-  # Proofs (docs/trust.md): the judge runs Lean's comparator in bubblewrap,
-  # and Lean text an agent wrote runs only there.
-  proofs:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-
-      - name: Proved properties against the real Go code
-        run: go test ./examples/proofs ./examples/invariants ./examples/loops ./examples/strloops
-
-      - name: Functional proofs, judged (lean/Proofs/Functional.lean, examples/*/proofs.json)
-        run: scripts/proofs.sh "$RUNNER_TEMP/proofs"
-
-      - name: Logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: proof-logs
-          path: ${{ runner.temp }}/proofs/*.log
-          if-no-files-found: ignore
-
-  # The proof judge's own checks: attacks it must reject, mutants that
-  # must not prove.
-  judge:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-
-      - name: Red-team corpus of the proof judge (testdata/redteam)
-        run: scripts/redteam.sh "$RUNNER_TEMP/redteam" 4
-
-      - name: Semantic mutants of the proved functions (testdata/mutants.txt)
-        run: scripts/mutants.sh "$RUNNER_TEMP/mutants" 4
-
-      - name: Logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: judge-logs
-          path: |
-            ${{ runner.temp }}/redteam/*.log
-            ${{ runner.temp }}/redteam/verdicts.txt
-            ${{ runner.temp }}/mutants/*.log
-            ${{ runner.temp }}/mutants/verdicts.txt
           if-no-files-found: ignore

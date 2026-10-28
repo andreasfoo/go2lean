@@ -14,11 +14,13 @@ functions alone, loops with invariants an agent writes
 (`examples/invariants`, `examples/loops`: nested loops, bubble sort) or by hand (`lean/Proofs/Functional.lean`: up to
 insertion sort, sorted and a permutation, for every slice). Each proof is
 judged by Lean's comparator against go2lean's own statement; a red-team
-corpus of 17 attacks on that judgement is rejected in CI, and the
+corpus of 17 attacks on that judgement is rejected (in the on-demand
+proofs workflow), and the
 properties `go2lean prove` proves on the examples are checked again on the
 real Go code, where a mutant of each proved function is told apart and
 fails to prove ([trust](trust.md), [eval](eval/proof-trust.md)). 31 ground-truth packages run in CI (260 properties, each outcome
-pinned, including every spec's mutation score). The design is in
+pinned, including every spec's mutation score; their Lean proofs only in
+the proofs workflow). The design is in
 [docs/design.md](../docs/design.md); the Go semantics modelled, and how
 faithfully, in [docs/semantics.md](../docs/semantics.md); what it does not
 deliver, in [docs/limitations.md](../docs/limitations.md). There are no
@@ -55,7 +57,12 @@ outcome (confirmed, certified, none) with
 [`testdata/regress/examples.golden`](../testdata/regress/examples.golden);
 `scripts/json-diff.sh out-jd` checks the `encoding/json` model against Go,
 `PKG=testdata/rediff scripts/json-diff.sh out-rd` the `regexp` model, and
-`PKG=testdata/convdiff` the `strconv` model. All run on every push.
+`PKG=testdata/convdiff` the `strconv` model. All run in CI on every change
+to code, `regress.sh` there with `PROVE=0`: without the Lean proofs, which
+take most of its time, a property Lean proves is expected at its
+exhaustive result. The full run, with the proofs, the proof judge's
+red-team corpus and the mutants, is the proofs workflow
+(`.github/workflows/proofs.yml`), started by hand.
 
 | package | planted bug | result |
 |---|---|---|
