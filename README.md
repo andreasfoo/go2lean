@@ -144,7 +144,8 @@ these checks are evidence, not a general correctness guarantee.
 [semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md) ·
 [proofs on real code](docs/eval/prove-blind.md) ·
 [proofs on panic fixes](docs/eval/prove-fixes.md) ·
-[concurrency evaluation](docs/eval/conc.md)
+[concurrency evaluation](docs/eval/conc.md) ·
+[what defects Go code has](docs/eval/go-defects.md)
 
 ## Documentation
 
@@ -152,6 +153,7 @@ these checks are evidence, not a general correctness guarantee.
 |---|---|
 | [Usage guide](docs/usage.md) | Agent setup, commands, real modules, C / LLVM |
 | [Pipeline & specs](docs/pipeline.md) | Model construction, search, replay, spec examples |
+| [Spec skill](.claude/skills/go2lean-spec/SKILL.md) | For an agent: what to check in a repo, which oracle, reading verdicts, the model-gap ledger |
 | [Go support](docs/reference.md#supported-go-subset) | Supported constructs and library models |
 | [Semantics](docs/semantics.md) | How faithfully the model follows Go |
 | [Limitations](docs/limitations.md) | Unsupported behavior and trust boundaries |
