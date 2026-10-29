@@ -473,6 +473,10 @@ inductive Op where
   /-- `==` on two interface values the model built: equal dynamic types and
   equal dynamic values, or both nil. (Only where `ifaceEqKnown`.) -/
   | ifaceEq
+  /-- `reflectlite.TypeOf(x).Comparable()`, `errors.Is`'s test of its
+  target: false for a value boxed with one of these tags (the boxed types
+  `==` does not apply to), true otherwise (#69). -/
+  | ifaceComparable (notComparable : List Nat)
   -- maps the program builds: `.boxed 1 p`, `p` pointing at an `.arr` of
   -- `.tuple [key, value]` in insertion order
   | makeMap
@@ -1030,6 +1034,9 @@ def ifaceEqVal (heap : Heap Val) : Val → Val → Option Bool
     | _, _ => none
   | a@(.boxed ..), b@(.boxed ..) | a@.opaqueNil, b@(.boxed ..)
   | a@(.boxed ..), b@.opaqueNil | a@.opaqueNil, b@.opaqueNil => eqVal a b
+  -- A nil error is nil whichever way it was made.
+  | .err false, .err false | .err false, .opaqueNil | .opaqueNil, .err false => some true
+  | .err false, .boxed .. | .boxed .., .err false => some false
   | _, _ => none
 
 /-- The model's size bound on a slice's backing array: an allocation past
@@ -1102,6 +1109,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .ifaceEq, [a, b] => match ifaceEqVal heap a b with
     | some r => .ok (.bool r)
     | none => .panic .modelStuck
+  | .ifaceComparable nc, [x] => .ok (.bool (match x with | .boxed t _ => !nc.contains t | _ => true))
   | .add, args => binInt (· + ·) args
   | .sub, args => binInt (· - ·) args
   | .mul, args => binInt (· * ·) args

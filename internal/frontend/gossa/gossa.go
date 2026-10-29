@@ -1125,6 +1125,11 @@ func translatePackage(pkgPath string, fns []*ssa.Function, xrefs map[string]cont
 	p := &ir.Prog{Package: pkgPath, Frontend: Frontend}
 	st := &progState{prog: p, ids: map[*ssa.Function]int{}, xrefs: xrefs, zeros: zeros, sprog: sprog, boxed: boxed, json: newJSONTable(sprog)}
 	st.sharedGlobals = sharedGlobals(fns)
+	for _, ty := range boxed {
+		if !types.Comparable(ty) && !slices.Contains(st.notComparable, typeTag(ty)) {
+			st.notComparable = append(st.notComparable, typeTag(ty))
+		}
+	}
 
 	// Pass 1: assign FuncIds so calls can be resolved.
 	byName := map[string]*ssa.Function{}
@@ -1284,6 +1289,8 @@ type progState struct {
 	sprog *ssa.Program
 	// boxed lists the types modelled code boxes into interfaces.
 	boxed []types.Type
+	// notComparable: the tags of the boxed types == does not apply to.
+	notComparable []uint32
 	// json describes the types the package encodes or decodes.
 	json *jsonTable
 	// helpers are the synthetic functions of the program (conc.go), by name.
@@ -3329,7 +3336,15 @@ func (t *fnState) call(x *ssa.Call) error {
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.ReflectKind{Table: t.prog.kindTable(), IsNil: callee.Name() == "IsNil"}, Args: []ir.Var{v}})
 		return nil
 	}
+	if callee != nil && callee.String() == "errors.Unwrap" && len(x.Call.Args) == 1 {
+		if done, err := t.errorsUnwrap(x); done || err != nil {
+			return err
+		}
+	}
 	if callee != nil && callee.String() == "errors.Is" && len(x.Call.Args) == 2 {
+		if done, err := t.errorsIs(x); done || err != nil {
+			return err
+		}
 		if s, ok := sentinelErr(x.Call.Args[1]); ok {
 			return t.sentinelCompare(t.def(x), x.Call.Args[0], s, false, "errors.Is")
 		}
@@ -3615,11 +3630,8 @@ func (t *fnState) typeAssert(x *ssa.TypeAssert, zero ir.Val) error {
 	return nil
 }
 
-// errorsAs lowers errors.As(err, &v), whose outcome the model cannot know
-// (it does not keep an error's dynamic type): havoc, and when it holds, v
-// gets a havoc value of its type (for *T, a pointer to a fresh T of havoc
-// fields). Before, v stayed nil, and code reading it after a true result
-// met a nil the real program cannot have.
+// errorsAs lowers errors.As(err, &v): as Go runs it on the errors the
+// model built (errorsAsWalk), havoc on the others (errorsAsHavoc).
 func (t *fnState) errorsAs(x *ssa.Call) (bool, error) {
 	mi, ok := x.Call.Args[1].(*ssa.MakeInterface)
 	if !ok {
@@ -3634,9 +3646,18 @@ func (t *fnState) errorsAs(x *ssa.Call) (bool, error) {
 		return true, err
 	}
 	dst := t.def(x)
+	if ok, err := t.errorsAsWalk(x, p, pt.Elem(), dst); ok || err != nil {
+		return true, err
+	}
+	return true, t.errorsAsHavoc(p, pt.Elem(), dst)
+}
+
+// errorsAsHavoc is errors.As on an error the model does not know: a havoc
+// result, and when it holds, a havoc value of the target's type.
+func (t *fnState) errorsAsHavoc(p ir.Var, elem types.Type, dst ir.Var) error {
 	site := t.f.Name() + ": call errors.As"
 	if err := t.havocInto(dst, types.Typ[types.Bool], site, "unmodeled-call", ""); err != nil {
-		return true, err
+		return err
 	}
 	set := len(t.out.Blocks)
 	join := set + 1
@@ -3645,11 +3666,342 @@ func (t *fnState) errorsAs(x *ssa.Call) (bool, error) {
 	t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".as-set"}, ir.Block{Name: name + ".as-join"})
 	t.cur = &t.out.Blocks[set]
 	v := t.fresh()
-	if err := t.havocInto(v, pt.Elem(), site+" (target)", "unmodeled-call", ""); err != nil {
-		return true, err
+	if err := t.havocInto(v, elem, site+" (target)", "unmodeled-call", ""); err != nil {
+		return err
 	}
 	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{p, v}})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
+}
+
+// addBlocks appends blocks with these names, keeping t.cur on its block
+// (an append can move the slice t.cur points into).
+func (t *fnState) addBlocks(names ...string) {
+	ci := -1
+	for i := range t.out.Blocks {
+		if &t.out.Blocks[i] == t.cur {
+			ci = i
+		}
+	}
+	for _, n := range names {
+		t.out.Blocks = append(t.out.Blocks, ir.Block{Name: n})
+	}
+	if ci >= 0 {
+		t.cur = &t.out.Blocks[ci]
+	}
+}
+
+// methodIface is interface{ name(params) results } with its method.
+func methodIface(name string, params, results []types.Type) (*types.Interface, *types.Func) {
+	vars := func(ts []types.Type) *types.Tuple {
+		var vs []*types.Var
+		for _, ty := range ts {
+			vs = append(vs, types.NewVar(token.NoPos, nil, "", ty))
+		}
+		return types.NewTuple(vs...)
+	}
+	m := types.NewFunc(token.NoPos, nil, name, types.NewSignatureType(nil, nil, nil, vars(params), vars(results), false))
+	return types.NewInterfaceType([]*types.Func{m}, nil).Complete(), m
+}
+
+// tagsOf are the tags of the boxed types implementing iface; not ok when
+// there are too many to list.
+func (t *fnState) tagsOf(iface *types.Interface) ([]uint32, bool) {
+	impls, ok := t.prog.implementers(iface)
+	if !ok {
+		return nil, false
+	}
+	tags := make([]uint32, len(impls))
+	for i, ty := range impls {
+		tags[i] = typeTag(ty)
+	}
+	return tags, true
+}
+
+// errChain walks the chain of err0's Unwrap() error, as errors.Is and
+// errors.As do, for the errors the model built: visit tests each non-nil
+// error e in the current block, jumping to found (which sets dst true) on
+// a match and leaving the current block for the next test otherwise. The
+// walk sets dst false at the chain's end; an error the model does not know
+// met on the way, or one of a type in stop (whose chain it does not
+// follow), runs unknown instead. Not ok when the types to test are too
+// many to list.
+func (t *fnState) errChain(err0, dst ir.Var, stop []*types.Interface, visit func(e ir.Var, found, unknown int) error, unknown func() error) (bool, error) {
+	errT := types.Universe.Lookup("error").Type()
+	unwrapI, unwrapM := methodIface("Unwrap", nil, []types.Type{errT})
+	unwrapTags, ok := t.tagsOf(unwrapI)
+	if !ok {
+		return false, nil
+	}
+	var stopTags []uint32
+	for _, iface := range stop {
+		tags, ok := t.tagsOf(iface)
+		if !ok {
+			return false, nil
+		}
+		stopTags = append(stopTags, tags...)
+	}
+	// The error the walk is at lives in a cell.
+	cur := t.fresh()
+	t.emit(ir.Instr{Dst: cur, Op: ir.Alloc{Zero: ir.Opaque{}}})
+	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{cur, err0}})
+	n := len(t.out.Blocks)
+	loop, known, notNil, found, unk, no, join := n, n+1, n+2, n+3, n+4, n+5, n+6
+	name := t.cur.Name
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: loop}
+	t.addBlocks(name+".chain", name+".chain-known", name+".chain-err", name+".chain-found", name+".chain-unknown", name+".chain-end", name+".chain-join")
+	t.cur = &t.out.Blocks[loop]
+	e, isKnown := t.fresh(), t.fresh()
+	t.emit(ir.Instr{Dst: e, Op: ir.Simple("loadPath"), Args: []ir.Var{cur}})
+	t.emit(ir.Instr{Dst: isKnown, Op: ir.Simple("errKnown"), Args: []ir.Var{e}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isKnown, T: known, F: unk}
+	t.cur = &t.out.Blocks[known]
+	isNil := t.fresh()
+	t.emit(ir.Instr{Dst: isNil, Op: ir.Simple("isNil"), Args: []ir.Var{e}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isNil, T: no, F: notNil}
+	t.cur = &t.out.Blocks[notNil]
+	if err := visit(e, found, unk); err != nil {
+		return true, err
+	}
+	// assertTo branches on whether e's type is one of tags.
+	assertTo := func(tags []uint32, yes, other int) {
+		r, is := t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: r, Op: ir.AssertIface{Tags: tags, CommaOk: true}, Args: []ir.Var{e}})
+		t.emit(ir.Instr{Dst: is, Op: ir.Extract{I: 1}, Args: []ir.Var{r}})
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: is, T: yes, F: other}
+	}
+	if len(stopTags) > 0 {
+		cont := len(t.out.Blocks)
+		t.addBlocks(name + ".chain-plain")
+		assertTo(stopTags, unk, cont)
+		t.cur = &t.out.Blocks[cont]
+	}
+	if len(unwrapTags) == 0 {
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: no}
+	} else {
+		fv, ok, err := t.dispatchOn(e, unwrapI, unwrapM)
+		if err != nil {
+			return true, err
+		}
+		if !ok {
+			t.cur.Term = ir.Term{Kind: ir.TermJump, B: unk}
+		} else {
+			unwrap, after := len(t.out.Blocks), len(t.out.Blocks)+1
+			t.addBlocks(name+".chain-unwrap", name+".chain-next")
+			assertTo(unwrapTags, unwrap, no)
+			t.cur = &t.out.Blocks[unwrap]
+			// An Unwrap the model gets stuck in leaves the walk to unknown.
+			inner := t.fresh()
+			t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: fv, Dst: inner, Next: after, Fallback: unk}
+			t.cur = &t.out.Blocks[after]
+			t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{cur, inner}})
+			t.cur.Term = ir.Term{Kind: ir.TermJump, B: loop}
+		}
+	}
+	t.cur = &t.out.Blocks[found]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: ir.BoolVal(true)}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: ir.BoolVal(false)}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[unk]
+	if err := unknown(); err != nil {
+		return true, err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return true, nil
+}
+
+// errorsAsWalk lowers errors.As(err, p) as Go runs it, on the errors the
+// model built (errChain): the first error in err's chain whose dynamic
+// type is the target type (or implements it, for an interface) is stored
+// through p. Errors with an As method or an Unwrap() []error stop the walk
+// (errorsAsHavoc). Not ok when the target type cannot be tested.
+func (t *fnState) errorsAsWalk(x *ssa.Call, p ir.Var, elem types.Type, dst ir.Var) (bool, error) {
+	var match ir.Op
+	if iface, ok := elem.Underlying().(*types.Interface); ok {
+		tags, ok := t.tagsOf(iface)
+		if !ok {
+			return false, nil
+		}
+		match = ir.AssertIface{Tags: tags, CommaOk: true}
+	} else if zero, ok := zeroVal(elem); ok {
+		match = ir.Unbox{Tag: typeTag(elem), CommaOk: true, Zero: zero}
+	} else {
+		return false, nil
+	}
+	errT := types.Universe.Lookup("error").Type()
+	asI, _ := methodIface("As", []types.Type{types.NewInterfaceType(nil, nil)}, []types.Type{types.Typ[types.Bool]})
+	joinI, _ := methodIface("Unwrap", nil, []types.Type{types.NewSlice(errT)})
+	err0, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	return t.errChain(err0, dst, []*types.Interface{asI, joinI}, func(e ir.Var, found, _ int) error {
+		r, v, ok := t.fresh(), t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: r, Op: match, Args: []ir.Var{e}})
+		t.emit(ir.Instr{Dst: v, Op: ir.Extract{I: 0}, Args: []ir.Var{r}})
+		t.emit(ir.Instr{Dst: ok, Op: ir.Extract{I: 1}, Args: []ir.Var{r}})
+		set, cont := len(t.out.Blocks), len(t.out.Blocks)+1
+		name := t.cur.Name
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: ok, T: set, F: cont}
+		t.addBlocks(name+".as-set", name+".as-next")
+		t.cur = &t.out.Blocks[set]
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{p, v}})
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: found}
+		t.cur = &t.out.Blocks[cont]
+		return nil
+	}, func() error { return t.errorsAsHavoc(p, elem, dst) })
+}
+
+// errorsUnwrap lowers errors.Unwrap(err) on an error the model built: its
+// Unwrap() error, or nil when its type has none; havoc on another error.
+func (t *fnState) errorsUnwrap(x *ssa.Call) (bool, error) {
+	errT := types.Universe.Lookup("error").Type()
+	unwrapI, unwrapM := methodIface("Unwrap", nil, []types.Type{errT})
+	tags, ok := t.tagsOf(unwrapI)
+	if !ok {
+		return false, nil
+	}
+	e, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	dst := t.def(x)
+	n := len(t.out.Blocks)
+	known, call, none, unknown, join := n, n+1, n+2, n+3, n+4
+	name := t.cur.Name
+	isKnown := t.fresh()
+	t.emit(ir.Instr{Dst: isKnown, Op: ir.Simple("errKnown"), Args: []ir.Var{e}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isKnown, T: known, F: unknown}
+	t.addBlocks(name+".unwrap-known", name+".unwrap-call", name+".unwrap-none", name+".unwrap-unknown", name+".unwrap-join")
+	t.cur = &t.out.Blocks[known]
+	fv, ok, err := t.dispatchOn(e, unwrapI, unwrapM)
+	if err != nil {
+		return true, err
+	}
+	if len(tags) == 0 || !ok {
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: none}
+	} else {
+		r, has := t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: r, Op: ir.AssertIface{Tags: tags, CommaOk: true}, Args: []ir.Var{e}})
+		t.emit(ir.Instr{Dst: has, Op: ir.Extract{I: 1}, Args: []ir.Var{r}})
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: has, T: call, F: none}
+		t.cur = &t.out.Blocks[call]
+		t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: fv, Dst: dst, Next: join, Fallback: unknown}
+	}
+	t.cur = &t.out.Blocks[none]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Const{V: ir.ErrVal{NonNil: false}}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[unknown]
+	if err := t.havocResult(dst, x, "errors.Unwrap", "unmodeled-call"); err != nil {
+		return true, err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return true, nil
+}
+
+// errorsIs lowers errors.Is(err, target) as Go runs it when target is an
+// error the model built (errChain): an error in err's chain equal to
+// target (when target's type is comparable), or whose Is method says so.
+// Errors with an Unwrap() []error stop the walk; with an unknown error,
+// the result is havoc (it may be, or wrap, target).
+func (t *fnState) errorsIs(x *ssa.Call) (bool, error) {
+	errT := types.Universe.Lookup("error").Type()
+	isI, isM := methodIface("Is", []types.Type{errT}, []types.Type{types.Typ[types.Bool]})
+	isTags, ok := t.tagsOf(isI)
+	if !ok {
+		return false, nil
+	}
+	joinI, _ := methodIface("Unwrap", nil, []types.Type{types.NewSlice(errT)})
+	err0, err := t.val(x.Call.Args[0])
+	if err != nil {
+		return true, err
+	}
+	target, err := t.val(x.Call.Args[1])
+	if err != nil {
+		return true, err
+	}
+	dst := t.def(x)
+	havoc := func() error {
+		t.emit(ir.Instr{Dst: dst, HavocSite: t.prog.newHavoc(ir.HavocBool, t.f.Name()+": errors.Is", "opaque-op", "")})
+		return nil
+	}
+	// errors.Is(err, nil) is err == nil; an unknown target: havoc.
+	known, tnil, walk, unknown, join := len(t.out.Blocks), len(t.out.Blocks)+1, len(t.out.Blocks)+2, len(t.out.Blocks)+3, len(t.out.Blocks)+4
+	name := t.cur.Name
+	t.addBlocks(name+".is-target", name+".is-nil-target", name+".is-walk", name+".is-unknown", name+".is-join")
+	tKnown := t.fresh()
+	t.emit(ir.Instr{Dst: tKnown, Op: ir.Simple("errKnown"), Args: []ir.Var{target}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: tKnown, T: known, F: unknown}
+	t.cur = &t.out.Blocks[known]
+	isNil := t.fresh()
+	t.emit(ir.Instr{Dst: isNil, Op: ir.Simple("isNil"), Args: []ir.Var{target}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: isNil, T: tnil, F: walk}
+	t.cur = &t.out.Blocks[tnil]
+	eKnown := t.fresh()
+	t.emit(ir.Instr{Dst: eKnown, Op: ir.Simple("errKnown"), Args: []ir.Var{err0}})
+	nilKnown := len(t.out.Blocks)
+	t.addBlocks(name + ".is-nil-known")
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: eKnown, T: nilKnown, F: unknown}
+	t.cur = &t.out.Blocks[nilKnown]
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("isNil"), Args: []ir.Var{err0}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[unknown]
+	if err := havoc(); err != nil {
+		return true, err
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[walk]
+	comparable := t.fresh()
+	t.emit(ir.Instr{Dst: comparable, Op: ir.IfaceComparable{NotComparable: t.prog.notComparable}, Args: []ir.Var{target}})
+	ok, err = t.errChain(err0, dst, []*types.Interface{joinI}, func(e ir.Var, found, unk int) error {
+		cmp, method := len(t.out.Blocks), len(t.out.Blocks)+1
+		name := t.cur.Name
+		t.addBlocks(name+".is-eq", name+".is-method")
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: comparable, T: cmp, F: method}
+		t.cur = &t.out.Blocks[cmp]
+		eq := t.fresh()
+		t.emit(ir.Instr{Dst: eq, Op: ir.Simple("ifaceEq"), Args: []ir.Var{e, target}})
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: eq, T: found, F: method}
+		t.cur = &t.out.Blocks[method]
+		if len(isTags) == 0 {
+			return nil
+		}
+		fv, ok, err := t.dispatchOn(e, isI, isM)
+		if err != nil {
+			return err
+		}
+		call, after, cont := len(t.out.Blocks), len(t.out.Blocks)+1, len(t.out.Blocks)+2
+		t.addBlocks(name+".is-call", name+".is-said", name+".is-next")
+		r, has := t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: r, Op: ir.AssertIface{Tags: isTags, CommaOk: true}, Args: []ir.Var{e}})
+		t.emit(ir.Instr{Dst: has, Op: ir.Extract{I: 1}, Args: []ir.Var{r}})
+		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: has, T: call, F: cont}
+		t.cur = &t.out.Blocks[call]
+		if !ok {
+			t.cur.Term = ir.Term{Kind: ir.TermJump, B: unk}
+		} else {
+			said := t.fresh()
+			t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: fv, CArgs: []ir.Var{target}, Dst: said, Next: after, Fallback: unk}
+			t.cur = &t.out.Blocks[after]
+			t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: said, T: found, F: cont}
+		}
+		t.cur = &t.out.Blocks[cont]
+		return nil
+	}, havoc)
+	if err != nil {
+		return true, err
+	}
+	if !ok {
+		// Too many error types to list: havoc, as for an unknown error.
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: unknown}
+	} else {
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	}
 	t.cur = &t.out.Blocks[join]
 	return true, nil
 }
@@ -4057,11 +4409,23 @@ func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
 	if !ok {
 		return 0, false, nil
 	}
+	if _, ok := t.prog.implementers(iface); !ok {
+		return 0, false, nil
+	}
+	recv, err := t.val(c.Value)
+	if err != nil {
+		return 0, false, err
+	}
+	return t.dispatchOn(recv, iface, c.Method)
+}
+
+// dispatchOn is the func value calling method m of interface iface on
+// receiver recv (see dispatch).
+func (t *fnState) dispatchOn(recv ir.Var, iface *types.Interface, m *types.Func) (ir.Var, bool, error) {
 	impls, ok := t.prog.implementers(iface)
 	if !ok {
 		return 0, false, nil
 	}
-	m := c.Method
 	var tags []uint32
 	var fns []*ssa.Function
 	var derefs []int // a helper's FuncId where fns has nil
@@ -4092,10 +4456,6 @@ func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
 	}
 	if len(fns) == 0 {
 		return 0, false, nil
-	}
-	recv, err := t.val(c.Value)
-	if err != nil {
-		return 0, false, err
 	}
 	args := []ir.Var{recv}
 	for i, fn := range fns {

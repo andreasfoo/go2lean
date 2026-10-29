@@ -167,6 +167,27 @@ func SeqTestEmbeddingInterface() bool { return testEmbeddingInterface() }
 // go2lean:sequence testEmptyInterface
 func SeqTestEmptyInterface() bool { return testEmptyInterface() }
 
+// go2lean:sequence testErrorsAsInterface
+func SeqTestErrorsAsInterface() bool { return testErrorsAsInterface() }
+
+// go2lean:sequence testErrorsAsPointer
+func SeqTestErrorsAsPointer() bool { return testErrorsAsPointer() }
+
+// go2lean:sequence testErrorsAsValue
+func SeqTestErrorsAsValue() bool { return testErrorsAsValue() }
+
+// go2lean:sequence testErrorsIsConst
+func SeqTestErrorsIsConst() bool { return testErrorsIsConst() }
+
+// go2lean:sequence testErrorsIsMethod
+func SeqTestErrorsIsMethod() bool { return testErrorsIsMethod() }
+
+// go2lean:sequence testErrorsIsNil
+func SeqTestErrorsIsNil() bool { return testErrorsIsNil() }
+
+// go2lean:sequence testErrorsIsWrapped
+func SeqTestErrorsIsWrapped() bool { return testErrorsIsWrapped() }
+
 // go2lean:sequence testExplicitBlockStmt
 func SeqTestExplicitBlockStmt() bool { return testExplicitBlockStmt() }
 

@@ -172,8 +172,9 @@ those fixed, the model agrees on 110. The last one was a `defer` in a
 loop, which the compile stage rejected (#62); it now runs on a defer
 stack. go2lean adds its own tests to the suite (`go2lean_*.go`) for each
 gap it closes (`sync/atomic`'s typed values #67, `container/list` and
-`bufio` #69 #71, package initializers #55, defers in loops #62): the
-model agrees on all 124, and `expected.txt` is empty.
+`bufio` #69 #71, package initializers #55, defers in loops #62,
+`errors.Is`/`As` #69): the model agrees on all 131, and `expected.txt`
+is empty.
 
 The independent check is the TinyGo line (design §4.4): the same package
 compiled by TinyGo to LLVM IR, with the standard library and runtime taken

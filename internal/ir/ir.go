@@ -179,6 +179,18 @@ func (o ReflectKind) Lean() string {
 	return fmt.Sprintf("(.%s [%s])", name, strings.Join(parts, ", "))
 }
 
+// IfaceComparable is ifaceComparable: is the dynamic type of an interface
+// value comparable? NotComparable lists the tags of the types that are not.
+type IfaceComparable struct{ NotComparable []uint32 }
+
+func (o IfaceComparable) Lean() string {
+	parts := make([]string, len(o.NotComparable))
+	for i, t := range o.NotComparable {
+		parts[i] = fmt.Sprint(t)
+	}
+	return "(.ifaceComparable [" + strings.Join(parts, ", ") + "])"
+}
+
 // ErrTagKnown is errTagKnown: is this error nil or boxed with Tag?
 type ErrTagKnown struct{ Tag uint32 }
 
