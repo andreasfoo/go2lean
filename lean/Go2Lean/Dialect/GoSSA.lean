@@ -462,6 +462,12 @@ inductive Op where
   | errTagKnown (tag : Nat)
   /-- Is this func/map/channel/interface value nil? (Only on known values.) -/
   | isNilOpaque
+  /-- Can `==` on these two interface values be decided: both values the
+  model built (boxed with their dynamic type's tag, or nil)? (#60) -/
+  | ifaceEqKnown
+  /-- `==` on two interface values the model built: equal dynamic types and
+  equal dynamic values, or both nil. (Only where `ifaceEqKnown`.) -/
+  | ifaceEq
   -- maps the program builds: `.boxed 1 p`, `p` pointing at an `.arr` of
   -- `.tuple [key, value]` in insertion order
   | makeMap
@@ -1007,6 +1013,20 @@ def asIndex : Val → Option (BitVec 64)
   | .int _ i => some (i.signExtend 64)
   | _ => none
 
+/-- Go's `==` on two interface values, where the model can decide it: the
+same dynamic type (tag) and equal dynamic values, a string read from the
+heap, or both nil. `none` when either side is a value the model did not
+build. -/
+def ifaceEqVal (heap : Heap Val) : Val → Val → Option Bool
+  | .boxed t x@(.str ..), .boxed t' y@(.str ..) =>
+    if t != t' then some false else
+    match strBytes heap x, strBytes heap y with
+    | some p, some q => some (p == q)
+    | _, _ => none
+  | a@(.boxed ..), b@(.boxed ..) | a@.opaqueNil, b@(.boxed ..)
+  | a@(.boxed ..), b@.opaqueNil | a@.opaqueNil, b@.opaqueNil => eqVal a b
+  | _, _ => none
+
 /-- Pure instructions: no heap access. -/
 def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .const v, [] => .ok v
@@ -1067,6 +1087,10 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
   | .errKnown, [x] => .ok (.bool (match x with | .boxed .. | .err false => true | _ => false))
   | .errTagKnown tag, [x] => .ok (.bool (match x with | .boxed t _ => t == tag | .err false => true | _ => false))
   | .isNilOpaque, [x] => .ok (.bool (match x with | .opaqueNil => true | _ => false))
+  | .ifaceEqKnown, [a, b] => .ok (.bool (ifaceEqVal heap a b).isSome)
+  | .ifaceEq, [a, b] => match ifaceEqVal heap a b with
+    | some r => .ok (.bool r)
+    | none => .panic .modelStuck
   | .add, args => binInt (· + ·) args
   | .sub, args => binInt (· - ·) args
   | .mul, args => binInt (· * ·) args
