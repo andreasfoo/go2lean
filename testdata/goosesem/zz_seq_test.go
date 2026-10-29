@@ -1,0 +1,339 @@
+// Code generated for go2lean (#58); DO NOT EDIT.
+
+package semantics
+
+// Each test of Goose's semantics suite as a go2lean sequence spec: the
+// model must find it true, as Go does (zz_goose_test.go).
+
+// go2lean:sequence testAcceptAddressInterface
+func SeqTestAcceptAddressInterface() bool { return testAcceptAddressInterface() }
+
+// go2lean:sequence testAdd64Equals
+func SeqTestAdd64Equals() bool { return testAdd64Equals() }
+
+// go2lean:sequence testAddressOfLocal
+func SeqTestAddressOfLocal() bool { return testAddressOfLocal() }
+
+// go2lean:sequence testAllocateDistinct
+func SeqTestAllocateDistinct() bool { return testAllocateDistinct() }
+
+// go2lean:sequence testAllocateFull
+func SeqTestAllocateFull() bool { return testAllocateFull() }
+
+// go2lean:sequence testAndCompare
+func SeqTestAndCompare() bool { return testAndCompare() }
+
+// go2lean:sequence testAnonymousAssign
+func SeqTestAnonymousAssign() bool { return testAnonymousAssign() }
+
+// go2lean:sequence testAnonymousBinding
+func SeqTestAnonymousBinding() bool { return testAnonymousBinding() }
+
+// go2lean:sequence testArithmeticShifts
+func SeqTestArithmeticShifts() bool { return testArithmeticShifts() }
+
+// go2lean:sequence testAssignInterface
+func SeqTestAssignInterface() bool { return testAssignInterface() }
+
+// go2lean:sequence testAssignThree
+func SeqTestAssignThree() bool { return testAssignThree() }
+
+// go2lean:sequence testAssignTwo
+func SeqTestAssignTwo() bool { return testAssignTwo() }
+
+// go2lean:sequence testBasicInterface
+func SeqTestBasicInterface() bool { return testBasicInterface() }
+
+// go2lean:sequence testBinaryExprInterface
+func SeqTestBinaryExprInterface() bool { return testBinaryExprInterface() }
+
+// go2lean:sequence testBitAddAnd
+func SeqTestBitAddAnd() bool { return testBitAddAnd() }
+
+// go2lean:sequence testBitwiseOpsPrecedence
+func SeqTestBitwiseOpsPrecedence() bool { return testBitwiseOpsPrecedence() }
+
+// go2lean:sequence testBreakFromLoopAssignAndContinue
+func SeqTestBreakFromLoopAssignAndContinue() bool { return testBreakFromLoopAssignAndContinue() }
+
+// go2lean:sequence testBreakFromLoopForOnly
+func SeqTestBreakFromLoopForOnly() bool { return testBreakFromLoopForOnly() }
+
+// go2lean:sequence testBreakFromLoopNoContinue
+func SeqTestBreakFromLoopNoContinue() bool { return testBreakFromLoopNoContinue() }
+
+// go2lean:sequence testBreakFromLoopNoContinueDouble
+func SeqTestBreakFromLoopNoContinueDouble() bool { return testBreakFromLoopNoContinueDouble() }
+
+// go2lean:sequence testBreakFromLoopWithContinue
+func SeqTestBreakFromLoopWithContinue() bool { return testBreakFromLoopWithContinue() }
+
+// go2lean:sequence testByteSliceToString
+func SeqTestByteSliceToString() bool { return testByteSliceToString() }
+
+// go2lean:sequence testClosureBasic
+func SeqTestClosureBasic() bool { return testClosureBasic() }
+
+// go2lean:sequence testCompareAll
+func SeqTestCompareAll() bool { return testCompareAll() }
+
+// go2lean:sequence testCompareGE
+func SeqTestCompareGE() bool { return testCompareGE() }
+
+// go2lean:sequence testCompareGT
+func SeqTestCompareGT() bool { return testCompareGT() }
+
+// go2lean:sequence testCompareLE
+func SeqTestCompareLE() bool { return testCompareLE() }
+
+// go2lean:sequence testCompareLT
+func SeqTestCompareLT() bool { return testCompareLT() }
+
+// go2lean:sequence testCompareNilToNil
+func SeqTestCompareNilToNil() bool { return testCompareNilToNil() }
+
+// go2lean:sequence testComparePointerToNil
+func SeqTestComparePointerToNil() bool { return testComparePointerToNil() }
+
+// go2lean:sequence testComparePointerWrappedDefaultToNil
+func SeqTestComparePointerWrappedDefaultToNil() bool { return testComparePointerWrappedDefaultToNil() }
+
+// go2lean:sequence testComparePointerWrappedToNil
+func SeqTestComparePointerWrappedToNil() bool { return testComparePointerWrappedToNil() }
+
+// go2lean:sequence testCompareSliceToNil
+func SeqTestCompareSliceToNil() bool { return testCompareSliceToNil() }
+
+// go2lean:sequence testCopyShorterDst
+func SeqTestCopyShorterDst() bool { return testCopyShorterDst() }
+
+// go2lean:sequence testCopyShorterSrc
+func SeqTestCopyShorterSrc() bool { return testCopyShorterSrc() }
+
+// go2lean:sequence testCopySimple
+func SeqTestCopySimple() bool { return testCopySimple() }
+
+// go2lean:sequence testDefer
+func SeqTestDefer() bool { return testDefer() }
+
+// go2lean:sequence testDeferFuncLit
+func SeqTestDeferFuncLit() bool { return testDeferFuncLit() }
+
+// go2lean:sequence testDefinedStrTypesEqual
+func SeqTestDefinedStrTypesEqual() bool { return testDefinedStrTypesEqual() }
+
+// go2lean:sequence testDivisionPrecedence
+func SeqTestDivisionPrecedence() bool { return testDivisionPrecedence() }
+
+// go2lean:sequence testDoublePointerInterface
+func SeqTestDoublePointerInterface() bool { return testDoublePointerInterface() }
+
+// go2lean:sequence testDowncastInterface
+func SeqTestDowncastInterface() bool { return testDowncastInterface() }
+
+// go2lean:sequence testEmbeddingInterface
+func SeqTestEmbeddingInterface() bool { return testEmbeddingInterface() }
+
+// go2lean:sequence testEmptyInterface
+func SeqTestEmptyInterface() bool { return testEmptyInterface() }
+
+// go2lean:sequence testExplicitBlockStmt
+func SeqTestExplicitBlockStmt() bool { return testExplicitBlockStmt() }
+
+// go2lean:sequence testFirstClassFunction
+func SeqTestFirstClassFunction() bool { return testFirstClassFunction() }
+
+// go2lean:sequence testFooBarMutation
+func SeqTestFooBarMutation() bool { return testFooBarMutation() }
+
+// go2lean:sequence testForLoopWait
+func SeqTestForLoopWait() bool { return testForLoopWait() }
+
+// go2lean:sequence testIfStmtInterface
+func SeqTestIfStmtInterface() bool { return testIfStmtInterface() }
+
+// go2lean:sequence testIncompleteStruct
+func SeqTestIncompleteStruct() bool { return testIncompleteStruct() }
+
+// go2lean:sequence testInterfaceNilWithType
+func SeqTestInterfaceNilWithType() bool { return testInterfaceNilWithType() }
+
+// go2lean:sequence testIterateMap
+func SeqTestIterateMap() bool { return testIterateMap() }
+
+// go2lean:sequence testListTypesEqual
+func SeqTestListTypesEqual() bool { return testListTypesEqual() }
+
+// go2lean:sequence testManyParentheses
+func SeqTestManyParentheses() bool { return testManyParentheses() }
+
+// go2lean:sequence testMapSize
+func SeqTestMapSize() bool { return testMapSize() }
+
+// go2lean:sequence testMaxUint64
+func SeqTestMaxUint64() bool { return testMaxUint64() }
+
+// go2lean:sequence testMinUint64
+func SeqTestMinUint64() bool { return testMinUint64() }
+
+// go2lean:sequence testModPrecedence
+func SeqTestModPrecedence() bool { return testModPrecedence() }
+
+// go2lean:sequence testMultipleAssignToMap
+func SeqTestMultipleAssignToMap() bool { return testMultipleAssignToMap() }
+
+// go2lean:sequence testMultipleFieldsInterface
+func SeqTestMultipleFieldsInterface() bool { return testMultipleFieldsInterface() }
+
+// go2lean:sequence testMultipleInterface
+func SeqTestMultipleInterface() bool { return testMultipleInterface() }
+
+// go2lean:sequence testNestedGoStyleLoops
+func SeqTestNestedGoStyleLoops() bool { return testNestedGoStyleLoops() }
+
+// go2lean:sequence testNestedGoStyleLoopsNoComparison
+func SeqTestNestedGoStyleLoopsNoComparison() bool { return testNestedGoStyleLoopsNoComparison() }
+
+// go2lean:sequence testNestedLoops
+func SeqTestNestedLoops() bool { return testNestedLoops() }
+
+// go2lean:sequence testNestedStructUpdates
+func SeqTestNestedStructUpdates() bool { return testNestedStructUpdates() }
+
+// go2lean:sequence testNilDefault
+func SeqTestNilDefault() bool { return testNilDefault() }
+
+// go2lean:sequence testNilVal
+func SeqTestNilVal() bool { return testNilVal() }
+
+// go2lean:sequence testOrCompare
+func SeqTestOrCompare() bool { return testOrCompare() }
+
+// go2lean:sequence testOrCompareSimple
+func SeqTestOrCompareSimple() bool { return testOrCompareSimple() }
+
+// go2lean:sequence testOverwriteArray
+func SeqTestOverwriteArray() bool { return testOverwriteArray() }
+
+// go2lean:sequence testParamsInterface
+func SeqTestParamsInterface() bool { return testParamsInterface() }
+
+// go2lean:sequence testPlusTimes
+func SeqTestPlusTimes() bool { return testPlusTimes() }
+
+// go2lean:sequence testPointerAssignment
+func SeqTestPointerAssignment() bool { return testPointerAssignment() }
+
+// go2lean:sequence testPolymorphismInterface
+func SeqTestPolymorphismInterface() bool { return testPolymorphismInterface() }
+
+// go2lean:sequence testPrimitiveTypesEqual
+func SeqTestPrimitiveTypesEqual() bool { return testPrimitiveTypesEqual() }
+
+// go2lean:sequence testReturnFour
+func SeqTestReturnFour() bool { return testReturnFour() }
+
+// go2lean:sequence testReturnThree
+func SeqTestReturnThree() bool { return testReturnThree() }
+
+// go2lean:sequence testReturnTwo
+func SeqTestReturnTwo() bool { return testReturnTwo() }
+
+// go2lean:sequence testReverseAssignOps64
+func SeqTestReverseAssignOps64() bool { return testReverseAssignOps64() }
+
+// go2lean:sequence testSharedFunctionsInterface
+func SeqTestSharedFunctionsInterface() bool { return testSharedFunctionsInterface() }
+
+// go2lean:sequence testShiftMod
+func SeqTestShiftMod() bool { return testShiftMod() }
+
+// go2lean:sequence testShortcircuitAndFT
+func SeqTestShortcircuitAndFT() bool { return testShortcircuitAndFT() }
+
+// go2lean:sequence testShortcircuitAndTF
+func SeqTestShortcircuitAndTF() bool { return testShortcircuitAndTF() }
+
+// go2lean:sequence testShortcircuitOrFT
+func SeqTestShortcircuitOrFT() bool { return testShortcircuitOrFT() }
+
+// go2lean:sequence testShortcircuitOrTF
+func SeqTestShortcircuitOrTF() bool { return testShortcircuitOrTF() }
+
+// go2lean:sequence testSliceAppend
+func SeqTestSliceAppend() bool { return testSliceAppend() }
+
+// go2lean:sequence testSliceCapacityOps
+func SeqTestSliceCapacityOps() bool { return testSliceCapacityOps() }
+
+// go2lean:sequence testSliceLiteral
+func SeqTestSliceLiteral() bool { return testSliceLiteral() }
+
+// go2lean:sequence testSliceOps
+func SeqTestSliceOps() bool { return testSliceOps() }
+
+// go2lean:sequence testSliceRef
+func SeqTestSliceRef() bool { return testSliceRef() }
+
+// go2lean:sequence testStandardForLoop
+func SeqTestStandardForLoop() bool { return testStandardForLoop() }
+
+// go2lean:sequence testStoreComposite
+func SeqTestStoreComposite() bool { return testStoreComposite() }
+
+// go2lean:sequence testStoreInStructPointerVar
+func SeqTestStoreInStructPointerVar() bool { return testStoreInStructPointerVar() }
+
+// go2lean:sequence testStoreInStructVar
+func SeqTestStoreInStructVar() bool { return testStoreInStructVar() }
+
+// go2lean:sequence testStoreSlice
+func SeqTestStoreSlice() bool { return testStoreSlice() }
+
+// go2lean:sequence testStringInterface
+func SeqTestStringInterface() bool { return testStringInterface() }
+
+// go2lean:sequence testStructConstructions
+func SeqTestStructConstructions() bool { return testStructConstructions() }
+
+// go2lean:sequence testStructFieldFunc
+func SeqTestStructFieldFunc() bool { return testStructFieldFunc() }
+
+// go2lean:sequence testStructUpdates
+func SeqTestStructUpdates() bool { return testStructUpdates() }
+
+// go2lean:sequence testSub64Equals
+func SeqTestSub64Equals() bool { return testSub64Equals() }
+
+// go2lean:sequence testSwitchConversion
+func SeqTestSwitchConversion() bool { return testSwitchConversion() }
+
+// go2lean:sequence testSwitchDefaultTrue
+func SeqTestSwitchDefaultTrue() bool { return testSwitchDefaultTrue() }
+
+// go2lean:sequence testSwitchMultiple
+func SeqTestSwitchMultiple() bool { return testSwitchMultiple() }
+
+// go2lean:sequence testSwitchVal
+func SeqTestSwitchVal() bool { return testSwitchVal() }
+
+// go2lean:sequence testTypeAssertionInterface
+func SeqTestTypeAssertionInterface() bool { return testTypeAssertionInterface() }
+
+// go2lean:sequence testU32Len
+func SeqTestU32Len() bool { return testU32Len() }
+
+// go2lean:sequence testU32NewtypeLen
+func SeqTestU32NewtypeLen() bool { return testU32NewtypeLen() }
+
+// go2lean:sequence testU32ToU64
+func SeqTestU32ToU64() bool { return testU32ToU64() }
+
+// go2lean:sequence testU64ToU32
+func SeqTestU64ToU32() bool { return testU64ToU32() }
+
+// go2lean:sequence testUint32Untyped
+func SeqTestUint32Untyped() bool { return testUint32Untyped() }
+
+// go2lean:sequence testsUseLocks
+func SeqTestsUseLocks() bool { return testsUseLocks() }
