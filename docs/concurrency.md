@@ -342,6 +342,14 @@ Built as planned, in two steps:
    model's interleaving. The PoC carries the rewritten files and the
    overlay, so `go test -overlay ...` reproduces it.
 
+A panic or a false result the model found in a run with more than one
+goroutine goes through the same two steps (#52): one run under Go's
+scheduler does not refute a schedule-dependent finding. If no run violates
+the property, the verdict is inconclusive (`schedule_not_reproduced`) until
+the replay decides. If the replay follows the whole schedule and the
+property still holds, the verdict is spurious (`holds_on_model_schedule`),
+a disagreement between the model and Go.
+
 ## Measures
 
 On GoKer: kernels modelled (all their functions complete), blocking bugs
