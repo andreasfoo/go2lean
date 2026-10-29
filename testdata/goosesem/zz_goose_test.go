@@ -63,6 +63,7 @@ func TestGoose(t *testing.T) {
 		"testForLoopWait":                       testForLoopWait,
 		"testIfStmtInterface":                   testIfStmtInterface,
 		"testIncompleteStruct":                  testIncompleteStruct,
+		"testInitCallVersions":                  testInitCallVersions,
 		"testInterfaceNilWithType":              testInterfaceNilWithType,
 		"testIterateMap":                        testIterateMap,
 		"testListMoveToFront":                   testListMoveToFront,
