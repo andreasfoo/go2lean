@@ -200,6 +200,24 @@ func SeqTestFooBarMutation() bool { return testFooBarMutation() }
 // go2lean:sequence testForLoopWait
 func SeqTestForLoopWait() bool { return testForLoopWait() }
 
+// go2lean:sequence testIOReadAllChunks
+func SeqTestIOReadAllChunks() bool { return testIOReadAllChunks() }
+
+// go2lean:sequence testIOReadAllStrings
+func SeqTestIOReadAllStrings() bool { return testIOReadAllStrings() }
+
+// go2lean:sequence testIOReadFullChunks
+func SeqTestIOReadFullChunks() bool { return testIOReadFullChunks() }
+
+// go2lean:sequence testIOReadFullEmpty
+func SeqTestIOReadFullEmpty() bool { return testIOReadFullEmpty() }
+
+// go2lean:sequence testIOReadFullShort
+func SeqTestIOReadFullShort() bool { return testIOReadFullShort() }
+
+// go2lean:sequence testIOReadFullStrings
+func SeqTestIOReadFullStrings() bool { return testIOReadFullStrings() }
+
 // go2lean:sequence testIfStmtInterface
 func SeqTestIfStmtInterface() bool { return testIfStmtInterface() }
 
