@@ -1,1 +1,0 @@
-testdefer spurious oracle_holds_in_real_run havoc assuming  # defer in a loop (#62)

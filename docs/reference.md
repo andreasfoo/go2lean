@@ -30,7 +30,7 @@ Construct-by-construct detail: [docs/semantics.md](../docs/semantics.md).
 - ✅ Package variables with constant initializers, constant lookup tables
 - 🟡 Other package variables (havoc), `init` functions (not run), stores to globals (ignored)
 - 🟡 `defer` of an unmodelled call (ignored); `recover` (havoc)
-- ✅ `defer` of a modelled function (not in a loop)
+- ✅ `defer` of a modelled function, in a loop too
 - 🟡 Goroutines, channels, `select`, `sync.Mutex` `RWMutex` `WaitGroup` `Once`: deadlocks, goroutine leaks and misuse panics under schedules the search picks ([concurrency.md](../docs/concurrency.md)); `context`, timers (`time.After`, `NewTimer`, `NewTicker`, `AfterFunc`) and `sync.Cond` too; data races (vector clocks), confirmed under `go test -race`
 
 **Standard library and SDKs** (✅ unless noted)

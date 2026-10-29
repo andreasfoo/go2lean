@@ -224,8 +224,8 @@ exact growth is implementation-defined and visible only through `cap`).
 Interfaces, maps, funcs, channels, floats and `unsafe.Pointer` are opaque
 values (history §9b); `range` over strings is modelled, over maps assumed empty;
 deferred calls the model does not look into are ignored, deferred calls
-to modelled functions run at the returns. Not yet: goroutines, `select`,
-`defer` of a modelled function in a loop.
+to modelled functions run at the returns, in a loop too (#62); goroutines
+and `select`: [concurrency.md](concurrency.md).
 
 The original design notes (the parts not built yet) are in
 [history.md](history.md) §4.3b.
