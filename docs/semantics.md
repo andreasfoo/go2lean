@@ -299,7 +299,13 @@ reads since (FastTrack); two accesses, one a write, neither ordered before
 the other, end the run with `data_race`. Within a step the machine is
 sequentially consistent: no weak-memory reorderings. In a package that
 starts goroutines, the package variables its functions write are shared
-cells (zero at the start of a run), so their races are seen.
+cells, so their races are seen. A cell starts at the variable's zero
+value, at the one constant its initializer stores, or, for an interface
+its initializer builds (`var logger Logger = &std{}`, or a call of a
+function that returns one), at an opaque
+non-nil value whose method calls are havoc (#55). A variable with any
+other initializer is not a cell: its stores are ignored and its loads are
+havoc.
 
 The replay stage for `data_race` builds the test with `-race` and runs the
 call 20 times: Go's race detector reports a race whenever both accesses

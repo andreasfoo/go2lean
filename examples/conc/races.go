@@ -153,6 +153,37 @@ func CountHits() int {
 	return hits
 }
 
+// sink is where the package logs.
+type sink interface{ log(msg string) }
+
+type prefixSink struct{ prefix string }
+
+func (p *prefixSink) log(msg string) { _ = p.prefix + msg }
+
+type nopSink struct{}
+
+func (nopSink) log(string) {}
+
+// logSink starts as a sink its initializer builds, as a package's default
+// logger does.
+var logSink sink = newPrefixSink("conc: ")
+
+func newPrefixSink(prefix string) sink { return &prefixSink{prefix: prefix} }
+
+// LogWhileSwapping logs while another goroutine replaces the sink. Bug: a
+// data race on logSink (the swap and the read are not ordered).
+func LogWhileSwapping(msg string) int {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logSink = nopSink{}
+	}()
+	logSink.log(msg)
+	wg.Wait()
+	return len(msg)
+}
+
 // stats counts writes atomically.
 type stats struct {
 	writes uint64
