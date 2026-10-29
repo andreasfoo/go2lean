@@ -294,6 +294,8 @@ inductive Op where
   | arrIndex
   /-- A struct value from its fields. -/
   | mkStruct
+  /-- An array value from its elements. -/
+  | mkArr
   /-- `make([]T, len, cap)` filled with `zero`; args `[len, cap]`. -/
   | makeSlice (zero : Val)
   /-- `make(chan T, cap)`; args `[cap]`. The channel is a heap object
@@ -1170,6 +1172,7 @@ def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
     | some v => .ok v
     | none => .panic .modelStuck
   | .mkStruct, fs => .ok (.structv fs)
+  | .mkArr, es => .ok (.arr es)
   | .fieldAddr i, [.ptr 0 _] => .ok (.ptr 0 [i]) -- &nil.f stays nil-based; deref panics
   | .fieldAddr i, [.ptr ref path] => .ok (.ptr ref (path ++ [i]))
   | .indexAddr, [.slice ref off len _, i] =>
