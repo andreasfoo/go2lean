@@ -52,6 +52,7 @@ exhausted conc_lazyclose_nopanic
 exhausted conc_lockedcount_nopanic
 confirmed conc_logwhileswapping_nopanic
 confirmed conc_lostwakeup_nopanic
+exhausted conc_newprefixsink_nopanic
 exhausted conc_newqueue_nopanic
 exhausted conc_nopsink_log_nopanic
 confirmed conc_notify_nopanic

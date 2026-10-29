@@ -166,7 +166,9 @@ func (nopSink) log(string) {}
 
 // logSink starts as a sink its initializer builds, as a package's default
 // logger does.
-var logSink sink = &prefixSink{prefix: "conc: "}
+var logSink sink = newPrefixSink("conc: ")
+
+func newPrefixSink(prefix string) sink { return &prefixSink{prefix: prefix} }
 
 // LogWhileSwapping logs while another goroutine replaces the sink. Bug: a
 // data race on logSink (the swap and the read are not ordered).

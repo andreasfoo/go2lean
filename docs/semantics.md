@@ -301,7 +301,8 @@ sequentially consistent: no weak-memory reorderings. In a package that
 starts goroutines, the package variables its functions write are shared
 cells, so their races are seen. A cell starts at the variable's zero
 value, at the one constant its initializer stores, or, for an interface
-its initializer builds (`var logger Logger = &std{}`), at an opaque
+its initializer builds (`var logger Logger = &std{}`, or a call of a
+function that returns one), at an opaque
 non-nil value whose method calls are havoc (#55). A variable with any
 other initializer is not a cell: its stores are ignored and its loads are
 havoc.
