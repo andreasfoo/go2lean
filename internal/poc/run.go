@@ -347,6 +347,10 @@ func raceOne(root, pkgDir, pkgName, pkg string, p *prepared, overlay map[string]
 // (go2lean*) or the harness. An access is placed by the first frame of
 // its stack outside the runtime, reflect and sync (a map access starts in
 // the runtime's map code).
+// helperFrame matches a stack frame of a go2lean helper function
+// (go2leanDeadline, go2leanGate, their closures), not the PoC test itself.
+var helperFrame = regexp.MustCompile(`\.go2lean[A-Z]\w*(\.func\d+)*\(`)
+
 func raceReport(out string) string {
 	for _, block := range strings.Split(out, "==================") {
 		if !strings.Contains(block, "WARNING: DATA RACE") {
@@ -360,6 +364,18 @@ func raceReport(out string) string {
 				continue
 			}
 			accesses++
+			// An access made inside one of the harness's or the replay
+			// controller's helpers (go2leanDeadline running a context's
+			// cancel, go2leanGate): the controller orders it, which the
+			// detector does not see, so the report is not the program's.
+			for _, f := range lines[i+1:] {
+				if strings.TrimSpace(f) == "" {
+					break
+				}
+				if helperFrame.MatchString(f) {
+					ours = true
+				}
+			}
 			for _, f := range lines[i+1:] {
 				f = strings.TrimSpace(f)
 				if f == "" {

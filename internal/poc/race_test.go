@@ -41,3 +41,51 @@ Previous read at 0x00c00009a008 by goroutine 9:
 		t.Fatalf("program race not reported: %q", got)
 	}
 }
+
+// A race whose access is made inside a harness helper, below a frame of the
+// standard library (go2leanDeadline running a context's cancel), is the
+// harness's, not the program's (#66; evaluation 7's k031 at the fix).
+func TestRaceReportSkipsHelperBelowStdlib(t *testing.T) {
+	deadline := `==================
+WARNING: DATA RACE
+Write at 0x00c0000a4010 by goroutine 10:
+  sync/atomic.CompareAndSwapInt32()
+      /go/src/runtime/race_amd64.s:361 +0xb
+  sync.(*Mutex).Lock()
+      /go/src/sync/mutex.go:46 +0x28
+  context.(*cancelCtx).cancel()
+      /go/src/context/context.go:547 +0x84
+  context.WithCancel.func1()
+      /go/src/context/context.go:242 +0x52
+  github.com/quic-go/quic-go.go2leanDeadline.func1()
+      /m/zz_go2lean_replay.go:530 +0x3c
+
+Previous read at 0x00c0000a4010 by goroutine 11:
+  context.(*cancelCtx).Done()
+      /go/src/context/context.go:400 +0x1
+  github.com/quic-go/quic-go.(*Transport).dial()
+      /m/transport.go:260 +0x1
+==================
+`
+	if got := raceReport(deadline); got != "" {
+		t.Fatalf("helper race reported: %s", got)
+	}
+	program := `==================
+WARNING: DATA RACE
+Read at 0x00c00009a060 by goroutine 10:
+  github.com/quic-go/quic-go.(*Transport).close()
+      /m/transport.go:496 +0x151
+  github.com/quic-go/quic-go.SeqConcTransportDialClose.func1()
+      /m/go2lean_conc_test.go:31 +0x92
+
+Previous write at 0x00c00009a060 by goroutine 11:
+  github.com/quic-go/quic-go.(*Transport).dial.(*Transport).init.func1()
+      /m/transport.go:387 +0x247
+  github.com/quic-go/quic-go.TestGo2LeanPoC_cx1.func3()
+      /m/zz_go2lean_poc_test.go:40 +0x209
+==================
+`
+	if got := raceReport(program); !strings.Contains(got, "(*Transport).close") {
+		t.Fatalf("program race not reported: %q", got)
+	}
+}
