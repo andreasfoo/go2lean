@@ -1080,9 +1080,9 @@ var modelledStdlib = map[string]bool{
 	// Only the functions a package calls are translated: the varints,
 	// not the reflection-based Read and Write.
 	"encoding/binary": true,
-	// Pure Go over pointers and interfaces (#69). bufio is not yet: its
-	// 4096-byte buffers cost more fuel than a run has (#71).
+	// Pure Go over pointers, slices and interfaces (#69).
 	"container/list": true,
+	"bufio":          true,
 }
 
 func isStdlib(path string) bool {

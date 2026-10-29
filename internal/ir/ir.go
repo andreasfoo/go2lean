@@ -426,6 +426,7 @@ var StdlibOps = map[string]Op{
 	"errors.New":                     Simple("errNew"),
 	"fmt.Errorf":                     Simple("errNew"),
 	"(*strings.Builder).WriteString": Simple("sbWriteString"),
+	"(*strings.Builder).Write":       Simple("sbWrite"),
 	"(*strings.Builder).WriteByte":   Simple("sbWriteByte"),
 	"(*strings.Builder).WriteRune":   Simple("sbWriteRune"),
 	"(*strings.Builder).String":      Simple("sbString"),

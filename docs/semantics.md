@@ -65,7 +65,7 @@ yields UB or poison, Go panics. A run ends in one of:
 | `ok v` | returned | — |
 | `panic k` | runtime panic or `panic(...)` | `index_out_of_range`, `slice_bounds`, `nil_dereference`, `divide_by_zero`, `negative_shift`, `make_slice_len`, `type_assertion`, `nil_map_write`, `explicit` (a `panic` call), `closed_channel` (send on or close of a closed channel, close of nil), `sync_fatal` (unlock of an unlocked mutex: a fatal error in Go), `deadlock`, `goroutine_leak`, `data_race` (§6), `other` |
 | `panic modelStuck` | — | the model cannot continue (stuck); not a Go panic, never reported as one |
-| `outOfFuel` | — | the step budget ran out (loops, recursion), or a slice would exceed the model's size bound (1024 elements); moot |
+| `outOfFuel` | — | the step budget ran out (loops, recursion), or a slice would exceed the model's size bound (`sliceBound`, 16384 elements); moot |
 
 `recover` is not modelled: a panic ends the run.
 
@@ -100,8 +100,8 @@ yields UB or poison, Go panics. A run ends in one of:
 | `new(T)`, `&T{…}`, escaping locals | `alloc zero` | exact |
 | `*p`, `*p = v`, `&x.f`, `&xs[i]`, `x.f`, `a[i]` | `loadPath storePath fieldAddr indexAddr field arrIndex` | exact; nil dereference panics |
 | `xs[i]`, `xs[lo:hi]`, `xs[lo:hi:max]` | `indexCheck load reslice reslice3` | exact, bounds panics |
-| `make([]T, n, c)` | `makeSlice` | exact; a negative length, or one above the capacity, panics; above 1024 elements: out of fuel |
-| `append` | `appendSlice` | exact while capacity allows; growth doubles the capacity (Go's growth is implementation-defined); growth above 1024 elements: out of fuel |
+| `make([]T, n, c)` | `makeSlice` | exact; a negative length, or one above the capacity, panics; above 16384 elements: out of fuel |
+| `append` | `appendSlice` | exact while capacity allows; growth doubles the capacity (Go's growth is implementation-defined); growth above 16384 elements: out of fuel |
 | `copy` | `copySlice` | exact |
 | `min`, `max` on integers | a comparison and `ite` per argument | exact (on strings and floats: havoc) |
 | `len`, `cap` of slices, arrays, pointers to arrays | `len cap` | exact |
@@ -187,7 +187,7 @@ Calls not listed here are unmodelled (§4.6).
 |---|---|
 | `strings.HasPrefix HasSuffix Contains Index IndexByte LastIndex Count TrimPrefix TrimSuffix Trim TrimLeft TrimRight ReplaceAll Split Fields Join Repeat` | exact |
 | `strings.TrimSpace ToLower ToUpper EqualFold` | exact for ASCII; Unicode spaces and case folding are not modelled |
-| `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell); `Grow` (also `bytes.Buffer`'s) panics for a negative argument and is otherwise a no-op |
+| `strings.Builder` (`WriteString Write WriteByte WriteRune String Len Reset`) | exact (a string cell); `Grow` (also `bytes.Buffer`'s) panics for a negative argument and is otherwise a no-op |
 | `strconv.Atoi` | exact for decimal `int64` (sign, range error) |
 | `strconv.Itoa` | exact |
 | `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add Swap CompareAndSwap And Or` (#67); the functions `Load Store Add Swap CompareAndSwap` on `*int32 *int64 *uint32 *uint64` | exact: plain reads and writes (a goroutine's instructions between two scheduling points run atomically, §6); `Uintptr`, `Pointer[T]`, `Value`: havoc |
@@ -211,7 +211,7 @@ Calls not listed here are unmodelled (§4.6).
 | `strings.NewReplacer` with literal pairs, `Replace` | exact (first matching old string, left to right) |
 | `strconv.ParseFloat(s, 64)` | exact for decimal syntax away from the float64 limit (value as JSON encodes it, syntax and range errors); infinities, NaN and hex floats havoc; checked by `scripts/json-diff.sh` |
 | `json.NewEncoder(&b)` on a `strings.Builder`, `SetEscapeHTML` with a constant before every `Encode`, `Encode` | exact (`Marshal`, without HTML escaping when the encoder says so, and a newline); checked by `scripts/json-diff.sh` |
-| `strings`, `bytes`, `strconv`, `unicode/utf8`, `unicode/utf16`, `encoding/binary`, `container/list` | translated from their Go source under `-deps` (as `net/url`; `container/list` checked by `testdata/goosesem/go2lean_stdlib.go`, #69; for `encoding/binary`, the functions a package calls, such as `Uvarint`, `Varint` and `PutUvarint`, checked by `testdata/stdaudit`), except the functions with a model of their own in the rows above, which keep it; the assembly primitives of `internal/bytealg` (`IndexByte`, `IndexByteString`, `Index`, `IndexString`, `Count`, `CountString`) are leaf operations of the model (the rest of `internal/bytealg`, `internal/stringslite`, `internal/strconv`, `math/bits` and `unicode` are translated too; `bytealg.MaxLen` is 63, an AVX2 machine's value, which picks an algorithm, not a result), `unsafe` conversions inside them are havoc, `defer`/`recover` (`bytes.growSlice`) an assumption. The hand-written models of `strings` and `strconv` functions and the translation of their source are both checked against Go by `PKG=testdata/stdaudit DEPS=1 scripts/json-diff.sh` (the second with `GO2LEAN_NO_STDLIB_OPS=strings,strconv`; with `unicode/utf8` decoding, 444 same, 0 different); the hand-written ones stay, because the translation alone leaves `strings.Builder` (`unsafe`) and `strconv.Atoi`'s callers with havoc (the regression gate: 3 spurious, 4 certificates weakened) |
+| `strings`, `bytes`, `strconv`, `unicode/utf8`, `unicode/utf16`, `encoding/binary`, `container/list`, `bufio` | translated from their Go source under `-deps` (as `net/url`; `container/list` and `bufio` checked by `testdata/goosesem/go2lean_stdlib.go`, #69, #71; for `encoding/binary`, the functions a package calls, such as `Uvarint`, `Varint` and `PutUvarint`, checked by `testdata/stdaudit`), except the functions with a model of their own in the rows above, which keep it; the assembly primitives of `internal/bytealg` (`IndexByte`, `IndexByteString`, `Index`, `IndexString`, `Count`, `CountString`) are leaf operations of the model (the rest of `internal/bytealg`, `internal/stringslite`, `internal/strconv`, `math/bits` and `unicode` are translated too; `bytealg.MaxLen` is 63, an AVX2 machine's value, which picks an algorithm, not a result), `unsafe` conversions inside them are havoc, `defer`/`recover` (`bytes.growSlice`) an assumption. The hand-written models of `strings` and `strconv` functions and the translation of their source are both checked against Go by `PKG=testdata/stdaudit DEPS=1 scripts/json-diff.sh` (the second with `GO2LEAN_NO_STDLIB_OPS=strings,strconv`; with `unicode/utf8` decoding, 444 same, 0 different); the hand-written ones stay, because the translation alone leaves `strings.Builder` (`unsafe`) and `strconv.Atoi`'s callers with havoc (the regression gate: 3 spurious, 4 certificates weakened) |
 | pointer sentinels: a package variable its initializer sets to `&T{...}` of constants (sjson's `errNoChange`) | boxed as an error it compares by identity like `errors.New` sentinels; its fields read as the constants |
 | `net/url` | translated from its Go source under `-deps` (the standard-library packages listed in `modelledStdlib`), like a dependency: `url.Parse`, `Hostname`, `Port`, `Query` and the rest are the library's own code. Not modelled inside it: IPv6 literals (`netip.ParseAddr`) and the `urlstrictcolons` GODEBUG setting (a host with two colons), both havoc. Checked by `DEPS=1 PKG=testdata/urldiff` (90 same, 0 different) |
 | `github.com/google/uuid.New` | a fresh value distinct from every other in the run (real UUIDs collide with negligible probability) |
