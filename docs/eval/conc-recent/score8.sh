@@ -26,6 +26,11 @@ for l in open('$H/cases.jsonl'):
   cp "$h" "$wt/$pkgdir/go2lean_conc_test.go"
   mod=$wt/$moddir
   gf=-mod=mod; [ -f "$wt/go.work" ] && gf=
+  # The per-case adjustments of run8b.sh, at the fix as at the parent.
+  unset GOTOOLCHAIN
+  case $id in
+    k043) export GOTOOLCHAIN=auto; (cd "$mod" && GOFLAGS=$gf go get github.com/nats-io/nats-server/v2@v2.15.2) > "$R/$id/score-pre.log" 2>&1 ;;
+  esac
   # A: replay each confirmed counterexample of the harness at the fix.
   a="-"
   for v in "$R/$id"/wsA/verdicts/*.json; do
@@ -34,6 +39,7 @@ for l in open('$H/cases.jsonl'):
 import json; v=json.load(open('$v')); print(v['counterexample'], v['status'])")"
     if [ "$status" != confirmed ]; then [ "$a" = "-" ] && a="not-confirmed($status)"; continue; fi
     w=$H/scorews/$id; rm -rf "$w"; mkdir -p "$w"; cp -r "$R/$id/wsA/"* "$w/"; rm -rf "$w/verdicts" "$w/poc"
+    [ -f "$w/models.tgz" ] && tar xzf "$w/models.tgz" -C "$w" && rm "$w/models.tgz"
     (cd "$mod" && GOFLAGS="$gf" timeout 900 $G poc -workspace "$w" -module . -counterexample "$cx") > "$R/$id/score-A.log" 2>&1
     st=$(python3 -c "
 import json,glob

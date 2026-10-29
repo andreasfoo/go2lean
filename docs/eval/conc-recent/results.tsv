@@ -1,0 +1,26 @@
+case	kind	truth	net	A found	B found	A score	B score	parent sanity	note
+k001	race	observed		yes	yes	FOUND	FOUND	race (data race timesnap vs add on sentAt; 2 reports in 200 	
+k004	race	observed		no	yes	-	FOUND	race (SetLogger vs formatSec read of global Logger; 6 report	
+k007	deadlock	observed	net	no	yes	not-confirmed(spurious)	FOUND	clean 200/200 (loopback mock brokers); deadlock (timeout, po	
+k009	leak	observed		no	no	not-confirmed(spurious)	-	leak (goroutine count 2 -> 504 after 200 iterations with 2 r	B: a leak, which go test -fuzz does not check
+k010	wrong_result	forced		no	yes	not-confirmed(spurious)	FOUND	false 87/200	
+k012	race	observed		no	yes	not-confirmed(inconclusive)	FOUND	race (2 reports, test fails within first iterations of 200; 	
+k014	race	observed		no	yes	not-confirmed(inconclusive)	FOUND	race (1-2 reports on epochBumpRequired at every initial stat	
+k015	deadlock	observed		yes	yes	replay-error(inconclusive schedule_not_reproduced)	FOUND	deadlock (driver hit its timeout; goroutine stuck in checkPe	A at fix: no deadlock in 200 runs, replay inconclusive; counted found
+k016	wrong_result	observed		no	yes	-	FOUND	false 8/200 (inputs "x","x",5; "x","y",5 is clean 200/200)	
+k017	race	observed		yes	yes	FOUND	FOUND	race (1-2 reports, within first iterations of 200; idle inpu	
+k018	hang	observed		no	yes	fails-on-fix	FOUND	clean 200/200 with draining inputs (2,1,3,false); hang (dead	A at fix: blocked past the replay's 2 s watchdog (the fix drops after 5 s); not counted
+k023	race	forced	net	no	no	-	-	race (data race consumer.go processAckMsg read of mset.cfg.R	A: out of memory (#45); B: no property to fuzz
+k024	panic	observed		no	yes	not-confirmed(spurious)	FOUND	race (chansend in Write vs closechan in Close; test fails)	
+k028	wrong_result	observed		no	yes	-	FOUND	false 80/200 (inputs retries=0, open every 4th, CloseDeadlin	
+k030	race	observed		yes	yes	FOUND	FOUND	race (AddKey reading k.keys at keyring.go:87 vs installKeys 	
+k031	race	observed	net	yes	yes	fails-on-fix	FOUND	race 20 reports/200 (Transport.Close reads t.conn vs Transpo	A at fix: the race reported there is the replay harness's own (go2leanDeadline, #66); at the parent the defect's race
+k033	panic	observed	net	no	no	not-confirmed(spurious)	-	clean 200/200 (bug window not hit by the plain driver)	
+k038	wrong_result	observed		no	yes	not-confirmed(spurious)	FOUND	clean 200/200 with -race (informational: 1 false in 5000 run	
+k039	wrong_result	observed		no	yes	not-confirmed(spurious)	FOUND	false 50/200 (queue/waiterCount not empty or error disagrees	
+k042	deadlock	observed		no	yes	-	FOUND	deadlock (appender Commit blocks on the series lock leaked b	rerun (first pass: disk full)
+k043	deadlock	observed	net	no	yes	not-confirmed(spurious)	FOUND	deadlock (iteration 1 of 200; ErrHandler's cc.Closed() block	rerun with go get nats-server v2.15.2 and GOTOOLCHAIN=auto
+k044	deadlock	observed	net	no	yes	-	FOUND	deadlock (second Fetch blocks forever in limiter Acquire; dr	rerun with -fuzz-specs=false (#64)
+k045	wrong_result	forced		no	yes	not-confirmed(spurious)	FOUND	clean 200/200 (3 runs, natural; with custom/k045/sleep_hook.	
+k047	deadlock	observed		yes	yes	replay-error(inconclusive schedule_not_reproduced)	FOUND	clean 200/200 in a single driver run (usual); deadlock (Rang	A at fix: no deadlock in 200 runs, replay inconclusive; counted found
+k050	race	observed		no	yes	not-confirmed(spurious)	FOUND	race (DATA RACE on ttrpc clientStream.localClosed: SendMsg v	

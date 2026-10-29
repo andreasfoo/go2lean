@@ -1,0 +1,183 @@
+== k001
+  A: confirmed  model=panic:data_race havoc=16
+     havoc x11 schedule: schedule
+     havoc x1 unmodeled-load: SeqConcBDPTimesnap: load bdpPing.ack
+     havoc x1 unmodeled-load: SeqConcBDPTimesnap$2: load bdpPing.ack
+     havoc x1 unmodeled-load: timesnap: load bdpPing.ack
+     assume SeqConcBDPTimesnap: load bdpPing: assumed a pointer to a fresh google.golang.org/grpc/internal/transport.ping with havoc fields (not modelle
+     assume SeqConcBDPTimesnap$2: load bdpPing: assumed a pointer to a fresh google.golang.org/grpc/internal/transport.ping with havoc fields (not model
+     assume timesnap: load bdpPing: assumed a pointer to a fresh google.golang.org/grpc/internal/transport.ping with havoc fields (not modelled)
+  B: violated FAIL
+== k004
+  A: no counterexample; proof=exhausted_assuming; random: none in 2000 trials (0 out of fuel, 0 moot/stuck); spec checked 2000, vacuous 0 []; exhaustive: holds on 25600 inputs; spec checked 25600, vacuous 0 [] (recorded as exhausted_assuming)
+     assume SetLogger: store to global Logger ignored
+     assume a call through a function value the model does not know: its effects are not modelled
+     assume Disable: store to global Logger ignored
+  B: violated FAIL
+== k007
+  A: spurious oracle_holds_in_real_run model=panic:index_out_of_range havoc=515
+     havoc x423 schedule: schedule
+     havoc x11 opaque-assert: register: type assertion #1
+     havoc x7 assumed: GetOrRegister: call (reflect.Value).Call (assumed)
+     havoc x7 unmodeled-call: GetOrRegister: call (reflect.Value).Call (length)
+     assume NewMockBrokerAddr: call to t ignored (no result, effects not modelled)
+     assume NewMockBrokerListener: call to t13 ignored (no result, effects not modelled)
+     assume NewMockBrokerListener: call to t ignored (no result, effects not modelled)
+     note the model chose the results of calls it does not model: net.Listen, errors.Is, net.SplitHostPort, errors.As, time.Now and 11 more; a choice Go does not make giv
+  B: violated fuzz: elapsed: 9s, execs: 2585 (293/sec), new interesting: 29 (total: 29)
+== k009
+  A: spurious oracle_holds_in_real_run model=panic:make_slice_len havoc=40
+     havoc x5 schedule: schedule
+     havoc x3 unmodeled-call: Len: call (reflect.Value).Len
+     havoc x2 unmodeled-call: computeDataReflect: call (reflect.Value).Index.flag
+     havoc x2 unmodeled-call: computeDataReflect: call (reflect.Value).Addr.flag
+     assume Version: call runtime/debug.ReadBuildInfo #0: assumed a pointer to a fresh runtime/debug.BuildInfo with havoc fields (not modelled)
+     assume the model got stuck in DefaultWithContext: its result is havoc, its effects are dropped
+     assume Default: call go.opentelemetry.io/otel/sdk/resource.DefaultWithContext (callee stuck): assumed a pointer to a fresh go.opentelemetry.io/otel
+     note the model chose the results of calls it does not model: os.Setenv, runtime/debug.ReadBuildInfo, (go.opentelemetry.io/otel/attribute/internal/xxhash.Hash).Sum64,
+  B: error fuzz: elapsed: 3m57s, execs: 26684 (118/sec), new interesting: 17 (total: 17)
+== k010
+  A: spurious oracle_holds_in_real_run model=panic:nil_dereference havoc=20
+     havoc x5 schedule: schedule
+     havoc x1 callee-stuck: SeqConcChannelClose: call github.com/rabbitmq/amqp091-go.newSession (callee stuck) #1.start.Mechanism
+     havoc x1 callee-stuck: SeqConcChannelClose: call github.com/rabbitmq/amqp091-go.newSession (callee stuck) #1.start.Response
+     havoc x1 callee-stuck: SeqConcChannelClose: call github.com/rabbitmq/amqp091-go.newSession (callee stuck) #1.start.Locale
+     assume the model got stuck in newSession: its result is havoc, its effects are dropped
+     assume SeqConcChannelClose: call github.com/rabbitmq/amqp091-go.newSession (callee stuck) #1: assumed a pointer to a fresh github.com/rabbitmq/amqp
+     assume SeqConcChannelClose: deferred call invoke t5.Close() ignored (effects not modelled)
+     note the model chose the results of calls it does not model: bufio.NewWriter, io.ReadFull, reflect.Indirect; a choice Go does not make gives a spurious counterexampl
+  B: violated go2lean: SeqConcChannelClose is false
+== k012
+  A: inconclusive race_not_observed model=panic:data_race havoc=22
+     havoc x22 schedule: schedule
+     note go test -race reported no data race between the program's accesses
+     note replay of the model's schedule under -race: followed (16 of 16 steps), no race reported
+  B: violated warning: starting with empty corpus
+== k014
+  A: inconclusive race_not_observed model=panic:data_race havoc=20
+     havoc x15 schedule: schedule
+     havoc x5 unmodeled-call: maybeTransitionToErrorState: call errors.Is
+     note go test -race reported no data race between the program's accesses
+     note the model chose the results of calls it does not model: errors.Is; a choice Go does not make gives a spurious counterexample
+  B: violated FAIL
+== k015
+  A: confirmed  model=panic:deadlock havoc=30
+     havoc x29 schedule: schedule
+     havoc x1 unmodeled-call: Stop: call (*sync/atomic.Uint32).CompareAndSwap
+     assume SeqConcPullDrain$1: store into handle t5 ignored
+  B: violated fuzz: elapsed: 3s, execs: 17 (6/sec), new interesting: 6 (total: 6)
+== k016
+  A: no counterexample; proof=-; random: none in 2000 trials (2000 out of fuel, 0 moot/stuck); exhaustive: skipped (domain too large: 4.63e+09 > 300000); mutation: no mutant of the code under test fails the spec (24 tried): it checks
+  B: violated go2lean: SeqConcAppendSeries is false
+== k017
+  A: confirmed  model=panic:data_race havoc=141
+     havoc x135 schedule: schedule
+     havoc x2 opaque-op: executeTask$1: nil comparison
+     havoc x1 callee-stuck: incrementWorkerCount: call Resize (callee stuck)
+     havoc x1 unmodeled-call: defaultPanicHandler: call runtime/debug.Stack (length)
+     assume a call through a function value the model does not know: its effects are not modelled
+     assume defaultPanicHandler: call runtime/debug.Stack: assumed a slice of 0..3 zero values of byte (not modelled)
+  B: violated FAIL
+== k018
+  A: confirmed  model=panic:deadlock havoc=120
+     havoc x120 schedule: schedule
+  B: violated fuzz: elapsed: 3s, execs: 3 (1/sec), new interesting: 2 (total: 2)
+== k023
+== k024
+  A: spurious oracle_holds_in_real_run model=panic:closed_channel havoc=52
+     havoc x52 schedule: schedule
+  B: violated warning: starting with empty corpus
+== k028
+  A: no counterexample; proof=exhausted_assuming; random: none in 2000 trials (0 out of fuel, 39 moot/stuck); spec checked 1961, vacuous 0 []; exhaustive: holds on 660 inputs; spec checked 660, vacuous 0 [] (recorded as exhausted_assuming); mutation:
+     assume SeqConcReconnectClose: call bufio.NewWriter: assumed a pointer to a fresh bufio.Writer with havoc fields (not modelled)
+     assume Reconnect: call to t35 ignored (no result, effects not modelled)
+     assume a call through a function value the model does not know: its effects are not modelled
+  B: violated go2lean: SeqConcReconnectClose is false
+== k030
+  A: confirmed  model=panic:data_race havoc=17
+     havoc x17 schedule: schedule
+  B: violated warning: starting with empty corpus
+== k031
+  A: confirmed  model=panic:data_race havoc=49
+     havoc x25 schedule: schedule
+     havoc x2 unmodeled-call: SeqConcTransportDialClose: call net.ListenUDP #1
+     havoc x1 unmodeled-call: SeqConcTransportDialClose: call net.IPv4 (length)
+     havoc x1 unmodeled-call: setReceiveBuffer: call t5 #1
+     assume SeqConcTransportDialClose: call net.IPv4: assumed a slice of 0..3 zero values of byte (not modelled)
+     assume SeqConcTransportDialClose: call net.ListenUDP #0: assumed a pointer to a fresh net.UDPConn with havoc fields (not modelled)
+     assume SeqConcTransportDialClose: deferred call (*net.conn).Close(t14) ignored (effects not modelled)
+  B: violated FAIL
+== k033
+  A: spurious oracle_holds_in_real_run model=panic:index_out_of_range havoc=345
+     havoc x251 schedule: schedule
+     havoc x6 unmodeled-call: isConnectionClosedError: call errors.As
+     havoc x5 opaque-op: isConnectionClosedError: errors.Is
+     havoc x4 opaque-op: shouldCloseBrokerConn: errors.Is
+     assume NewMockBrokerAddr: call to t ignored (no result, effects not modelled)
+     assume NewMockBrokerListener: call to t13 ignored (no result, effects not modelled)
+     assume NewMockBrokerListener: call to t ignored (no result, effects not modelled)
+     note the model chose the results of calls it does not model: net.Listen, errors.Is, net.SplitHostPort, time.Now, (time.Time).UnixNano and 11 more; a choice Go does n
+  B: held 
+== k038
+  A: spurious oracle_holds_in_real_run model=panic:slice_bounds havoc=32
+     havoc x9 schedule: schedule
+     havoc x1 callee-stuck: List: call (*github.com/cockroachdb/pebble/vfs.MemFS).walk (callee stuck)
+     havoc x1 unmodeled-call: NewInternalPrinter: call github.com/cockroachdb/redact/internal.newPrinter.substituteState
+     havoc x1 unmodeled-call: NewInternalPrinter: call github.com/cockroachdb/redact/internal.newPrinter.value.flag
+     assume the model got stuck in MemFS.walk: its result is havoc, its effects are dropped
+     assume NewInternalPrinter: call github.com/cockroachdb/redact/internal.newPrinter: assumed a pointer to a fresh github.com/cockroachdb/redact/inter
+     assume DoPrintf: call to (*github.com/cockroachdb/redact/internal.pp).doPrintf ignored (no result, effects not modelled)
+     note the model chose the results of calls it does not model: github.com/cockroachdb/redact/internal.newPrinter, github.com/cockroachdb/redact/internal.GetState, gith
+  B: violated go2lean: SeqConcProviderSync is false
+== k039
+  A: spurious oracle_holds_in_real_run model=ok:false havoc=22
+     havoc x17 schedule: schedule
+     havoc x2 unmodeled-call: TryTransition: call (*sync/atomic.Uint32).CompareAndSwap
+     havoc x1 unmodeled-call: NewConnStateMachine: call container/list.New.len
+     havoc x1 unmodeled-call: AwaitAndTransition: call (*sync/atomic.Uint32).CompareAndSwap
+     assume NewConnStateMachine: call container/list.New: assumed a pointer to a fresh container/list.List with havoc fields (not modelled)
+     note the model chose the results of calls it does not model: container/list.New, (*sync/atomic.Uint32).CompareAndSwap, (*container/list.List).Len; a choice Go does n
+  B: violated go2lean: SeqConcConnStateAwait is false
+== k042
+  A: no counterexample; proof=-; random: none in 2000 trials (1005 out of fuel, 0 moot/stuck); spec checked 995, vacuous 0 []; exhaustive: no certificate, 278 inputs ran out of fuel; mutation: no mutant of the code under test fails t
+  B: violated fuzz: elapsed: 12s, execs: 625 (41/sec), new interesting: 14 (total: 14)
+== k043
+  A: spurious oracle_holds_in_real_run model=panic:explicit havoc=220
+     havoc x9 opaque-op: setBaselineOptions: == on float64
+     havoc x3 assumed: setBaselineOptions: call github.com/nats-io/nats-server/v2/server.getDefaultAuthTimeout (assumed)
+     havoc x1 schedule: schedule
+     havoc x1 unmodeled-load: RunBasicJetStreamServer: load DefaultTestOptions.ConfigFile
+     assume RunBasicJetStreamServer: store into handle t2 ignored
+     assume RunBasicJetStreamServer: store into handle t3 ignored
+     assume RunServerCallback: store into handle t6 ignored
+     note the model chose the results of calls it does not model: github.com/nats-io/nkeys.CreatePair, crypto/fips140.Enabled, github.com/nats-io/nkeys.CreateCurveKeysWit
+  B: violated fuzz: elapsed: 3s, execs: 0 (0/sec), new interesting: 0 (total: 0)
+== k044
+  A: no counterexample; proof=-; random: none in 2000 trials (0 out of fuel, 0 moot/stuck); spec checked 2000, vacuous 0 []; exhaustive: skipped (domain too large: 6.38e+10 > 300000); mutation: no mutant of the code under test fails 
+  B: violated fuzz: elapsed: 6s, execs: 1834 (304/sec), new interesting: 15 (total: 15)
+== k045
+  A: spurious oracle_holds_in_real_run model=ok:false havoc=84
+     havoc x57 schedule: schedule
+     havoc x2 opaque-op: StartWithAttrs: nil comparison
+     havoc x2 unmodeled-call: tryReadNextLine: call os.Getenv
+     havoc x2 unmodeled-call: tryReadNextLine: call (*bufio.Reader).ReadString #0
+     assume commandFromConfig: call os/exec.Command: assumed a pointer to a fresh os/exec.Cmd with havoc fields (not modelled)
+     assume Open: call github.com/creack/pty.open #0: assumed a pointer to a fresh os.File with havoc fields (not modelled)
+     assume Open: call github.com/creack/pty.open #1: assumed a pointer to a fresh os.File with havoc fields (not modelled)
+     note the model chose the results of calls it does not model: os/exec.Command, github.com/creack/pty.open, (*os/exec.Cmd).Start, (*os.File).Close, (*os.Process).Wait 
+  B: violated go2lean: SeqConcExpectFailFast is false
+== k047
+  A: confirmed  model=panic:deadlock havoc=15
+     havoc x15 schedule: schedule
+  B: violated fuzz: elapsed: 6s, execs: 2147 (220/sec), new interesting: 8 (total: 8)
+== k050
+  A: spurious oracle_holds_in_real_run model=panic:index_out_of_range havoc=18
+     havoc x3 schedule: schedule
+     havoc x1 unmodeled-call: SeqConcStreamSendClose: call time.Now.wall
+     havoc x1 unmodeled-call: SeqConcStreamSendClose: call time.Now.ext
+     havoc x1 unmodeled-call: SeqConcStreamSendClose: call (time.Time).UnixNano
+     assume SeqConcStreamSendClose: deferred call (*github.com/containerd/ttrpc.Server).Close(t5) ignored (effects not modelled)
+     assume newChannel: call bufio.NewWriter: assumed a pointer to a fresh bufio.Writer with havoc fields (not modelled)
+     assume newChannel: call bufio.NewReader: assumed a pointer to a fresh bufio.Reader with havoc fields (not modelled)
+     note the model chose the results of calls it does not model: time.Now, (time.Time).UnixNano, net.Listen, net.Dial, bufio.NewWriter and 1 more; a choice Go does not m
+  B: violated warning: starting with empty corpus

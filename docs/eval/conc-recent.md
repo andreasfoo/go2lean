@@ -171,3 +171,86 @@ search the same program, and only the search differs.
   full settings.
 - Cases with loopback networking or real time are reported apart, as
   before.
+
+## Results
+
+Run on 2026-10-29 with the frozen tool (`90dc83c`), A and B one after the
+other per case, on a 4-core machine. Per case: `conc-recent/results.tsv`;
+what each arm reported, with A's havoc sites and assumptions:
+`conc-recent/ledger.txt`. The runner (`run8.sh`), the rerun with its
+adjustments (`run8b.sh`), the scorer (`score8.sh`) and the ledger script
+(`ledger7.py`) are beside them.
+
+| | cases |
+|---|---|
+| found by A (go2lean) | 6: four races (k001, k017, k030, k031), two deadlocks (k015, k047) |
+| found by B (Go's fuzzer, `-race`) | 22 |
+| both | 6 |
+| A only | 0 |
+| B only | 16 |
+| neither | 3: k009 (a leak, which the fuzzer does not check), k023 (A out of memory, so B had no property), k033 (a rare schedule) |
+
+- **By kind.** A found 4 of 9 races and 2 of 7 deadlocks or hangs, none of
+  the 6 wrong results and neither panic. B missed only the leak, the
+  out-of-memory case and k033.
+- **Rare schedules.** Of the five harnesses that a plain loop of 200 runs
+  did not fail at the parent (k007, k033, k038, k045, k047), B found four
+  and A one (k047). The fuzzer's repeated runs under the race detector
+  reached schedules the hypothesis expected only a schedule search to reach.
+- **Networking (6) and forced cases (3).** A found one networking case
+  (k031) and no forced case; B found four and two.
+
+### Why A missed
+
+Every miss traces to the model or the tool, not to the search over
+schedules. Each class is an issue:
+
+| class | cases | issue |
+|---|---|---|
+| a spurious counterexample built on havoc from code the model does not run: sockets, `reflect`, `os/exec` | k007, k009, k033, k043, k045, k050 | #70 |
+| `sync/atomic`'s typed values are havoc | k015 (also), k039 | #67 |
+| pure-Go standard library not translated: `container/list`, `bufio`, `errors.Is`/`As` | k010, k014, k028, k039, k050 | #69 |
+| a race the model reports that `-race` does not, even on the model's schedule | k012, k014 | #68 |
+| out of fuel, stuck callees, a domain too large for the exhaustive engine | k010, k016, k024, k038, k042, k044 | #71, #56 |
+| stores to a package variable ignored | k004 | #55 (partly fixed in #57) |
+| time | k028, k050 | #59 |
+| out of memory on nats-server | k023 | #45 |
+
+Two tool bugs surfaced too:
+- the package's own fuzz targets stopped k044 from loading (#64, fixed);
+- the replay reported a race inside the harness's deadline helper as the
+  program's (#66). In k031 that made the score at the fix wrong; at the
+  parent, A's confirmed race was the defect's.
+
+### Deviations
+
+- k018, k042, k043 and k044 were rerun (`run8b.sh`):
+  - k018 lost its fuzzing build to a cache cleanup of ours;
+  - k042 ran out of disk;
+  - k043 needed the harness's `go get` of nats-server v2.15.2, which wants
+    Go 1.26 (`GOTOOLCHAIN=auto`);
+  - k044 needed `-fuzz-specs=false` in A (#64).
+
+  Their first-pass logs are kept.
+- **Scoring at the fix, read by hand.** Three of A's results needed the
+  reports read to score them:
+  - k031: the race at the fix was the harness's own, so it counts as
+    found;
+  - k015 and k047: no deadlock at the fix in 200 runs and an inconclusive
+    replay, so they count as found;
+  - k018: blocked past the replay's 2-second watchdog at the fix too,
+    because the fix drops a blocked confirmation only after 5 seconds, so
+    it does not count. B's check at the fix allows 10 minutes, so this
+    case is scored unevenly.
+
+### What this says about the question
+
+On recent concurrency bugs, with the same harness for both, Go's fuzzer
+under the race detector found almost everything (22 of 25), including
+most of the rare schedules. go2lean found 6, all also found by the fuzzer.
+The hypothesis, that a search over schedules finds what repeated runs do
+not, is not supported at go2lean's current state: its schedule search
+never got the chance, because the model of the code around each bug
+(sockets, atomics, untranslated standard library, fuel) failed first. The
+next work is that model (the roadmap, #53). This evaluation is rerun with
+the same harnesses after each of those fixes.

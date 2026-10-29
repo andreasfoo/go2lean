@@ -147,8 +147,16 @@ finds and `go test` confirms the bug in **60 of the 68 blocking kernels**
 (deadlocks, goroutine leaks) and **27 of the 35 non-blocking ones** (24 of
 them data races), with 4 spurious results across all 103
 ([details](docs/concurrency.md#goker)). About 6 of the blocking bugs show
-up in Go only with the model's schedule replayed. GoKer is small (a median of 86 lines a kernel) and dates from 2021;
-recent concurrency bugs in real projects are measured next.
+up in Go only with the model's schedule replayed. GoKer is small (a median of 86 lines a kernel) and dates from 2021.
+
+**Concurrency, on recent bugs in real projects** (25 fixed since 2023 in
+grpc-go, sarama, prometheus, nats, containerd and others; both tools search
+the same concurrent harness): go2lean found **6**, Go's fuzzer under
+`-race` found **22**, and go2lean found none the fuzzer missed. go2lean's
+misses are gaps in its model of the code around the bug (sockets, atomics,
+standard-library calls it does not translate, runs out of fuel); they are
+the roadmap's next items ([details](docs/eval/conc-recent.md#results),
+[roadmap](https://github.com/andreasfoo/go2lean/issues/53)).
 
 [Validation and regression cases](docs/validation.md) ·
 [semver evaluation](docs/eval/semver.md) · [glob evaluation](docs/eval/glob.md) ·
@@ -156,7 +164,8 @@ recent concurrency bugs in real projects are measured next.
 [proofs on panic fixes](docs/eval/prove-fixes.md) ·
 [concurrency evaluation](docs/eval/conc.md) ·
 [what defects Go code has](docs/eval/go-defects.md) ·
-[go2lean's search against fuzzing](docs/eval/search-vs-fuzz.md)
+[go2lean's search against fuzzing](docs/eval/search-vs-fuzz.md) ·
+[recent concurrency bugs](docs/eval/conc-recent.md)
 
 ## Documentation
 
