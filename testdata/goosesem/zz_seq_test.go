@@ -80,6 +80,12 @@ func SeqTestBreakFromLoopNoContinueDouble() bool { return testBreakFromLoopNoCon
 // go2lean:sequence testBreakFromLoopWithContinue
 func SeqTestBreakFromLoopWithContinue() bool { return testBreakFromLoopWithContinue() }
 
+// go2lean:sequence testBufioReaderReadString
+func SeqTestBufioReaderReadString() bool { return testBufioReaderReadString() }
+
+// go2lean:sequence testBufioWriterFlush
+func SeqTestBufioWriterFlush() bool { return testBufioWriterFlush() }
+
 // go2lean:sequence testByteSliceToString
 func SeqTestByteSliceToString() bool { return testByteSliceToString() }
 
@@ -172,6 +178,12 @@ func SeqTestInterfaceNilWithType() bool { return testInterfaceNilWithType() }
 
 // go2lean:sequence testIterateMap
 func SeqTestIterateMap() bool { return testIterateMap() }
+
+// go2lean:sequence testListMoveToFront
+func SeqTestListMoveToFront() bool { return testListMoveToFront() }
+
+// go2lean:sequence testListPushRemove
+func SeqTestListPushRemove() bool { return testListPushRemove() }
 
 // go2lean:sequence testListTypesEqual
 func SeqTestListTypesEqual() bool { return testListTypesEqual() }
