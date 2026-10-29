@@ -522,6 +522,13 @@ def pendingName (g : Gor) : String :=
     | none => ""
   | [] => ""
 
+/-- The Go package of the function goroutine `g` runs (its top frame), for
+the schedule trace. -/
+def pendingPkg (g : Gor) : String :=
+  match g.frames with
+  | f :: _ => f.fn.pkg
+  | [] => ""
+
 /-- For a `select` goroutine `i` fires with `choice`: the case taken (-1
 for the default), as "select:k" for the schedule trace. -/
 def selectTaken (heap : Heap Val) (gs : Array Gor) (i choice : Nat) : Option String :=
@@ -701,10 +708,11 @@ def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
       let i := cands[c % cands.length]!
       -- The case a select takes: stepGor draws the same choice from `s`.
       let name := (selectTaken s.heap gs i (schedChoice p h s 1).1).getD (pendingName gs[i]!)
+      let pkg := pendingPkg gs[i]!
       match stepGor p or h gs i { s with conc.acc := #[] } stepFuel with
       | (.ok (gs', s), _) =>
         let partners := completedBy gs gs' i
-        let s := { s with conc.sched := s.conc.sched.push (i, name, partners) }
+        let s := { s with conc.sched := s.conc.sched.push (i, name, partners, pkg) }
         match raceStep gs gs' i name partners s with
         | .ok (gs', s) => schedule p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0)
         | .error e => (.panic .dataRace, { s with panicAt := some e })

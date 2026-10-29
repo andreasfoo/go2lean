@@ -263,6 +263,15 @@ func replayOne(root, pkgDir, pkgName, pkg string, p *prepared, overlay map[strin
 	v := verdictOf(&q, r, c, e, o, eo, root)
 	res, ok := r[p.cx.ID]
 	switch {
+	case !ok && v.Status == contract.VerdictConfirmed:
+		// The model's panic ended the run before it reported how far it
+		// followed the schedule.
+		if v.Observed == nil {
+			v.Observed = map[string]string{}
+		}
+		v.Observed["replay"] = "the model's schedule replayed; the run ended in the model's panic; Go's own scheduler did not take it in " + strconv.Itoa(concRuns) + " runs"
+		p.v, p.fn, p.imps, p.replayed = v, fn, imps, files
+		return nil
 	case !ok:
 		return note(fmt.Sprintf("%s (%s)", v.Status, reasonOf(v)))
 	case res.ReplayDiverged != "":

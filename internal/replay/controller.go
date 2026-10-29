@@ -37,6 +37,9 @@ type go2leanStep struct {
 	G        int
 	Op       string
 	Partners []int
+	// Ext: the operation is in a package the replay does not rewrite; it
+	// has no gate, and the goroutine fires it on its own (#56).
+	Ext bool
 }
 
 // go2leanG is the controller's view of a model goroutine.
@@ -299,10 +302,31 @@ func go2leanDrive(trace []go2leanStep, ep int) {
 			c.followed++
 			continue
 		}
+		if st.Ext && op != "" {
+			if op == "spawn" {
+				// The goroutine it starts has no model id: the ones after
+				// it would be numbered differently.
+				go2leanLeave(at + " starts a goroutine in a package the replay does not rewrite")
+				break
+			}
+			c.followed++
+			continue
+		}
 		if op == "" {
 			if !go2leanWaitFor(0, g, nil, 0) {
 				go2leanLeave(at + " did not reach a synchronisation operation")
 				break
+			}
+			if c.gs[g].at == "start" {
+				// A goroutine the model starts now: it runs to its first
+				// operation.
+				before := c.gs[g].seq
+				c.gs[g].grant = true
+				go2leanCond.Broadcast()
+				if !go2leanWaitFor(2, g, nil, before) {
+					go2leanLeave(at + " did not reach a synchronisation operation")
+					break
+				}
 			}
 			c.followed++
 			continue
@@ -437,6 +461,9 @@ func go2leanGoAny(fn interface{}, args []interface{}, slice bool) {
 		go2leanRegister(id, ep)
 		close(ready)
 		defer go2leanExit(id, ep)
+		// Held until the model starts it: the code before its first
+		// operation (an atomic store, say) runs when the model's does.
+		go2leanGate("start")
 		go2leanInvoke(fn, args, slice)
 	}()
 	<-ready

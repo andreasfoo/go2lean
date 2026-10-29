@@ -277,8 +277,10 @@ const replayRuns = 20
 // raceRuns: runs of a data race's harness under -race.
 const raceRuns = 20
 
-// scheduleLit is the schedule as a Go literal of the controller's type.
-func scheduleLit(sched []contract.SchedStep) string {
+// scheduleLit is the schedule as a Go literal of the controller's type. A
+// step of a package other than pkg, which the replay does not rewrite, is
+// external: the controller lets it through without a gate.
+func scheduleLit(sched []contract.SchedStep, pkg string) string {
 	var b strings.Builder
 	b.WriteString("[]go2leanStep{")
 	for i, st := range sched {
@@ -289,7 +291,7 @@ func scheduleLit(sched []contract.SchedStep) string {
 		for k, p := range st.Partners {
 			ps[k] = strconv.Itoa(p)
 		}
-		fmt.Fprintf(&b, "{%d, %q, []int{%s}}", st.G, st.Op, strings.Join(ps, ", "))
+		fmt.Fprintf(&b, "{%d, %q, []int{%s}, %t}", st.G, st.Op, strings.Join(ps, ", "), st.Pkg != "" && st.Pkg != pkg)
 	}
 	b.WriteString("}")
 	return b.String()
@@ -434,7 +436,7 @@ func harnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 			d.ConcRuns = raceRuns
 		}
 		if replay {
-			d.Replay, d.ConcRuns = scheduleLit(cx.Schedule), replayRuns
+			d.Replay, d.ConcRuns = scheduleLit(cx.Schedule, t.Package), replayRuns
 		}
 		d.Imports = append(d.Imports, `"runtime"`, `"strings"`, `"time"`)
 	}
