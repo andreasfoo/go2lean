@@ -19,7 +19,7 @@ Construct-by-construct detail: [docs/semantics.md](../docs/semantics.md).
 - ✅ Maps the program builds (insertion order for `range`: 🟡)
 - ✅ Interfaces holding values the program boxed: type assertions, type switches, method calls
 - ✅ Closures, function values, method values; methods; multiple results
-- ✅ `error` nil-ness; sentinel errors (`errors.New` / `fmt.Errorf` of a constant, `var errX = &T{...}`) with `==`, `errors.Is`, `errors.As`
+- ✅ `error` nil-ness; sentinel errors (`errors.New` / `fmt.Errorf` of a constant, `var errX = &T{...}`) with `==`; `errors.Is`, `errors.As`, `errors.Unwrap` through the program's own error types (`Unwrap`, `Is`)
 - 🟡 Floats and complex numbers (opaque; JSON numbers keep their encoding)
 - 🟡 Interfaces, maps and funcs the model did not build (results of unmodelled calls)
 - ❌ Ordered string comparison (`s < t`)
