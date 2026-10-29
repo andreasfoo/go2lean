@@ -1,0 +1,72 @@
+package expect
+
+import (
+	"strconv"
+	"strings"
+	"sync"
+)
+
+// go2lean:sequence ExpectProcess.ExpectFunc
+// SeqConcExpectFailFast: a command prints one line and exits with an error
+// while Expect (and another reader of the process state) run concurrently;
+// ExpectFunc "returns the first line satisfying the function f", so a line
+// the process printed must be found even though the process has already exited
+// (the fix's test: TestExpectForFailFastCommand).
+func SeqConcExpectFailFast(msg string, code uint8, lo uint8, hi uint8, op uint8) bool {
+	// keep the printed text a single printable ASCII line
+	var sb strings.Builder
+	for _, r := range msg {
+		if r >= 0x20 && r < 0x7f && r != '\\' {
+			sb.WriteRune(r)
+		}
+	}
+	text := sb.String()
+	if text == "" {
+		text = "x"
+	}
+	if len(text) > 64 {
+		text = text[:64]
+	}
+	// two needles, both substrings of the printed line
+	a, b := int(lo)%len(text), int(hi)%len(text)
+	if a > b {
+		a, b = b, a
+	}
+	needle1 := text[a : b+1]
+	needle2 := text[b:]
+
+	ep, err := NewExpect("sh", "-c", `printf '%s\n' "$0"; exit `+strconv.Itoa(int(code)%255+1), text)
+	if err != nil {
+		return true
+	}
+
+	ok := true
+	var mu sync.Mutex
+	fail := func() { mu.Lock(); ok = false; mu.Unlock() }
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if line, err := ep.Expect(needle1); err != nil || !strings.Contains(line, needle1) {
+			fail()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		switch op % 4 {
+		case 0:
+			if line, err := ep.Expect(needle2); err != nil || !strings.Contains(line, needle2) {
+				fail()
+			}
+		case 1:
+			ep.ExitError()
+		case 2:
+			ep.LineCount()
+		default:
+			ep.ExitCode()
+		}
+	}()
+	wg.Wait()
+	ep.Close()
+	return ok
+}

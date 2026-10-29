@@ -1,0 +1,72 @@
+package sarama
+
+import (
+	"sync"
+	"testing"
+)
+
+// go2lean:sequence consumer.ConsumePartition
+// SeqConcConsumerCloseBrokerDown: one goroutine closes a PartitionConsumer while the broker it is subscribed to goes away; PartitionConsumer.Close "will initiate a shutdown just like AsyncClose, drain the Messages channel, harvest any errors & return them to the caller", and a broker failure must not break that shutdown.
+func SeqConcConsumerCloseBrokerDown(nMsgs uint8, async bool) bool {
+	t := new(testing.T)
+	config := NewTestConfig()
+	config.Consumer.Return.Errors = true
+
+	broker0 := NewMockBroker(t, 0)
+	fetch := NewMockFetchResponse(t, 1)
+	for i := int64(0); i < int64(nMsgs%3); i++ {
+		fetch.SetMessage("my_topic", 0, i, StringEncoder("msg"))
+	}
+	broker0.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetLeader("my_topic", 0, broker0.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetOffset("my_topic", 0, OffsetOldest, 0).
+			SetOffset("my_topic", 0, OffsetNewest, 1000),
+		"FetchRequest": fetch,
+	})
+
+	master, err := NewConsumer([]string{broker0.Addr()}, config)
+	if err != nil {
+		broker0.Close()
+		return true
+	}
+	pc, err := master.ConsumePartition("my_topic", 0, OffsetOldest)
+	if err != nil {
+		master.Close()
+		broker0.Close()
+		return true
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if async {
+			pc.AsyncClose()
+			msgs, errs := pc.Messages(), pc.Errors()
+			for msgs != nil || errs != nil {
+				select {
+				case _, ok := <-msgs:
+					if !ok {
+						msgs = nil
+					}
+				case _, ok := <-errs:
+					if !ok {
+						errs = nil
+					}
+				}
+			}
+		} else {
+			pc.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		broker0.Close()
+	}()
+	wg.Wait()
+	master.Close()
+	return true
+}

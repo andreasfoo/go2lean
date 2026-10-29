@@ -1,0 +1,72 @@
+package tsdb
+
+import (
+	"context"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/prometheus/prometheus/model/labels"
+)
+
+// go2lean:sequence NewOOOCompactionHead
+// SeqConcOOOCompactionHead: one goroutine appends in-order and out-of-order samples to a Head while another builds the OOO compaction head (which m-maps the OOO head chunks under the series lock); a failure while writing a chunk (here: the chunk directory disappears) may panic, but the series lock must not stay held, so the Head can still be closed.
+func SeqConcOOOCompactionHead(nOOO uint8, breakDisk bool) bool {
+	dir, err := os.MkdirTemp("", "go2lean-ooo")
+	if err != nil {
+		return true
+	}
+	defer os.RemoveAll(dir)
+
+	opts := DefaultHeadOptions()
+	opts.ChunkRange = DefaultBlockDuration
+	opts.ChunkDirRoot = dir
+	opts.OutOfOrderTimeWindow.Store(10 * time.Minute.Milliseconds())
+	h, err := NewHead(nil, nil, nil, nil, opts, nil)
+	if err != nil {
+		return true
+	}
+	if err := h.Init(0); err != nil {
+		h.Close()
+		return true
+	}
+
+	lbls := labels.FromStrings("__name__", "series")
+	inOrderTs := 60 * time.Minute.Milliseconds()
+	n := int64(nOOO%4) + 1
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		app := h.Appender(context.Background())
+		if _, err := app.Append(0, lbls, inOrderTs, 0); err != nil {
+			app.Rollback()
+			return
+		}
+		for i := int64(1); i <= n; i++ {
+			if _, err := app.Append(0, lbls, inOrderTs-i*time.Minute.Milliseconds(), float64(i)); err != nil {
+				break
+			}
+		}
+		app.Commit()
+	}()
+	go func() {
+		defer wg.Done()
+		if breakDisk {
+			os.RemoveAll(mmappedChunksDir(dir))
+		}
+		// a chunk write error panics inside; the caller recovers
+		func() {
+			defer func() { recover() }()
+			NewOOOCompactionHead(context.Background(), h)
+		}()
+	}()
+	wg.Wait()
+
+	func() {
+		defer func() { recover() }()
+		h.Close()
+	}()
+	return true
+}

@@ -1,0 +1,44 @@
+package dispatcher
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+)
+
+// go2lean:sequence Dispatcher.Write
+// SeqConcDispatcherWriteClose: one goroutine writes values while another closes
+// the dispatcher. Dispatcher is documented as one that "can receive values from
+// multiple goroutines in a thread-safe manner", and Write reports a closed
+// dispatcher by returning ErrDispatcherClosed, so Write racing with Close must
+// return normally either way.
+func SeqConcDispatcherWriteClose(values []int, batch uint8, wait bool) bool {
+	if len(values) > 8 {
+		values = values[:8]
+	}
+	var dispatched atomic.Int64
+	d := NewDispatcher(context.Background(), func(b []int) {
+		dispatched.Add(int64(len(b)))
+	}, int(batch%4)+1)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for _, v := range values {
+			if err := d.Write(v); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if wait {
+			d.CloseAndWait()
+		} else {
+			d.Close()
+		}
+	}()
+	wg.Wait()
+	return true
+}

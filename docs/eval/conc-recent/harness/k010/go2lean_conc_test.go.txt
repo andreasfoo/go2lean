@@ -1,0 +1,81 @@
+package amqp091
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+// go2lean:sequence Channel.Close
+// SeqConcChannelClose: the broker has closed a channel and recovery re-opens it
+// (Channel.Reconnect) while the application calls Channel.Close(); Close()
+// "initiate[s] a clean channel closure" and "is safe to call multiple times", so
+// once it has returned the channel must not be open, and a Reconnect() that lost
+// the race to Close() must give up (the fix: "Channel.Close() never got the
+// closeInit signal ... letting reconnectChannel() run its full retry loop").
+func SeqConcChannelClose(retries uint8, closes uint8) bool {
+	t := &testing.T{}
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	// In-process broker: answer channel.open, channel.close and connection.close.
+	go func() {
+		srv.connectionOpen()
+		for {
+			frame, err := srv.r.ReadFrame()
+			if err != nil {
+				return
+			}
+			mf, ok := frame.(*methodFrame)
+			if !ok {
+				continue
+			}
+			switch mf.Method.(type) {
+			case *channelOpen:
+				srv.send(int(mf.ChannelId), &channelOpenOk{})
+			case *channelClose:
+				srv.send(int(mf.ChannelId), &channelCloseOk{})
+			case *connectionClose:
+				srv.send(0, &connectionCloseOk{})
+			}
+		}
+	}()
+
+	cfg := defaultConfig()
+	cfg.Recovery = &Recovery{
+		ReconnectionConfig: &ReconnectionConfig{
+			MaxRetryCount: int(retries%3) + 1,
+			RetryInterval: time.Millisecond,
+		},
+	}
+	conn, err := Open(rwc, cfg)
+	if err != nil {
+		return true
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		return true
+	}
+
+	// The broker closes the channel (soft error); wait until the client has seen it.
+	closed := ch.NotifyClose(make(chan *Error, 1))
+	srv.send(int(ch.id), &channelClose{ReplyCode: 406, ReplyText: "PRECONDITION_FAILED"})
+	<-closed
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i <= int(closes%2); i++ {
+			_ = ch.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_ = ch.Reconnect()
+	}()
+	wg.Wait()
+
+	// Close() has returned: the channel must not be open.
+	return ch.IsClosed()
+}

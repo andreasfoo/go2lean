@@ -1,0 +1,47 @@
+package pool
+
+import (
+	"context"
+	"sync"
+)
+
+// go2lean:sequence ConnStateMachine.AwaitAndTransition
+// SeqConcConnStateAwait: one goroutine waits (with a cancellable context) for an in-use connection to become idle while another releases it and then tries to take it back; "Returns error if timeout expires or context is cancelled", "waiterCount is decremented either in notifyWaiters (when the waiter is notified and removed) or here (on timeout/cancellation)", so afterwards the queue is empty and the error agrees with the state.
+func SeqConcConnStateAwait(cancelFirst bool, reacquire bool) bool {
+	sm := NewConnStateMachine()
+	sm.Transition(StateInUse)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var awaitErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, awaitErr = sm.AwaitAndTransition(ctx, ValidFromIdle(), StateUnusable)
+	}()
+	go func() {
+		defer wg.Done()
+		if cancelFirst {
+			cancel()
+		}
+		// release the connection, then (maybe) take it back
+		sm.TryTransition([]ConnState{StateInUse}, StateIdle)
+		if reacquire {
+			sm.TryTransition([]ConnState{StateIdle}, StateInUse)
+		}
+		// whoever has not been served gives up
+		cancel()
+	}()
+	wg.Wait()
+
+	sm.mu.Lock()
+	listLen := sm.waiters.Len()
+	sm.mu.Unlock()
+	if listLen != 0 || sm.waiterCount.Load() != 0 {
+		return false
+	}
+	served := sm.GetState() == StateUnusable
+	return served == (awaitErr == nil)
+}

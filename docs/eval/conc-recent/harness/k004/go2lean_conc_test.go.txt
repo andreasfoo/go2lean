@@ -1,0 +1,46 @@
+package redis
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/redis/go-redis/v9/internal"
+	"github.com/redis/go-redis/v9/internal/maintnotifications/logs"
+	"github.com/redis/go-redis/v9/logging"
+)
+
+// go2lean:sequence SetLogLevel
+// SeqConcLogConfig: an application reconfigures logging (SetLogger, SetLogLevel,
+// logging.Disable) while client goroutines log through the library; the fix
+// guards the global Logger and LogLevel "so redis.SetLogger, logging.Enable and
+// logging.Disable can swap it while pool and background goroutines read it".
+func SeqConcLogConfig(level uint8, op uint8, durNs int64, connID uint64) bool {
+	ctx := context.Background()
+	lvl := internal.LogLevelT(level % 4)
+	dur := time.Duration(durNs % int64(2*time.Second))
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		switch op % 3 {
+		case 0:
+			SetLogLevel(lvl)
+			SetLogger(&logging.VoidLogger{})
+		case 1:
+			SetLogger(&logging.VoidLogger{})
+			SetLogLevel(lvl)
+		default:
+			logging.Disable()
+			logging.SetLogLevel(lvl)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_ = formatSec(ctx, dur)
+		_ = formatMs(ctx, dur)
+		_ = logs.HandoffStarted(connID, "host:6379")
+	}()
+	wg.Wait()
+	return true
+}

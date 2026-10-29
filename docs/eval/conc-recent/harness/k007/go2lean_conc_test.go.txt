@@ -1,0 +1,122 @@
+//go:build !functional
+
+package sarama
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+// go2lean:sequence offsetManager.handleResponse
+// SeqConcOffsetCommit: several goroutines mark offsets and call
+// OffsetManager.Commit() on one shared manager (auto-commit also runs in the
+// background) while the coordinator answers with a "not coordinator" error; the
+// fix says concurrent Commit() calls must not deadlock (lock order pomsLock /
+// brokerLock, sarama issue 3191).
+func SeqConcOffsetCommit(errKind uint8, commits uint8, offs []byte) bool {
+	t := &testing.T{}
+	seed := NewMockBroker(t, 1)
+	defer seed.Close()
+	coord := NewMockBroker(t, 2)
+	defer coord.Close()
+
+	commitErr := []KError{ErrNoError, ErrNotCoordinatorForConsumer, ErrLeaderNotAvailable, ErrConsumerCoordinatorNotAvailable}[errKind%4]
+	seed.SetHandlerFuncByMap(map[string]requestHandlerFunc{
+		"MetadataRequest": func(req *request) encoderWithHeader {
+			resp := new(MetadataResponse)
+			resp.AddBroker(coord.Addr(), coord.BrokerID())
+			return resp
+		},
+		"FindCoordinatorRequest": func(req *request) encoderWithHeader {
+			resp := new(FindCoordinatorResponse)
+			resp.Coordinator = &Broker{id: coord.brokerID, addr: coord.Addr()}
+			return resp
+		},
+	})
+	coord.SetHandlerFuncByMap(map[string]requestHandlerFunc{
+		"ConsumerMetadataRequest": func(req *request) encoderWithHeader {
+			return &ConsumerMetadataResponse{
+				CoordinatorID:   coord.BrokerID(),
+				CoordinatorHost: "127.0.0.1",
+				CoordinatorPort: coord.Port(),
+			}
+		},
+		"FindCoordinatorRequest": func(req *request) encoderWithHeader {
+			resp := new(FindCoordinatorResponse)
+			resp.Coordinator = &Broker{id: coord.brokerID, addr: coord.Addr()}
+			return resp
+		},
+		"OffsetFetchRequest": func(r *request) encoderWithHeader {
+			req := r.body.(*OffsetFetchRequest)
+			resp := new(OffsetFetchResponse)
+			resp.Blocks = map[string]map[int32]*OffsetFetchResponseBlock{}
+			for topic, partitions := range req.partitions {
+				for _, partition := range partitions {
+					if _, ok := resp.Blocks[topic]; !ok {
+						resp.Blocks[topic] = map[int32]*OffsetFetchResponseBlock{}
+					}
+					resp.Blocks[topic][partition] = &OffsetFetchResponseBlock{Err: ErrNoError}
+				}
+			}
+			return resp
+		},
+		"OffsetCommitRequest": func(r *request) encoderWithHeader {
+			req := r.body.(*OffsetCommitRequest)
+			resp := new(OffsetCommitResponse)
+			resp.Errors = map[string]map[int32]KError{}
+			for topic, partitions := range req.blocks {
+				resp.Errors[topic] = map[int32]KError{}
+				for partition := range partitions {
+					resp.Errors[topic][partition] = commitErr
+				}
+			}
+			return resp
+		},
+	})
+
+	config := NewTestConfig()
+	config.Version = V0_9_0_0
+	config.Metadata.Retry.Max = 1
+	config.Consumer.Offsets.AutoCommit.Interval = 1 * time.Millisecond
+	client, err := NewClient([]string{seed.Addr()}, config)
+	if err != nil {
+		return true
+	}
+	defer client.Close()
+	om, err := NewOffsetManagerFromClient("group", client)
+	if err != nil {
+		return true
+	}
+	defer om.Close()
+
+	const parts = 3
+	poms := make([]PartitionOffsetManager, parts)
+	for p := range poms {
+		pom, err := om.ManagePartition("topic", int32(p))
+		if err != nil {
+			return true
+		}
+		poms[p] = pom
+	}
+
+	k := int(commits%3) + 1
+	var wg sync.WaitGroup
+	wg.Add(3)
+	for g := 0; g < 3; g++ {
+		go func(g int) {
+			defer wg.Done()
+			pom := poms[g%parts]
+			for c := 0; c < k; c++ {
+				off := int64(c + 1)
+				if len(offs) > 0 {
+					off += int64(offs[(g+c)%len(offs)])
+				}
+				pom.MarkOffset(off, "")
+				om.Commit()
+			}
+		}(g)
+	}
+	wg.Wait()
+	return true
+}

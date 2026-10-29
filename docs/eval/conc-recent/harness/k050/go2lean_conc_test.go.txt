@@ -1,0 +1,91 @@
+package proxy
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/containerd/ttrpc"
+	"github.com/containerd/typeurl/v2"
+	"google.golang.org/protobuf/types/known/anypb"
+)
+
+// go2lean:sequence NewStreamCreator
+// SeqConcStreamSendClose: one goroutine sends messages on a stream created
+// through NewStreamCreator over a ttrpc connection while another goroutine
+// closes it; streaming.Stream is used by a writer and by whoever finishes the
+// stream, and Close ("CloseSend") racing a Send must be safe for the
+// proxy stream, whose ttrpc client keeps an unsynchronized closed flag.
+func SeqConcStreamSendClose(payload []byte, nsend uint8, op uint8) bool {
+	ctx := context.Background()
+	server, err := ttrpc.NewServer()
+	if err != nil {
+		return true
+	}
+	// same service shape as the containerd streaming API: init, ack, then data
+	server.RegisterService("containerd.services.streaming.v1.Streaming", &ttrpc.ServiceDesc{
+		Streams: map[string]ttrpc.Stream{
+			"Stream": {
+				Handler: func(ctx context.Context, stream ttrpc.StreamServer) (interface{}, error) {
+					if err := stream.RecvMsg(new(anypb.Any)); err != nil {
+						return nil, err
+					}
+					if err := stream.SendMsg(new(anypb.Any)); err != nil {
+						return nil, err
+					}
+					for {
+						if err := stream.RecvMsg(new(anypb.Any)); err != nil {
+							return nil, nil
+						}
+					}
+				},
+				StreamingClient: true,
+				StreamingServer: true,
+			},
+		},
+	})
+	l, err := net.Listen("unix", fmt.Sprintf("@go2lean-k050-%d", time.Now().UnixNano()))
+	if err != nil {
+		return true
+	}
+	go server.Serve(ctx, l)
+	defer server.Close()
+
+	conn, err := net.Dial("unix", l.Addr().String())
+	if err != nil {
+		return true
+	}
+	client := ttrpc.NewClient(conn)
+	defer client.Close()
+
+	stream, err := NewStreamCreator(client).Create(ctx, "stream")
+	if err != nil {
+		return true
+	}
+	msg, err := anypb.New(new(anypb.Any))
+	if err != nil {
+		return true
+	}
+	msg.Value = payload
+	var a typeurl.Any = msg
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < int(nsend%8); i++ {
+			stream.Send(a)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		stream.Close()
+		if op%2 == 1 {
+			stream.Close()
+		}
+	}()
+	wg.Wait()
+	return true
+}

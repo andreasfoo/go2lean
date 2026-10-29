@@ -1,0 +1,35 @@
+package pond
+
+import (
+	"sync"
+	"time"
+)
+
+// go2lean:sequence WorkerPool.StopAndWait
+// SeqConcPoolStop: a pool with a short idle timeout (so its purger goroutine is
+// retiring idle workers) is stopped from two goroutines; the source says "in case
+// multiple concurrent calls to StopAndWait are made", and StopAndWait "causes this
+// pool to stop accepting new tasks and then waits for all tasks in the queue to
+// complete", so it must be safe against the pool's own purger.
+func SeqConcPoolStop(workers uint8, capacity uint8, tasks uint8, idle uint8) bool {
+	maxWorkers := int(workers%4) + 1
+	pool := New(maxWorkers, int(capacity%4),
+		IdleTimeout(time.Duration(1)<<(idle%12))) // 1ns .. 2us
+	n := int(tasks % 6)
+	for i := 0; i < n; i++ {
+		pool.Submit(func() {})
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		pool.StopAndWait()
+	}()
+	go func() {
+		defer wg.Done()
+		pool.StopAndWait()
+	}()
+	wg.Wait()
+	return true
+}
