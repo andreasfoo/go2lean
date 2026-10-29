@@ -3786,7 +3786,9 @@ func (t *fnState) errChain(err0, dst ir.Var, stop []*types.Interface, visit func
 			return true, err
 		}
 		if !ok {
-			t.cur.Term = ir.Term{Kind: ir.TermJump, B: unk}
+			// Only the standard library's types have an Unwrap: havoc
+			// for those, the end of the chain for the others.
+			assertTo(unwrapTags, unk, no)
 		} else {
 			unwrap, after := len(t.out.Blocks), len(t.out.Blocks)+1
 			t.addBlocks(name+".chain-unwrap", name+".chain-next")
@@ -3884,7 +3886,16 @@ func (t *fnState) errorsUnwrap(x *ssa.Call) (bool, error) {
 		return true, err
 	}
 	if len(tags) == 0 || !ok {
+		// No Unwrap the model can call: a type with one (the standard
+		// library's) gives havoc, any other has none.
 		t.cur.Term = ir.Term{Kind: ir.TermJump, B: none}
+		if len(tags) > 0 {
+			r, has := t.fresh(), t.fresh()
+			t.emit(ir.Instr{Dst: r, Op: ir.AssertIface{Tags: tags, CommaOk: true}, Args: []ir.Var{e}})
+			t.emit(ir.Instr{Dst: has, Op: ir.Extract{I: 1}, Args: []ir.Var{r}})
+			t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: has, T: unknown, F: none}
+		}
+		t.out.Blocks[call].Term = ir.Term{Kind: ir.TermJump, B: unknown}
 	} else {
 		r, has := t.fresh(), t.fresh()
 		t.emit(ir.Instr{Dst: r, Op: ir.AssertIface{Tags: tags, CommaOk: true}, Args: []ir.Var{e}})
@@ -3985,6 +3996,7 @@ func (t *fnState) errorsIs(x *ssa.Call) (bool, error) {
 		t.cur = &t.out.Blocks[call]
 		if !ok {
 			t.cur.Term = ir.Term{Kind: ir.TermJump, B: unk}
+			t.out.Blocks[after].Term = ir.Term{Kind: ir.TermJump, B: unk}
 		} else {
 			said := t.fresh()
 			t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: fv, CArgs: []ir.Var{target}, Dst: said, Next: after, Fallback: unk}
