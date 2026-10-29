@@ -112,3 +112,62 @@ tool find the defect before anyone wrote a test for it?
   it shows the defect is real.
 
 The cases with in-process loopback networking (6) are reported apart.
+
+## Second amendment before the run (2026-10-29)
+
+The first amended design was started on 7 cases (k001 to k014) and
+stopped. Neither arm found a defect, for reasons that would hold for the
+other cases too:
+- `go2lean run -tests` did not finish on these packages: it hit the
+  20-minute limit in most cases and ran out of memory in one (#45). Its
+  `no_panic` templates call one function at a time, so they never run two
+  methods of one object concurrently.
+- The packages' existing tests had passed the projects' CI with the
+  defect present; repeating them under `-race` failed only on tests
+  unrelated to the fix (an environment-dependent proxy test, a flaky
+  timing test).
+
+So that run measured whether a test exercising the defect exists, not
+what either search adds. The design now follows evaluation 5: both arms
+search the same program, and only the search differs.
+
+- **Harness.** For each case, one `go2lean:sequence` function in a test
+  file of the package at the parent commit (`conc-recent/harness/`): it
+  builds one object the way a user would, runs two of its methods
+  concurrently (three where the defect needs three parties), takes small
+  ints, strings or bytes as inputs, and returns whether the result is one
+  some sequential order of the calls could give. It has no sleeps, yields
+  or hooks, and nothing of the fix. Harnesses are written by subagents
+  following `conc-recent/harness/BRIEF.md`, then reviewed.
+- **Not blind.** The writer reads the fix to choose which methods to run
+  together, so the harness points at the defect's area. Both arms get the
+  same harness; what is measured is the search over inputs and
+  schedules, not finding the area.
+- **A, go2lean:** `go2lean run -deps -specs-only -budget 300` on the
+  harness's package, with the frozen tool. Found: a confirmed
+  counterexample (a race, a deadlock, a panic or a false result). A
+  counterexample the replay did not reproduce (spurious) is not a find; it
+  is counted apart, with its kind, since the defect may still be real.
+- **B, Go's fuzzer:** `go2lean fuzz -fuzztime 10m` on the property A
+  recorded (the same harness), with `GOFLAGS=-race`. Found: a failing
+  input. Go's fuzzer does not check for leaked goroutines, so B finds a
+  leak only if it makes the run fail.
+- **Scoring** (`conc-recent/score8.sh`). Each arm's failing input is
+  tried at the fix commit with the same harness: A's counterexample is
+  replayed with `go2lean poc` (repeated `-race` runs and the model's
+  schedule), B's failing input is run 20 times under `-race`. It counts
+  when it does not fail there and the parent's report is of the defect's
+  kind, checked by reading it. The runner is `conc-recent/run8.sh`; the 25
+  harnesses, each with its sanity results in `meta.json`, are in
+  `conc-recent/harness/` (as `.go.txt`).
+- **Sanity runs.** Each harness was run 200 times at the parent and at the
+  fix while it was written. A harness that fails at the fix is reworked or
+  dropped. A harness that already fails at the parent in a plain loop shows
+  the defect needs no search; such cases are reported apart, since either
+  arm will find them.
+- **Pilot.** The runner was tried on k024 and k030 with a 30-second budget
+  and 20 seconds of fuzzing, to check that both arms run; it showed that
+  `-deps` and the import path were needed. Both cases are rerun with the
+  full settings.
+- Cases with loopback networking or real time are reported apart, as
+  before.

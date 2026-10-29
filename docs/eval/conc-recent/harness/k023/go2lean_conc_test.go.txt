@@ -1,0 +1,81 @@
+package server
+
+import (
+	"os"
+	"sync"
+)
+
+// go2lean:sequence consumer.processAckMsg
+// SeqConcAckWhileStreamUpdate: one goroutine acknowledges messages on a pull
+// consumer while another updates the stream's configuration (JetStream allows
+// stream updates, including Limits->Interest retention, while consumers are
+// acking; the fix's description: "In case retention changes for a stream, this
+// ought to have been updated using the consumer lock to avoid a race").
+func SeqConcAckWhileStreamUpdate(nmsgs uint8, acks uint8, update uint8, all bool) bool {
+	msgs := int(nmsgs%8) + 1
+	nacks := int(acks%8) + 1
+
+	dir, err := os.MkdirTemp("", "g2l-js")
+	if err != nil {
+		return true
+	}
+	defer os.RemoveAll(dir)
+
+	opts := DefaultTestOptions
+	opts.Port = -1
+	opts.JetStream = true
+	opts.StoreDir = dir
+	opts.NoLog = true
+	opts.NoSigs = true
+	s := RunServer(&opts)
+	defer s.Shutdown()
+
+	cfg := StreamConfig{
+		Name:      "TEST",
+		Subjects:  []string{"foo"},
+		Retention: LimitsPolicy,
+		Storage:   MemoryStorage,
+	}
+	mset, err := s.GlobalAccount().addStream(&cfg)
+	if err != nil {
+		return true
+	}
+	for i := 0; i < msgs; i++ {
+		if _, _, err := mset.store.StoreMsg("foo", nil, []byte("payload")); err != nil {
+			return true
+		}
+	}
+	ackPolicy := AckExplicit
+	if all {
+		ackPolicy = AckAll
+	}
+	o, err := mset.addConsumer(&ConsumerConfig{Durable: "dur", AckPolicy: ackPolicy})
+	if err != nil {
+		return true
+	}
+
+	upd := cfg
+	switch update % 3 {
+	case 0:
+		upd.MaxMsgs = int64(1000 + int(update))
+	case 1:
+		upd.Retention = InterestPolicy
+	default:
+		upd.Description = "updated"
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= nacks; i++ {
+			o.processAckMsg(uint64(i), uint64(i), 1, false)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		mset.update(&upd)
+	}()
+	wg.Wait()
+	return true
+}

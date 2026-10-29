@@ -1,0 +1,48 @@
+package sarama
+
+import "sync"
+
+// go2lean:sequence asyncProducer.maybeTransitionToErrorState
+// SeqConcTxnError: a produce error is reported on a brokerProducer goroutine
+// (maybeTransitionToErrorState) while the user goroutine ends the transaction
+// (completeTransaction); the transaction manager's status is guarded by
+// statusLock, so the two paths must be safe to run together ("maybeTransitionToErrorState
+// sets epochBumpRequired from brokerProducer goroutines, while the user goroutine reads
+// and clears it ... with no common lock").
+func SeqConcTxnError(st uint8, errSel uint8, bump bool) bool {
+	errs := []error{
+		ErrOutOfOrderSequenceNumber,
+		ErrNotEnoughReplicas,
+		ErrUnknownProducerID,
+		ErrInvalidProducerEpoch,
+		ErrProducerFenced,
+	}
+	statuses := []ProducerTxnStatusFlag{
+		ProducerTxnFlagInitializing,
+		ProducerTxnFlagReady,
+		ProducerTxnFlagInTransaction,
+		ProducerTxnFlagEndTransaction,
+	}
+	p := &asyncProducer{
+		conf: NewTestConfig(),
+		txnmgr: &transactionManager{
+			transactionalID:                 "test",
+			coordinatorSupportsBumpingEpoch: bump,
+			status:                          statuses[int(st)%len(statuses)],
+		},
+	}
+	err := errs[int(errSel)%len(errs)]
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = p.maybeTransitionToErrorState(err)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = p.txnmgr.completeTransaction()
+	}()
+	wg.Wait()
+	return true
+}

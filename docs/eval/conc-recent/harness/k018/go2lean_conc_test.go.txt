@@ -1,0 +1,43 @@
+package amqp091
+
+import "sync"
+
+// go2lean:sequence confirms.One
+// SeqConcConfirmSlowListener: one goroutine publishes and confirms n messages
+// (one by one or with a single multiple-ack) while another goroutine consumes
+// only some of them from the NotifyPublish-style listener chan. Channel.NotifyPublish
+// documents that a listener too small for the outstanding publishings "will create a
+// deadlock"; the package should not hang forever on a listener that stops draining.
+func SeqConcConfirmSlowListener(n uint8, capacity uint8, read uint8, multiple bool) bool {
+	count := int(n%6) + 1
+	buf := int(capacity % 4)
+	reads := int(read) % (count + 1)
+
+	c := newConfirms()
+	l := make(chan Confirmation, buf)
+	c.Listen(l)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < count; i++ {
+			c.publish()
+		}
+		if multiple {
+			c.Multiple(Confirmation{DeliveryTag: uint64(count), Ack: true})
+			return
+		}
+		for i := 1; i <= count; i++ {
+			c.One(Confirmation{DeliveryTag: uint64(i), Ack: true})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < reads; i++ {
+			<-l
+		}
+	}()
+	wg.Wait()
+	return true
+}

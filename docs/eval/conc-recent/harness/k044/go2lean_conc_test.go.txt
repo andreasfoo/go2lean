@@ -1,0 +1,91 @@
+package docker
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sync"
+	"sync/atomic"
+
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"golang.org/x/sync/semaphore"
+
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/transfer"
+)
+
+// go2lean:sequence dockerFetcher.open
+// SeqConcFetchLimiter: two goroutines fetch blobs through one resolver whose
+// download limiter admits a single download at a time (transfer.WithDownloadLimiter
+// is how the pull service caps concurrent downloads); a response that cannot be
+// opened (undecodable or unsupported Content-Encoding, 404) fails that fetch, and the other fetch
+// must still be able to obtain the limiter slot afterwards.
+func SeqConcFetchLimiter(payload []byte, mode uint16, limit uint8) bool {
+	var count atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		n := count.Add(1) - 1
+		switch (mode >> (2 * (uint(n) % 8))) & 3 {
+		case 0:
+			rw.Write(payload)
+		case 1:
+			rw.Header().Set("Content-Encoding", "gzip")
+			rw.Write([]byte("bad gzip data"))
+			rw.Write(payload)
+		case 2:
+			rw.Header().Set("Content-Encoding", "br")
+			rw.Write(payload)
+		default:
+			rw.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer s.Close()
+
+	u, err := url.Parse(s.URL)
+	if err != nil {
+		return true
+	}
+	resolver := NewResolver(ResolverOptions{
+		Hosts: func(string) ([]RegistryHost, error) {
+			return []RegistryHost{{
+				Client:       s.Client(),
+				Host:         u.Host,
+				Scheme:       u.Scheme,
+				Path:         "/v2",
+				Capabilities: HostCapabilityPull | HostCapabilityResolve,
+			}}, nil
+		},
+	})
+	ro, ok := resolver.(remotes.ResolverWithOptions)
+	if !ok {
+		return true
+	}
+	ro.SetOptions(transfer.WithDownloadLimiter(semaphore.NewWeighted(1 + int64(limit%2))))
+	ctx := context.Background()
+	fetcher, err := resolver.Fetcher(ctx, u.Host+"/ns/img:latest")
+	if err != nil {
+		return true
+	}
+	desc := ocispec.Descriptor{
+		MediaType: "application/octet-stream",
+		Digest:    digest.FromBytes(payload),
+		Size:      int64(len(payload)),
+	}
+
+	fetch := func() {
+		rc, err := fetcher.Fetch(ctx, desc)
+		if err != nil {
+			return
+		}
+		io.ReadAll(rc)
+		rc.Close()
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); fetch() }()
+	go func() { defer wg.Done(); fetch() }()
+	wg.Wait()
+	return true
+}

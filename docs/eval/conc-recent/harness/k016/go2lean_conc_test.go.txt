@@ -1,0 +1,63 @@
+package agent
+
+import (
+	"sync"
+
+	"go.uber.org/atomic"
+
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/storage"
+)
+
+// go2lean:sequence appender.Append
+// SeqConcAppendSeries: two appenders of one agent DB append to the same label
+// set (or to two different ones) concurrently; the DB must end with exactly one
+// series per distinct label set and hand out the same ref for equal labels
+// ("concurrent appends for the same label set produce exactly one series in
+// memory").
+func SeqConcAppendSeries(a string, b string, ts int64) bool {
+	opts := validateOptions(DefaultOptions())
+	db := &DB{
+		opts:    opts,
+		nextRef: atomic.NewUint64(0),
+		series:  newStripeSeries(opts.StripeSize),
+		metrics: newDBMetrics(nil),
+	}
+	newApp := func() *appender {
+		return &appender{appenderBase: appenderBase{DB: db}}
+	}
+	la := labels.FromStrings("__name__", "m", "k", a)
+	lb := labels.FromStrings("__name__", "m", "k", b)
+
+	var (
+		wg         sync.WaitGroup
+		refA, refB storage.SeriesRef
+		errA, errB error
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		refA, errA = newApp().Append(0, la, ts, 1.0)
+	}()
+	go func() {
+		defer wg.Done()
+		refB, errB = newApp().Append(0, lb, ts, 2.0)
+	}()
+	wg.Wait()
+
+	if errA != nil || errB != nil {
+		return true
+	}
+	total := 0
+	for i := range db.series.size {
+		db.series.locks[i].RLock()
+		total += len(db.series.series[i])
+		db.series.locks[i].RUnlock()
+	}
+	// a, b are plain label values: equal values give equal label sets
+	// (an empty value is dropped by both appenders alike)
+	if labels.Equal(la.WithoutEmpty(), lb.WithoutEmpty()) {
+		return total == 1 && refA == refB
+	}
+	return total == 2 && refA != refB
+}

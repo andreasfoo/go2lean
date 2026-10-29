@@ -1,0 +1,50 @@
+package memberlist
+
+import "sync"
+
+// go2lean:sequence Keyring.AddKey
+// SeqConcKeyringOps: two goroutines use one Keyring at the same time (installing
+// keys, switching the primary key, removing keys, reading the primary key). The
+// Keyring is shared by memberlist's goroutines and guards its key set with
+// "the keyring lock", so concurrent use of its methods must be safe.
+func SeqConcKeyringOps(seedA []byte, seedB []byte, opA uint8, opB uint8) bool {
+	// make a valid 16-byte key out of any byte string and a tag
+	mk := func(seed []byte, tag byte) []byte {
+		key := make([]byte, 16)
+		key[0] = tag
+		for i, b := range seed {
+			key[1+i%15] ^= b
+		}
+		return key
+	}
+	primary := mk(nil, 0)
+	k, err := NewKeyring(nil, primary)
+	if err != nil {
+		return true
+	}
+	keyA := mk(seedA, 1)
+	keyB := mk(seedB, 2)
+
+	run := func(op uint8, key []byte, other []byte) {
+		switch op % 4 {
+		case 0:
+			k.AddKey(key)
+		case 1:
+			k.AddKey(key)
+			k.UseKey(key)
+		case 2:
+			k.AddKey(key)
+			k.RemoveKey(other)
+		default:
+			k.GetPrimaryKey()
+			k.AddKey(key)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); run(opA, keyA, keyB) }()
+	go func() { defer wg.Done(); run(opB, keyB, keyA) }()
+	wg.Wait()
+	return true
+}

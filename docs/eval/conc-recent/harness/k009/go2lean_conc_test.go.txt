@@ -1,0 +1,37 @@
+package tracing
+
+import (
+	"context"
+	"os"
+	"sync"
+
+	"go.uber.org/zap"
+)
+
+// go2lean:sequence newOpenTelemetryWrapper
+// SeqConcTracingReload: two config provisions run at the same time and share the
+// process-wide tracer provider, each cleaning up its own wrappers afterwards; the
+// fix says each reload "leaks one BatchSpanProcessor processQueue goroutine" when
+// the global provider is reused.
+func SeqConcTracingReload(spanName string, reloadsA uint8, reloadsB uint8) bool {
+	os.Setenv("OTEL_TRACES_EXPORTER", "none")
+	run := func(n int) {
+		ws := make([]openTelemetryWrapper, 0, n)
+		for i := 0; i < n; i++ {
+			ot, err := newOpenTelemetryWrapper(context.Background(), spanName, nil)
+			if err != nil {
+				continue
+			}
+			ws = append(ws, ot)
+		}
+		for i := range ws {
+			_ = ws[i].cleanup(zap.NewNop())
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); run(int(reloadsA%3) + 1) }()
+	go func() { defer wg.Done(); run(int(reloadsB%3) + 1) }()
+	wg.Wait()
+	return true
+}

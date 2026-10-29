@@ -1,0 +1,47 @@
+package quic
+
+import (
+	"context"
+	"crypto/tls"
+	"net"
+	"sync"
+	"time"
+)
+
+// go2lean:sequence Transport.Close
+// SeqConcTransportDialClose: one goroutine closes a Transport while another dials a connection on it; "Close stops listening for UDP datagrams on the Transport.Conn ... It is invalid to start new listeners or connections after that", so the dial must fail cleanly with the transport's close error.
+func SeqConcTransportDialClose(early bool, closeTwice bool) bool {
+	lo := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+	server, err := net.ListenUDP("udp", lo)
+	if err != nil {
+		return true
+	}
+	defer server.Close()
+	conn, err := net.ListenUDP("udp", lo)
+	if err != nil {
+		return true
+	}
+	tr := &Transport{Conn: conn}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		tr.Close()
+		if closeTwice {
+			tr.Close()
+		}
+		cancel()
+	}()
+	go func() {
+		defer wg.Done()
+		if early {
+			tr.DialEarly(ctx, server.LocalAddr(), &tls.Config{}, nil)
+		} else {
+			tr.Dial(ctx, server.LocalAddr(), &tls.Config{}, nil)
+		}
+	}()
+	wg.Wait()
+	return true
+}

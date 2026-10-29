@@ -1,0 +1,116 @@
+package test
+
+import (
+	"context"
+	"os"
+	"sync"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+// go2lean:sequence pullConsumer.Consume
+// SeqConcConsumeErrHandler: one goroutine makes the running Consume loop
+// report an error (connection closed, or the consumer deleted) while another
+// uses the ConsumeContext (Closed / Stop / publish); the ConsumeErrHandler
+// itself uses the ConsumeContext, as ConsumeContext documents Stop, Drain and
+// Closed for use from the callback side ("Closed returns a channel that is
+// closed when the consuming is fully stopped/drained").
+func SeqConcConsumeErrHandler(op uint8, nmsgs uint8, payload []byte) bool {
+	srv := RunBasicJetStreamServer()
+	storeDir := ""
+	if config := srv.JetStreamConfig(); config != nil {
+		storeDir = config.StoreDir
+	}
+	defer func() {
+		srv.Shutdown()
+		if storeDir != "" {
+			os.RemoveAll(storeDir)
+		}
+		srv.WaitForShutdown()
+	}()
+
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		return true
+	}
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return true
+	}
+	ctx := context.Background()
+	s, err := js.CreateStream(ctx, jetstream.StreamConfig{
+		Name:     "TEST",
+		Subjects: []string{"FOO.>"},
+	})
+	if err != nil {
+		return true
+	}
+	c, err := s.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		AckPolicy: jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return true
+	}
+	for i := 0; i < 1+int(nmsgs%3); i++ {
+		if _, err := js.Publish(ctx, "FOO.test", payload); err != nil {
+			return true
+		}
+	}
+
+	handlerAction := (op >> 1) % 3
+	got := make(chan struct{}, 1)
+	l, err := c.Consume(func(msg jetstream.Msg) {
+		msg.Ack()
+		select {
+		case got <- struct{}{}:
+		default:
+		}
+	}, jetstream.ConsumeErrHandler(func(cc jetstream.ConsumeContext, err error) {
+		switch handlerAction {
+		case 0:
+			cc.Closed()
+		case 1:
+			cc.Stop()
+		default:
+			cc.Drain()
+		}
+	}))
+	if err != nil {
+		return true
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if op&1 == 0 {
+			nc.Close()
+		} else {
+			// delete the consumer once the pull is known to be
+			// registered (a message arrived) or consuming has ended
+			closed := l.Closed()
+			select {
+			case <-got:
+			case <-closed:
+			}
+			s.DeleteConsumer(ctx, c.CachedInfo().Name)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		switch (op >> 3) % 3 {
+		case 0:
+			l.Closed()
+		case 1:
+			l.Stop()
+		default:
+			js.Publish(ctx, "FOO.test", payload)
+		}
+	}()
+	wg.Wait()
+	<-l.Closed()
+	l.Stop()
+	return true
+}

@@ -1,0 +1,47 @@
+package caddy
+
+import (
+	"errors"
+	"sync"
+)
+
+// go2lean:sequence UsagePool.LoadOrNew
+// SeqConcUsagePoolCtor: one goroutine loads-or-constructs a key whose
+// constructor may fail while another goroutine uses the same pool (Range,
+// LoadOrNew, LoadOrStore, References, Delete); UsagePool is documented as "a
+// thread-safe map that pools values based on usage", so no mix of these calls
+// may block forever.
+func SeqConcUsagePoolCtor(key string, fail bool, op uint8, n int) bool {
+	pool := NewUsagePool()
+	ctor := func() (Destructor, error) {
+		if fail {
+			return nil, errors.New("construction failed")
+		}
+		return nil, nil
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if _, _, err := pool.LoadOrNew(key, ctor); err == nil {
+			pool.Delete(key)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		switch op % 5 {
+		case 0:
+			pool.Range(func(k, v any) bool { return true })
+		case 1:
+			pool.LoadOrNew(key, func() (Destructor, error) { return nil, nil })
+		case 2:
+			pool.LoadOrStore(key, n)
+		case 3:
+			pool.References(key)
+		default:
+			pool.Range(func(k, v any) bool { return false })
+		}
+	}()
+	wg.Wait()
+	return true
+}

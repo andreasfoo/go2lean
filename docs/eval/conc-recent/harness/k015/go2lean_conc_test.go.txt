@@ -1,0 +1,70 @@
+package jetstream
+
+import (
+	"sync"
+
+	"github.com/nats-io/nats.go"
+)
+
+// go2lean:sequence pullSubscription.checkPending
+// SeqConcPullDrain: messages delivered to a pull consumer keep calling
+// checkPending (with the subscription lock held) while the user stops or drains
+// the subscription and the pull loop returns: draining a Consume or Messages
+// iterator "will be available on subsequent calls to Next" and must still
+// complete; it must not block forever.
+func SeqConcPullDrain(maxMsgs uint8, thr uint8, before uint8, after uint8, drain bool) bool {
+	max := int(maxMsgs%4) + 1
+	opts := &consumeOpts{
+		MaxMessages:       max,
+		ThresholdMessages: int(thr)%max + 1,
+	}
+	s := &pullSubscription{
+		consumeOpts: opts,
+		done:        make(chan struct{}, 1),
+		fetchNext:   make(chan *pullRequest, 1),
+	}
+	s.pending.msgCount = max // the first pull request has been issued
+	nBefore := int(before % 4)
+	nAfter := int(after % 8)
+
+	deliver := func() {
+		s.Lock()
+		s.decrementPendingMsgs(&nats.Msg{Subject: "s"})
+		s.incrementDeliveredMsgs()
+		s.checkPending()
+		s.Unlock()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	// the pull loop (as pullMessages): serves requests until done is closed
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-s.fetchNext:
+				// a pull request is sent to the server
+			case <-s.done:
+				return
+			}
+		}
+	}()
+	// the consumer side: delivers messages, the user stops or drains the
+	// subscription, buffered messages are still delivered afterwards
+	go func() {
+		defer wg.Done()
+		for i := 0; i < nBefore; i++ {
+			deliver()
+		}
+		if drain {
+			s.Drain()
+		} else {
+			s.Stop()
+		}
+		for i := 0; i < nAfter; i++ {
+			deliver()
+		}
+	}()
+	wg.Wait()
+	return true
+}

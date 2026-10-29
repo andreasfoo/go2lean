@@ -1,0 +1,44 @@
+package sarama
+
+import "sync"
+
+// go2lean:sequence asyncProducer.retryHandler
+// SeqConcRetryHeaders: the retry bridge (retryHandler) runs concurrently with
+// the dispatcher that owns every message received from p.input; the dispatcher
+// applies Producer.Interceptors, which may append to msg.Headers ("retryHandler
+// must not read a message after sending it to p.input; the receiving goroutine
+// can mutate it").
+func SeqConcRetryHeaders(n uint8, newer bool, val string) bool {
+	conf := NewTestConfig()
+	if newer {
+		conf.Version = V0_11_0_0
+	}
+	p := &asyncProducer{
+		conf:    conf,
+		retries: make(chan *ProducerMessage),
+		input:   make(chan *ProducerMessage),
+	}
+	count := int(n%6) + 1
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		p.retryHandler()
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < count; i++ {
+			p.retries <- &ProducerMessage{Topic: "t", Value: StringEncoder(val)}
+		}
+		// stand-in for dispatcher(): an interceptor appends headers to each
+		// message it receives from p.input
+		for i := 0; i < count; i++ {
+			msg := <-p.input
+			msg.Headers = append(msg.Headers, RecordHeader{Key: []byte("traceparent"), Value: []byte(val)})
+		}
+		close(p.retries)
+	}()
+	wg.Wait()
+	return true
+}
