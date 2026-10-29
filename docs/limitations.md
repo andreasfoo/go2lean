@@ -45,7 +45,8 @@ Missing:
 - **Real code.** On three string libraries no function's contract was
   provable ([eval](eval/prove-blind.md)): the contract counted the model's
   own over-approximations as failures. Since then a havoc value has its
-  site's type, `Grow` is modelled, the model's 1024-element bound ends a
+  site's type, `Grow` is modelled, the model's slice bound (16384 elements, raised
+  from 1024 so `bufio`'s 4096-byte buffers fit, #71) ends a
   run like fuel (so, like fuel, it proves nothing about larger slices),
   and `prove` links dependencies. Real code is not re-evaluated yet.
 

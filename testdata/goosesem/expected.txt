@@ -1,3 +1,1 @@
-testbufioreaderreadstring spurious oracle_holds_in_real_run havoc assuming  # bufio not translated: its 4096-byte buffers exceed the fuel (#69, #71)
-testbufiowriterflush spurious oracle_holds_in_real_run havoc assuming  # bufio not translated: its 4096-byte buffers exceed the fuel (#69, #71)
 testdefer spurious oracle_holds_in_real_run havoc assuming  # defer in a loop (#62)

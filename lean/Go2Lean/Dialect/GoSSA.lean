@@ -420,6 +420,9 @@ inductive Op where
   -- strings.Builder, modelled as a pointer to a string cell
   /-- `(*strings.Builder).WriteString`; args `[p, s]`; yields `(len s, nil)`. -/
   | sbWriteString
+  /-- `(*strings.Builder).Write`; args `[p, b]` (a byte slice); yields
+  `(len b, nil)`. -/
+  | sbWrite
   /-- `WriteByte` / `WriteRune`; args `[p, c]`; yields `nil` resp. `(size, nil)`. -/
   | sbWriteByte | sbWriteRune
   /-- `String` / `Len` / `Reset`; arg `[p]`. -/
@@ -1028,6 +1031,12 @@ def ifaceEqVal (heap : Heap Val) : Val → Val → Option Bool
   | a@(.boxed ..), b@(.boxed ..) | a@.opaqueNil, b@(.boxed ..)
   | a@(.boxed ..), b@.opaqueNil | a@.opaqueNil, b@.opaqueNil => eqVal a b
   | _, _ => none
+
+/-- The model's size bound on a slice's backing array: an allocation past
+it ends the run out of fuel (no behaviour of the program). 16384 covers a
+library's fixed buffers, bufio's 4096 bytes and a stripe lock table
+(#71). -/
+def sliceBound : Nat := 16384
 
 /-- Pure instructions: no heap access. -/
 def denotePure (or : Oracle) (heap : Heap Val) : Op → List Val → Res Val
@@ -2666,6 +2675,23 @@ def denoteConc (heap : Heap Val) : ConcOp → List Val → Res (Val × Heap Val)
       .ok (p, heap.set! 0 (.arr (dir ++ [.tuple [.int 64 (BitVec.ofNat 64 key), p]])))
   | _, _ => .panic .modelStuck
 
+/-- Appends bytes to the string cell a `strings.Builder` pointer `p` holds;
+yields `(n, nil)` as `WriteString` and `Write` do. -/
+def sbAppend (heap : Heap Val) (p : Val) : Option (List Nat) → Res (Val × Heap Val)
+  | some bs =>
+    match heapLoad heap p with
+    | .ok cur =>
+      let old := match strBytes heap cur with | some x => x | none => []
+      if old.length + bs.length > strLimit then .panic .modelStuck else
+      let (v, heap) := strAlloc heap (old ++ bs)
+      match heapStore heap p v with
+      | .ok heap => .ok (.tuple [.int 64 (BitVec.ofNat 64 bs.length), .err false], heap)
+      | .panic k => .panic k
+      | .outOfFuel => .outOfFuel
+    | .panic k => .panic k
+    | .outOfFuel => .panic .modelStuck
+  | none => .panic .modelStuck
+
 /-- All instructions: heap-touching ones here, the rest via `denotePure`. -/
 def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Heap Val)
   | .alloc zero, [] => .ok (heapAlloc heap zero)
@@ -2978,18 +3004,9 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | .ok heap => .ok (.unit, heap)
     | .panic k => .panic k
     | .outOfFuel => .outOfFuel
-  | .sbWriteString, [p, s] =>
-    match heapLoad heap p, strBytes heap s with
-    | .ok cur, some bs =>
-      let old := match strBytes heap cur with | some x => x | none => []
-      if old.length + bs.length > strLimit then .panic .modelStuck else
-      let (v, heap) := strAlloc heap (old ++ bs)
-      match heapStore heap p v with
-      | .ok heap => .ok (.tuple [.int 64 (BitVec.ofNat 64 bs.length), .err false], heap)
-      | .panic k => .panic k
-      | .outOfFuel => .outOfFuel
-    | .panic k, _ => .panic k
-    | _, _ => .panic .modelStuck
+  | .sbWriteString, [p, s] => sbAppend heap p (strBytes heap s)
+  -- A byte slice's backing array is laid out as a string's.
+  | .sbWrite, [p, .slice ref off len _] => sbAppend heap p (strBytes heap (.str ref off len))
   | .sbWriteByte, [p, .int _ c] =>
     match heapLoad heap p with
     | .ok cur =>
@@ -3072,7 +3089,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
             let newCap := max (2 * cap.toNat) newLen
             -- The model's size bound, like fuel: a run that would grow a
             -- slice past it ends out of fuel (no behaviour of the program).
-            if newCap > 1024 then .outOfFuel
+            if newCap > sliceBound then .outOfFuel
             else
               let contents := (es.drop off.toNat).take len.toNat ++ ts ++ List.replicate (newCap - newLen) zero
               let (p, heap) := heapAlloc heap (.arr contents)
@@ -3114,7 +3131,7 @@ def denote (or : Oracle) (heap : Heap Val) : Op → List Val → Res (Val × Hea
     | some len, some cap =>
       -- A negative length or capacity panics, as in Go.
       if len.slt 0 || cap.slt 0 then .panic .makeSliceLen else
-      if len.ule cap && cap.toNat ≤ 1024 then
+      if len.ule cap && cap.toNat ≤ sliceBound then
         let (p, heap) := heapAlloc heap (.arr (List.replicate cap.toNat zero))
         match p with
         | .ptr ref _ => .ok (.slice ref 0#64 len cap, heap)
