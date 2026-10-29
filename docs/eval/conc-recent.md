@@ -254,3 +254,49 @@ never got the chance, because the model of the code around each bug
 (sockets, atomics, untranslated standard library, fuel) failed first. The
 next work is that model (the roadmap, #53). This evaluation is rerun with
 the same harnesses after each of those fixes.
+
+## Rerun after review 2 (2026-10-29)
+
+The same 25 harnesses, arm A only, with the development build after the
+fixes of review 2 (`ef8d59f`: #75 to #80). B is not rerun (the fuzzer did
+not change; its scores stand). The scoring is the first run's, applied by
+`score9.sh`: a counterexample confirmed at the parent counts as found when
+it does not fail at the fix, an inconclusive replay at the fix included
+(k015 and k047 in the first run). `run9.sh` ran A; the container
+restarted twice during the run, and `resume9.sh` resumed it at the cases
+without a result. Per case: [results-rerun.tsv](conc-recent/results-rerun.tsv).
+
+| | first run | rerun |
+|---|---|---|
+| found by A | 6 | 10 |
+| A only (B missed) | 0 | 0 |
+
+- **Found now, missed before (6).**
+  - k012: a race on `ProducerMessage.Headers` (#68; package variables set by
+    a call, #75, #76).
+  - k014: a race (#69: `errors.Is` on sarama's own error type).
+  - k004: a race on a package-level logger (#55: stores to package
+    variables as shared cells).
+  - k039: a wrong result under the model's schedule (#67 atomics, #69
+    `container/list`).
+  - k010: a wrong result (#69, #71: `bufio` and `io` translated, the slice
+    bound raised).
+  - k024: send on a closed channel. Go's scheduler took the interleaving
+    this time; the replay of the model's schedule diverged on this build,
+    and with #81 it confirms the finding on the schedule.
+- **Found before, missed now (2).**
+  - k001: the model held. #75 made an array field of a pointer sentinel
+    (grpc's `bdpPing`, `&ping{data: [8]byte{...}}`) havoc at every load,
+    where it was silently zero before, so `calculate`'s comparison with it
+    returned early. Constant array fields are now constants (#71); k001 is
+    found again with that change.
+  - k017: the model's race was not seen by `-race` in its 20 runs (the
+    first run's runs were luckier), and the replay of the model's schedule
+    diverged in a dependency (pond's `internal/dispatcher`), the case #81
+    fixes.
+- **Still missed.** k016 needs its setup run once rather than in every
+  trial: with enough fuel (256000) one trial of its 16384-stripe setup
+  takes minutes (#71). k007 and k033 are inconclusive, k009, k038, k043,
+  k045 and k050 spurious, and k023, k028, k042, k044 give no
+  counterexample; their issues are those of the first run's ledger.
+

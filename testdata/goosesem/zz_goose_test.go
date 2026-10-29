@@ -81,6 +81,7 @@ func TestGoose(t *testing.T) {
 		"testIfStmtInterface": testIfStmtInterface,
 		"testIncompleteStruct": testIncompleteStruct,
 		"testInitCallVersions": testInitCallVersions,
+		"testInitSentinelArray": testInitSentinelArray,
 		"testInterfaceNilWithType": testInterfaceNilWithType,
 		"testIterateMap": testIterateMap,
 		"testListMoveToFront": testListMoveToFront,
