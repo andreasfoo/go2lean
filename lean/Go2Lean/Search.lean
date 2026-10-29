@@ -728,8 +728,9 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
     ("havoc", Json.arr havoc.toArray), ("probes", Json.arr probes.toArray),
     ("assumptions", Json.arr (s.assumed.map Json.str)),
     ("model_output", modelOutput o ret), ("panic_at", (s.panicAt.map Json.str).getD Json.null),
-    ("schedule", Json.arr (s.conc.sched.map fun (g, op, ps) =>
-      Json.mkObj [("g", (g : Json)), ("op", Json.str op), ("partners", Json.arr (ps.toArray.map (fun (j : Nat) => (j : Json))))]))]
+    ("schedule", Json.arr (s.conc.sched.map fun (g, op, ps, pkg) =>
+      Json.mkObj [("g", (g : Json)), ("op", Json.str op), ("partners", Json.arr (ps.toArray.map (fun (j : Nat) => (j : Json)))),
+        ("pkg", Json.str pkg)]))]
 
 /-- The block a postcondition's spec returned from, when the spec ran to
 its end (the trial reached the oracle and the oracle finished). -/

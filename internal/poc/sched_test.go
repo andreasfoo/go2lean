@@ -55,3 +55,18 @@ func TestScheduleDependentResultIsRepeated(t *testing.T) {
 		t.Fatalf("sequential run that held: %s %+v", v.Status, v.Diagnosis)
 	}
 }
+
+// A schedule step of a package the replay does not rewrite (a dependency's
+// lock under -deps) is external: the controller lets it through (#56).
+func TestScheduleLitMarksOtherPackagesExternal(t *testing.T) {
+	sched := []contract.SchedStep{
+		{G: 0, Op: "spawn", Pkg: "example.com/m"},
+		{G: 1, Op: "lock", Pkg: "example.com/m/queue"},
+		{G: 1, Op: "send"},
+	}
+	got := scheduleLit(sched, "example.com/m")
+	want := `[]go2leanStep{{0, "spawn", []int{}, false}, {1, "lock", []int{}, true}, {1, "send", []int{}, false}}`
+	if got != want {
+		t.Fatalf("scheduleLit:\n got %s\nwant %s", got, want)
+	}
+}

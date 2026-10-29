@@ -227,6 +227,9 @@ structure Func (Op : Type) where
   /-- A goroutine running it does not keep a run alive (a ticker): the run
   ends when only such goroutines can move and moving them wakes no other. -/
   daemon : Bool := false
+  /-- The Go package it is from: the schedule trace names it with each
+  operation, so the replay can tell the ones it does not gate (#56). -/
+  pkg : String := ""
   deriving Repr
 
 structure Prog (Op : Type) where
@@ -250,8 +253,9 @@ structure ConcState (Val : Type) where
   /-- The schedule, one entry per step: the goroutine that moved, the
   operation it fired ("" when it only ran code: a goroutine that just
   started, or whose operation a partner completed) and the goroutines whose
-  operations it completed (a rendezvous). The replay stage replays it. -/
-  sched : Array (Nat × String × List Nat) := #[]
+  operations it completed (a rendezvous), and the Go package of the code
+it ran. The replay stage replays it. -/
+  sched : Array (Nat × String × List Nat × String) := #[]
   /-- How many choices each draw of the schedule site had, in order (the
   ready goroutines, or a `select`'s ready cases): the exhaustive engine
   enumerates schedules by it. -/

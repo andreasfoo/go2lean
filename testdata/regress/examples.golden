@@ -226,6 +226,11 @@ exhausted recs_push_nopanic
 exhausted recs_push_specpush
 none recs_total_nopanic
 none mut=3/4 recs_total_spectotal
+none replaydep_dispatcher_close_nopanic
+none replaydep_dispatcher_write_nopanic
+exhausted replaydep_queue_queue_len_nopanic
+exhausted_havoc replaydep_queue_queue_push_nopanic
+confirmed replaydep_writewhileclosing_nopanic
 confirmed runes_counter_bump_nopanic
 confirmed runes_head_nopanic
 exhausted runes_initials_nopanic

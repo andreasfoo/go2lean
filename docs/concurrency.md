@@ -336,7 +336,14 @@ Built as planned, in two steps:
    and `sync.Cond` are the controller's own. The controller lets each
    goroutine through in the schedule's order, waits until it reaches its
    next gate, and checks that the operation there is the one the model
-   fires. When the schedule ends, the goroutines it left blocked are
+   fires. A new goroutine is held at a start gate until the model's step
+   that starts it, so the code before its first operation (an atomic
+   store, say) runs when the model's does. Only the target package is
+   rewritten: each schedule step names the package of its code, and a
+   step of another package (a dependency's lock, under `-deps`) passes
+   without a gate, the goroutine firing it on its way to its next gated
+   operation (#56). A goroutine started in such a package cannot be
+   followed (its model id is unknown), and the replay says so. When the schedule ends, the goroutines it left blocked are
    released in the order they arrived and Go's runtime decides: a
    deadlock or leak that shows up then is the real program's, under the
    model's interleaving. The PoC carries the rewritten files and the
@@ -346,7 +353,7 @@ A panic or a false result the model found in a run with more than one
 goroutine goes through the same two steps (#52): one run under Go's
 scheduler does not refute a schedule-dependent finding. If no run violates
 the property, the verdict is inconclusive (`schedule_not_reproduced`) until
-the replay decides. If the replay follows the whole schedule and the
+the replay decides; a replay that ends in the model's panic confirms it. If the replay follows the whole schedule and the
 property still holds, the verdict is spurious (`holds_on_model_schedule`),
 a disagreement between the model and Go.
 

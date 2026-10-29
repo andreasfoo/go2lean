@@ -217,8 +217,8 @@ func Print(p *ir.Prog, module string) string {
 	fmt.Fprintf(&b, "/-- The JSON descriptions of the types this package encodes or decodes. -/\ndef jsonTable : GoSSA.JTable :=\n  %s\n\n", table)
 	for i, f := range p.Funcs {
 		fmt.Fprintf(&b, "/-- %s (status: %s) -/\n", f.GoSig, f.Status)
-		fmt.Fprintf(&b, "def f%d : GoSSA.Func := {\n  name := %q, params := %s, nvals := %d, entry := %d,\n  blocks := #[\n",
-			i, f.Name, vars(f.Params), f.NVals, f.Entry)
+		fmt.Fprintf(&b, "def f%d : GoSSA.Func := {\n  name := %q, pkg := %q, params := %s, nvals := %d, entry := %d,\n  blocks := #[\n",
+			i, f.Name, p.Package, vars(f.Params), f.NVals, f.Entry)
 		for bi, blk := range f.Blocks {
 			fmt.Fprintf(&b, "    -- %d: %s\n    { params := %s,\n      instrs := #[", bi, blk.Name, vars(blk.Params))
 			for ii, in := range blk.Instrs {

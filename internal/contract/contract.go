@@ -200,11 +200,13 @@ type Counterexample struct {
 // SchedStep is one step of a concurrent run: goroutine G (0 is the call
 // itself, the others in the order they started) moved; Op is the operation
 // it fired ("" when it only ran code), Partners the goroutines whose
-// operation it completed (the other side of a rendezvous).
+// operation it completed (the other side of a rendezvous), Pkg the Go
+// package of the code it ran (the replay gates only its target's, #56).
 type SchedStep struct {
 	G        int    `json:"g"`
 	Op       string `json:"op"`
 	Partners []int  `json:"partners,omitempty"`
+	Pkg      string `json:"pkg,omitempty"`
 }
 
 // Probe is one go2leanProbe value: its label and the value (JSON as the
