@@ -43,6 +43,12 @@ type harnessData struct {
 	Conc     bool
 	ConcRuns int
 	PkgPath  string
+	// Violated: for a panic or a false result the model found under a
+	// concurrent schedule, a Go expression true when a run violated the
+	// property; the runs stop there. Such a harness does not stop on a
+	// leaked goroutine (NoLeak): the leak is not what the model found.
+	Violated string
+	NoLeak   bool
 	// Replay: the model's schedule as a Go literal ([]go2leanStep{...}):
 	// the package is rewritten (internal/replay) and each run follows it.
 	Replay string
@@ -164,12 +170,21 @@ var harnessTmpl = template.Must(template.New("poc").Parse(`func TestGo2LeanPoC_{
 			go2leanRes["blocked"] = true
 		}
 		go2leanStop := go2leanRes["blocked"].(bool) || go2leanRes["panicked"].(bool)
+{{- if .Violated}}
+		if !go2leanStop && ({{.Violated}}) {
+			go2leanStop = true
+		}
+{{- end}}
+{{- if .NoLeak}}
+		_ = go2leanLeaked
+{{- else}}
 		if !go2leanStop {
 			if go2leanL := go2leanLeaked(); go2leanL != "" {
 				go2leanRes["leaked"] = go2leanL
 				go2leanStop = true
 			}
 		}
+{{- end}}
 {{- if .Replay}}
 		go2leanF, go2leanN, go2leanDv := go2leanReplayStats()
 		go2leanRes["replay"] = fmt.Sprintf("%d of %d", go2leanF, go2leanN)
@@ -399,8 +414,20 @@ func harnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		specArgs := append(append([]string{}, specNames...), d.Rets...)
 		d.SpecCall = fmt.Sprintf("%s(%s)", p.Spec.GoFunc, strings.Join(specArgs, ", "))
 	}
-	if m := modelPanic(cx); m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak || m == contract.PanicDataRace {
+	if m := modelPanic(cx); m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak || m == contract.PanicDataRace || scheduleDependent(cx) {
 		d.Conc, d.ConcRuns, d.PkgPath = true, concRuns, t.Package
+		if m != contract.PanicDeadlock && m != contract.PanicGoroutineLeak && m != contract.PanicDataRace {
+			// A panic or a false result under a concurrent schedule: Go's
+			// scheduler takes the interleaving only now and then, so the
+			// call is repeated until a run violates the property.
+			d.NoLeak = true
+			switch {
+			case p.Kind == contract.KindSequence && len(d.Rets) == 1:
+				d.Violated = "fmt.Sprint(" + d.Rets[0] + ") == \"false\""
+			case d.SpecCall != "":
+				d.Violated = "!" + d.SpecCall
+			}
+		}
 		if m == contract.PanicDataRace {
 			// Under -race: the detector sees unordered accesses whatever
 			// the timing, so a few runs cover what the inputs reach.

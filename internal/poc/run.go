@@ -215,7 +215,8 @@ func VerifyAll(ws contract.Workspace, root string, cxIDs []string, overlay map[s
 	return vs, nil
 }
 
-// replayable: an inconclusive deadlock or leak with a schedule to replay.
+// replayable: an inconclusive deadlock or leak, or a panic or false result
+// under a concurrent schedule, with a schedule to replay.
 func replayable(p *prepared) bool {
 	if p.v == nil || p.v.Status != contract.VerdictInconclusive || p.v.Diagnosis == nil || len(p.cx.Schedule) == 0 {
 		return false
@@ -226,7 +227,7 @@ func replayable(p *prepared) bool {
 		return false
 	}
 	m := modelPanic(p.cx)
-	return m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak
+	return m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak || (m != contract.PanicDataRace && scheduleDependent(p.cx))
 }
 
 // replayOne runs p's replay harness: the package rewritten by
@@ -267,6 +268,12 @@ func replayOne(root, pkgDir, pkgName, pkg string, p *prepared, overlay map[strin
 	case res.ReplayDiverged != "":
 		return note(fmt.Sprintf("the real run left the schedule after %s steps: %s", res.Replay, res.ReplayDiverged))
 	case v.Status != contract.VerdictConfirmed:
+		if m := modelPanic(p.cx); m != contract.PanicDeadlock && m != contract.PanicGoroutineLeak && reasonOf(v) == "schedule_not_reproduced" {
+			// The run took the model's interleaving and the property held:
+			// the model and Go disagree, as for a sequential spurious one.
+			p.v.Status = contract.VerdictSpurious
+			p.v.Diagnosis.Reason = "holds_on_model_schedule"
+		}
 		return note(fmt.Sprintf("followed (%s steps), still %s", res.Replay, reasonOf(v)))
 	}
 	v.Observed["replay"] = "the model's schedule replayed (" + res.Replay + " steps); Go's own scheduler did not take it in " + strconv.Itoa(concRuns) + " runs"
@@ -909,6 +916,19 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 		v.Status = contract.VerdictInconclusive
 		diag.Reason = "unsupported_property_kind"
 	}
+	if v.Status == contract.VerdictSpurious && scheduleDependent(cx) && (diag.Reason == "oracle_holds_in_real_run" || diag.Reason == "no_panic_in_real_run") {
+		// Runs under Go's scheduler that never took the model's
+		// interleaving do not refute it: the schedule is replayed next
+		// (replayOne), and only a run that follows it decides.
+		v.Status = contract.VerdictInconclusive
+		diag.Notes = []string{fmt.Sprintf("the model's run was concurrent; no violation in %d real runs: Go's scheduler may not have taken its interleaving", r.Runs)}
+		if r.Blocked {
+			diag.Reason = "panic_kind_mismatch"
+			diag.Notes = []string{"the model's run was concurrent; the real call blocked"}
+		} else {
+			diag.Reason = "schedule_not_reproduced"
+		}
+	}
 	v.Diagnosis = diag
 }
 
@@ -1052,6 +1072,18 @@ func panicSite(stack, root string) string {
 		}
 	}
 	return ""
+}
+
+// scheduleDependent: the model's run of cx had more than one goroutine, so
+// what it found (a panic, a false result) may need the model's
+// interleaving, which one run under Go's scheduler need not take.
+func scheduleDependent(cx *contract.Counterexample) bool {
+	for _, s := range cx.Schedule {
+		if s.G != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func modelPanic(cx *contract.Counterexample) contract.PanicKind {
