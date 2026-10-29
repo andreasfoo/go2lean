@@ -1083,6 +1083,7 @@ var modelledStdlib = map[string]bool{
 	// Pure Go over pointers, slices and interfaces (#69).
 	"container/list": true,
 	"bufio":          true,
+	"io":             true,
 }
 
 func isStdlib(path string) bool {
