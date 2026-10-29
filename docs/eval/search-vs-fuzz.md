@@ -188,3 +188,31 @@ stopped at the wrong thing: model artifacts for go2lean, wrong specs for the
 fuzzer. Closing the model gaps on the targets' paths, and checking specs
 against trivial inputs before searching, would have changed more outcomes
 than either search.
+
+## Rerun after the fixes (2026-10-28)
+
+The same 29 cases and specs, with go2lean at `c2d5416` (#41: vet off in
+the harness, `package_build_error`, variadic targets in `go2lean fuzz`,
+`-specs-only`, `encoding/binary` from source), A with `-specs-only`.
+Scores per case: `search-vs-fuzz/rerun-scores.txt`.
+
+| | first run | rerun |
+|---|---|---|
+| found by A (go2lean) | 7 | 9 |
+| found by B (fuzz) | 11 | 14 |
+| both | 4 | 8 |
+| A only | 3 | 1 (c108) |
+| B only | 7 | 6 |
+
+- **A's two new finds came from the model gap closed:** c062 and c104,
+  through `encoding/binary.Uvarint`.
+- **B's three new finds:** c015 because variadic targets now export; c053
+  and c121 because a fuzzer's run differs from run to run.
+- **Still spurious for A:** 9, on `reflect.DeepEqual`, `regexp`, floats and
+  `strings.Builder`.
+
+The conclusion stands: on functional defects, with the same specs, Go's
+fuzzer finds as much or more, and go2lean's own contribution is the rare
+defect that needs a combination of literals. The next question is
+concurrency, where a fuzzer does not vary schedules
+(docs/eval/conc-recent.md).

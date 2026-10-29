@@ -87,3 +87,28 @@ README will say so.
 
 The screening agent: one run, about 0.4 to 0.6 M tokens, and CPU time to
 rerun tests. Neither arm calls an LLM.
+
+## Amendment before the run (2026-10-29)
+
+Screening accepted 25 cases (22 observed, 3 forced). In 22 of them the
+fix's own test fails at the parent in 90% or more of its runs under
+`-race`: maintainers write a regression test to reproduce the bug
+reliably. Run against that test, arm B would find nearly every case on its
+first run, and the evaluation would measure the test, not the tools. The
+arms are changed before either has run, to ask what matters in use: can a
+tool find the defect before anyone wrote a test for it?
+
+- Both arms run at the parent commit **without** the fix's test files and
+  without the screener's tests (`custom/`).
+- **A, go2lean:** `go2lean run -tests -budget 60` on the package: its
+  existing tests and the `no_panic` templates of its exported functions
+  and methods, with a 20-minute limit per case.
+- **B, Go's tools:** the package's existing tests, `go test -race
+  -count=1 -timeout 5m`, again and again until a failure or 10 minutes.
+- **Found:** a finding (a race report, a deadlock, a leak, a hang or a
+  panic) whose stacks name a function the fix changes, and which does not
+  occur at the fix commit. Each match is checked by reading the report.
+- The fix's test (or the screener's reproduction) stays the ground truth:
+  it shows the defect is real.
+
+The cases with in-process loopback networking (6) are reported apart.
