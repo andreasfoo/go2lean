@@ -1970,9 +1970,12 @@ func (t *fnState) binop(x *ssa.BinOp) error {
 				return t.nilCompare(x, v)
 			}
 		}
-		// Comparing interfaces, maps, funcs or channels with anything but
-		// nil, or arithmetic on floats: the model does not look inside
-		// them, so the outcome is havoc (a bool, or an opaque number).
+		if _, iface := x.X.Type().Underlying().(*types.Interface); eqOp && iface {
+			return t.ifaceCompare(x)
+		}
+		// Comparing maps, funcs or channels with anything but nil, or
+		// arithmetic on floats: the model does not look inside them, so
+		// the outcome is havoc (a bool, or an opaque number).
 		return t.havoc(x, fmt.Sprintf("%s on %s", x.Op, x.X.Type()), "opaque-op", "")
 	} else if !isInt && !(eqOp && (isBool(x.X.Type()) || isError(x.X.Type()) || isPointer(x.X.Type()) || isSlice(x.X.Type()) || flatComparable(x.X.Type()))) {
 		return fmt.Errorf("binary operator on unsupported type %s", x.X.Type())
@@ -3454,10 +3457,31 @@ func typeTag(t types.Type) uint32 {
 
 var anyAliasRe = regexp.MustCompile(`\bany\b`)
 
-// tagName spells t for its tag the same way whether the source wrote the
-// alias any or interface{}: they are one type at run time.
+// tagName spells t for its tag the same way whether the source wrote an
+// alias or the type it stands for (any or interface{}, type B = A or A):
+// they are one type at run time.
 func tagName(t types.Type) string {
-	return anyAliasRe.ReplaceAllString(types.TypeString(t, nil), "interface{}")
+	return anyAliasRe.ReplaceAllString(types.TypeString(unaliasDeep(t), nil), "interface{}")
+}
+
+// unaliasDeep is t with the aliases in it, and in the types it is built
+// from (pointer, slice, array, map and channel elements), replaced by the
+// types they stand for.
+func unaliasDeep(t types.Type) types.Type {
+	switch u := types.Unalias(t).(type) {
+	case *types.Pointer:
+		return types.NewPointer(unaliasDeep(u.Elem()))
+	case *types.Slice:
+		return types.NewSlice(unaliasDeep(u.Elem()))
+	case *types.Array:
+		return types.NewArray(unaliasDeep(u.Elem()), u.Len())
+	case *types.Map:
+		return types.NewMap(unaliasDeep(u.Key()), unaliasDeep(u.Elem()))
+	case *types.Chan:
+		return types.NewChan(u.Dir(), unaliasDeep(u.Elem()))
+	default:
+		return u
+	}
 }
 
 // typeAssert lowers x.(T) for a concrete T. A value the model boxed itself
@@ -3944,6 +3968,7 @@ func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
 	m := c.Method
 	var tags []uint32
 	var fns []*ssa.Function
+	var derefs []int // a helper's FuncId where fns has nil
 	for _, ty := range impls {
 		sel := t.prog.sprog.MethodSets.MethodSet(ty).Lookup(m.Pkg(), m.Name())
 		if sel == nil {
@@ -3955,11 +3980,19 @@ func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
 		}
 		if _, ok := t.prog.ids[fn]; !ok {
 			if xr, ok := t.prog.xrefs[fn.String()]; !ok || xr.Package == t.prog.prog.Package {
+				// *T's method declared on T: go/ssa's wrapper is not
+				// translated, but T's method may be.
+				if id, ok := t.prog.derefMethod(ty, m); ok {
+					tags = append(tags, typeTag(ty))
+					fns = append(fns, nil)
+					derefs = append(derefs, id)
+				}
 				continue
 			}
 		}
 		tags = append(tags, typeTag(ty))
 		fns = append(fns, fn)
+		derefs = append(derefs, -1)
 	}
 	if len(fns) == 0 {
 		return 0, false, nil
@@ -3969,9 +4002,14 @@ func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
 		return 0, false, err
 	}
 	args := []ir.Var{recv}
-	for _, fn := range fns {
+	for i, fn := range fns {
 		v := t.fresh()
-		if err := t.funcValue(v, fn, nil); err != nil {
+		if fn == nil {
+			if !slices.Contains(t.out.Calls, derefs[i]) {
+				t.out.Calls = append(t.out.Calls, derefs[i])
+			}
+			t.emit(ir.Instr{Dst: v, Op: ir.FuncRef{ID: derefs[i]}})
+		} else if err := t.funcValue(v, fn, nil); err != nil {
 			return 0, false, err
 		}
 		args = append(args, v)
@@ -3979,6 +4017,53 @@ func (t *fnState) dispatch(c *ssa.CallCommon) (ir.Var, bool, error) {
 	fv := t.fresh()
 	t.emit(ir.Instr{Dst: fv, Op: ir.Dispatch{Tags: tags}, Args: args})
 	return fv, true, nil
+}
+
+// derefMethod is a helper for method m of pointer type ty when m is
+// declared on the element type T: it loads the receiver and calls T's
+// method, as go/ssa's wrapper for (*T).m does. Not ok when ty is not a
+// pointer or T's method is not modelled.
+func (s *progState) derefMethod(ty types.Type, m *types.Func) (int, bool) {
+	p, ok := ty.(*types.Pointer)
+	if !ok {
+		return 0, false
+	}
+	sel := s.sprog.MethodSets.MethodSet(p.Elem()).Lookup(m.Pkg(), m.Name())
+	if sel == nil {
+		return 0, false
+	}
+	vm := s.sprog.MethodValue(sel)
+	if vm == nil {
+		return 0, false
+	}
+	name := "$deref:" + vm.String()
+	if id, ok := s.helpers[name]; ok {
+		return id, true
+	}
+	n := vm.Signature.Params().Len()
+	params := make([]ir.Var, n+1) // the pointer receiver, then m's parameters
+	for i := range params {
+		params[i] = ir.Var(i)
+	}
+	load, dst := ir.Var(n+1), ir.Var(n+2)
+	call := ir.Term{CArgs: append([]ir.Var{load}, params[1:]...), Dst: dst, Next: 1}
+	var calls []int
+	var xcalls []contract.XCall
+	if id, ok := s.ids[vm]; ok {
+		call.Kind, call.Callee = ir.TermCall, id
+		calls = []int{id}
+	} else if xr, ok := s.xrefs[vm.String()]; ok && xr.Package != s.prog.Package {
+		call.Kind, call.Callee, call.CalleePkg = ir.TermXCall, xr.ID, xr.Package
+		xcalls = []contract.XCall{xr}
+	} else {
+		return 0, false
+	}
+	id := s.helper(name, false, false, n+3, params, []ir.Block{
+		{Name: "deref", Instrs: []ir.Instr{{Dst: load, Op: ir.Simple("loadPath"), Args: []ir.Var{0}}}, Term: call},
+		{Name: "ret", Term: ir.Term{Kind: ir.TermRet, V: dst}},
+	})
+	s.prog.Funcs[id].Calls, s.prog.Funcs[id].XCalls = calls, xcalls
+	return id, true
 }
 
 // regexpCall lowers the methods of a *regexp.Regexp compiled from a
@@ -5345,6 +5430,46 @@ func (t *fnState) nilCompare(x *ssa.BinOp, v ssa.Value) error {
 		t.issue("nil comparison %s on a value of unknown nil-ness is havoc", x.Name())
 	}
 	idx := t.prog.newHavoc(ir.HavocBool, t.f.Name()+": nil comparison", "opaque-op", "")
+	t.emit(ir.Instr{Dst: dst, HavocSite: idx})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[join]
+	return nil
+}
+
+// ifaceCompare lowers == or != on two interface values: exact when both
+// are values the model built (their dynamic types' tags and values, or
+// nil), havoc otherwise (#60).
+func (t *fnState) ifaceCompare(x *ssa.BinOp) error {
+	a, err := t.val(x.X)
+	if err != nil {
+		return err
+	}
+	b, err := t.val(x.Y)
+	if err != nil {
+		return err
+	}
+	dst := t.def(x)
+	known := t.fresh()
+	t.emit(ir.Instr{Dst: known, Op: ir.Simple("ifaceEqKnown"), Args: []ir.Var{a, b}})
+	yes := len(t.out.Blocks)
+	no, join := yes+1, yes+2
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: known, T: yes, F: no}
+	name := t.cur.Name
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".iface-known"},
+		ir.Block{Name: name + ".iface-unknown"},
+		ir.Block{Name: name + ".iface-join"})
+	t.cur = &t.out.Blocks[yes]
+	if x.Op == token.EQL {
+		t.emit(ir.Instr{Dst: dst, Op: ir.Simple("ifaceEq"), Args: []ir.Var{a, b}})
+	} else {
+		eq := t.fresh()
+		t.emit(ir.Instr{Dst: eq, Op: ir.Simple("ifaceEq"), Args: []ir.Var{a, b}})
+		t.emit(ir.Instr{Dst: dst, Op: ir.Simple("not"), Args: []ir.Var{eq}})
+	}
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+	t.cur = &t.out.Blocks[no]
+	idx := t.prog.newHavoc(ir.HavocBool, t.f.Name()+": "+x.Op.String()+" on an interface value the model did not build", "opaque-op", "")
 	t.emit(ir.Instr{Dst: dst, HavocSite: idx})
 	t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
 	t.cur = &t.out.Blocks[join]

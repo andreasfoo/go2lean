@@ -23,6 +23,7 @@ import (
 	"go/printer"
 	"go/token"
 	"go/types"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -119,8 +120,19 @@ func translate(p *packages.Package) ([]byte, []Skipped) {
 	return []byte(b.String()), skipped
 }
 
-// spec writes the sequence spec for fuzz target fd.
+// spec writes the sequence spec for fuzz target fd, adding the imports it
+// needs to imports only when it is written: a target it rejects leaves no
+// import behind, which Go would reject as unused.
 func spec(p *packages.Package, fd *ast.FuncDecl, imports map[string]string) (string, error) {
+	own := map[string]string{}
+	src, err := specOwn(p, fd, own)
+	if err == nil {
+		maps.Copy(imports, own)
+	}
+	return src, err
+}
+
+func specOwn(p *packages.Package, fd *ast.FuncDecl, imports map[string]string) (string, error) {
 	params := fd.Type.Params.List
 	if len(params) != 1 || len(params[0].Names) != 1 {
 		return "", fmt.Errorf("not a fuzz target (one *testing.F parameter)")
