@@ -173,6 +173,9 @@ func SeqTestIfStmtInterface() bool { return testIfStmtInterface() }
 // go2lean:sequence testIncompleteStruct
 func SeqTestIncompleteStruct() bool { return testIncompleteStruct() }
 
+// go2lean:sequence testInitCallVersions
+func SeqTestInitCallVersions() bool { return testInitCallVersions() }
+
 // go2lean:sequence testInterfaceNilWithType
 func SeqTestInterfaceNilWithType() bool { return testInterfaceNilWithType() }
 

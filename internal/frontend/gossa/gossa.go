@@ -342,6 +342,47 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 // Package variables are initialised before any init function or other code
 // runs, so a later write to kb does not change mb. Arithmetic that would wrap in the global's type, or divide by zero, is
 // left alone (the run-time value differs from the exact one).
+// pureConstCall says whether c, a package variable's initializer, is a
+// call of a function with constant arguments whose result is a plain value
+// (no pointer, slice, map, channel, func or interface in it): var
+// V0_11_0_0 = newKafkaVersion(0, 11, 0, 0). A load of the variable runs
+// the call again, which gives the same value, and a value has no
+// identity to keep (#55).
+func pureConstCall(c *ssa.Call) bool {
+	fn := c.Call.StaticCallee()
+	if fn == nil || len(fn.Blocks) == 0 || fn.Signature.Results().Len() != 1 || !plainValue(fn.Signature.Results().At(0).Type(), 4) {
+		return false
+	}
+	for _, a := range c.Call.Args {
+		if _, ok := a.(*ssa.Const); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// plainValue says whether a value of type t holds no reference: booleans,
+// numbers, strings, and arrays and structs of them (down to depth).
+func plainValue(t types.Type, depth int) bool {
+	if depth < 0 {
+		return false
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		return u.Kind() != types.UnsafePointer && u.Kind() != types.UntypedNil
+	case *types.Array:
+		return plainValue(u.Elem(), depth-1)
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if !plainValue(u.Field(i).Type(), depth-1) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func foldInit(v ssa.Value, inits map[*ssa.Global]ssa.Value) (*ssa.Const, bool) {
 	var eval func(v ssa.Value, depth int) (constant.Value, bool)
 	eval = func(v ssa.Value, depth int) (constant.Value, bool) {
@@ -501,8 +542,11 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 							known = true
 						case *ssa.MakeMap:
 							known = constMapEntries(v) != nil
-						case *ssa.Slice, *ssa.Call:
+						case *ssa.Slice:
 							_, known = constSlice(v, inits)
+						case *ssa.Call:
+							_, known = constSlice(v, inits)
+							known = known || pureConstCall(v)
 						case *ssa.UnOp:
 							if a, ok := v.X.(*ssa.Global); ok && v.Op == token.MUL && alias[g] == nil {
 								alias[g] = a
@@ -557,7 +601,9 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 	// An alias of a lookup table (var B = A) is the same table; one that
 	// another initializer also writes is not.
 	for b, a := range alias {
-		if _, ok := inits[a].(*ssa.MakeMap); ok {
+		_, table := inits[a].(*ssa.MakeMap)
+		call, _ := inits[a].(*ssa.Call)
+		if table || call != nil && pureConstCall(call) {
 			if _, twice := inits[b]; twice {
 				touched[b] = true
 			}
@@ -2864,6 +2910,14 @@ func (t *fnState) unop(x *ssa.UnOp) error {
 				}
 				if elems, ok := constSlice(init, t.prog.zeros); ok {
 					return t.sliceOf(x, elems)
+				}
+				if c, ok := init.(*ssa.Call); ok && pureConstCall(c) {
+					// var V = f(constants): the call again, here.
+					if err := t.call(c); err != nil {
+						return err
+					}
+					t.vars[x] = t.vars[c]
+					return nil
 				}
 				if init != nil {
 					v, err := t.val(init)

@@ -166,6 +166,7 @@ memory).
 | a zero-valued variable no function writes | the zero value | exact |
 | any other load | havoc (a confirmed panic whose run read one carries the verdict note `reads_unknown_state`, naming it: the program may initialise it first) | havoc |
 | stores to globals | ignored | assumption |
+| a package variable its initializer sets to a call with constant arguments whose result is a plain value (numbers, strings, bools, and arrays and structs of them: `var V0_11_0_0 = newKafkaVersion(0, 11, 0, 0)`), or an alias of one (`var MinVersion = V0_8_2_0`), and nothing else writes | the call again at each load (a plain value has no identity to keep) | exact as the call is (#55) |
 | `init` functions | not run as code; a store an `init` function makes on every path through it (its block dominates every return), to a variable no initializer sets and nothing else writes, counts as that variable's initializer (a constant, a function, a constant `regexp.MustCompile`, a table of constants or functions) | exact for those stores; any other effect of an `init` function: assumption |
 
 ### 4.8 Conversions
