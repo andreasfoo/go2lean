@@ -145,7 +145,7 @@ memory).
 | generic functions | modelled per instance (`Must[int]`, concrete types); the generic function itself is not in the model; instances of package `slices` under `-deps` | partial |
 | call into a logging package (logrus, log, slog, zap) | results opaque, calls without results ignored | exact for the code under test |
 | `apijson.UnmarshalRoot` (the SDKs' `UnmarshalJSON`, unions' `As*` methods) | `jsonDecode` with the target type's description | as JSON decoding above |
-| call to an unmodelled function with a result | `havocInto`: scalars havoc; structs havoc field by field; pointers to a fresh struct of havoc fields; slices of 0–3 zero elements (assumption); interfaces/maps/funcs unknown | havoc / assumption |
+| call to an unmodelled function with a result | `havocInto`: scalars havoc; structs havoc field by field (an array field of up to 16 scalars element by element; another field the model cannot vary is its zero value, recorded as an assumption, #68); pointers to a fresh struct of havoc fields; slices of 0–3 zero elements (assumption); interfaces/maps/funcs unknown | havoc / assumption |
 | call to an unmodelled function without a result | ignored | assumption (its effects are lost) |
 | a modelled callee that gets stuck | the call's fallback binds a havoc result | havoc |
 | recursion, loops | fuel-bounded | exact up to fuel (`outOfFuel` beyond) |

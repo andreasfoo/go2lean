@@ -2189,10 +2189,14 @@ func (t *fnState) havocInto(dst ir.Var, ty types.Type, site, reason, goHint stri
 }
 
 // structHavoc binds dst to a struct value of type st whose fields are
-// havoc where they can be (integers, bools, strings, errors), unknown for
-// funcs, maps, channels and interfaces, havoc'd recursively for nested
-// structs down to depth, and zero otherwise (nil pointers and slices).
-// It reports false when some field has no zero value.
+// havoc where they can be (integers, bools, strings, errors, and arrays of
+// up to 16 of them, element by element), unknown for funcs, maps,
+// channels and interfaces, havoc'd recursively for nested structs down to
+// depth, and nil for pointers and slices. Any other field gets its zero
+// value, a fixed guess that is recorded as an assumption, never silent: a
+// version struct holding [4]uint read as all zeros made two versions
+// compare equal (evaluation 7, k012). It reports false when some field has
+// no zero value.
 func (t *fnState) structHavoc(dst ir.Var, st *types.Struct, site, reason, goHint string, depth int) bool {
 	var fields []ir.Var
 	for i := 0; i < st.NumFields(); i++ {
@@ -2211,9 +2215,26 @@ func (t *fnState) structHavoc(dst ir.Var, st *types.Struct, site, reason, goHint
 					break
 				}
 			}
+			if arr, ok := ft.Underlying().(*types.Array); ok && arr.Len() <= 16 {
+				if k, ok := havocKind(arr.Elem()); ok {
+					es := make([]ir.Var, arr.Len())
+					for j := range es {
+						es[j] = t.fresh()
+						t.emit(ir.Instr{Dst: es[j], HavocSite: t.prog.newHavoc(k, fmt.Sprintf("%s[%d]", fsite, j), reason, goHint)})
+					}
+					t.emit(ir.Instr{Dst: v, Op: ir.Simple("mkArr"), Args: es})
+					break
+				}
+			}
 			zero, ok := zeroVal(ft)
 			if !ok {
 				return false
+			}
+			switch ft.Underlying().(type) {
+			case *types.Pointer, *types.Slice:
+			default:
+				t.emit(ir.Instr{Dst: t.fresh(), HavocSite: t.prog.newHavoc(ir.HavocAssumption, fsite+" (assumed)", "assumed", goHint)})
+				t.assume("%s: assumed the zero value of %s (not modelled)", fsite, ft)
 			}
 			t.emit(ir.Instr{Dst: v, Op: ir.Const{V: zero}})
 		}
