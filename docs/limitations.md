@@ -159,6 +159,16 @@ by sampled differential tests (`scripts/json-diff.sh`). Several model bugs
 gave wrong answers rather than getting stuck (`RawMessage` HTML escaping,
 `omitzero`, `apijson` coercion); each such bug can hide a real one.
 
+The language core is checked against Go on Goose's semantics tests
+(`testdata/goosesem`, `scripts/sem-diff.sh`, in CI): 111 small programs
+that return true in Go, after Goose/Perennial's way of keeping their model
+honest. On 2026-10-29 the model agreed on 102. The 9 others are listed in
+`testdata/goosesem/expected.txt`, each with its issue: `==` on interface
+values is havoc (#60), an interface call on `*T` does not reach a method
+declared on `T` (#61), and a `defer` in a loop is rejected (#62). None of
+them was a wrong answer on code the model claims to run; each was havoc
+or a rejected function.
+
 The independent check is the TinyGo line (design §4.4): the same package
 compiled by TinyGo to LLVM IR, with the standard library and runtime taken
 from their real source and run with VeIR's semantics, so it shares none of
