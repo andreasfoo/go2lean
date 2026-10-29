@@ -27,3 +27,14 @@ var (
 func testInitCallVersions() bool {
 	return !kvMinimum.atLeast(kv0110) && kv0110.atLeast(kvMinimum) && kv0110.atLeast(kv0110)
 }
+
+// A pointer sentinel with an array field set to constants (grpc's bdpPing,
+// evaluation 7's k001): every load reads the same constants (#71).
+type pingT struct{ data [4]byte }
+
+var pingConst = &pingT{data: [4]byte{2, 4, 16, 9}}
+
+func testInitSentinelArray() bool {
+	d := pingConst.data
+	return d == pingConst.data && d[2] == 16 && pingConst.data[3] == 9
+}

@@ -1,0 +1,26 @@
+case	kind	eval7 A	rerun A score	rerun A found
+k001	race	yes	-	no
+k004	race	no	FOUND	yes
+k007	deadlock	no	not-confirmed(inconclusive)	no
+k009	leak	no	not-confirmed(spurious)	no
+k010	wrong_result	no	replay-error(inconclusive schedule_not_reproduced)	yes
+k012	race	no	FOUND	yes
+k014	race	no	FOUND	yes
+k015	deadlock	yes	replay-error(inconclusive schedule_not_reproduced)	yes
+k016	wrong_result	no	-	no
+k017	race	yes	not-confirmed(inconclusive)	no
+k018	hang	no	fails-on-fix	no
+k023	race	no	-	no
+k024	panic	no	replay-error(inconclusive schedule_not_reproduced)	yes
+k028	wrong_result	no	-	no
+k030	race	yes	FOUND	yes
+k031	race	yes	FOUND	yes
+k033	panic	no	not-confirmed(inconclusive)	no
+k038	wrong_result	no	not-confirmed(spurious)	no
+k039	wrong_result	no	replay-error(inconclusive schedule_not_reproduced)	yes
+k042	deadlock	no	-	no
+k043	deadlock	no	not-confirmed(spurious)	no
+k044	deadlock	no	-	no
+k045	wrong_result	no	not-confirmed(spurious)	no
+k047	deadlock	yes	replay-error(inconclusive schedule_not_reproduced)	yes
+k050	race	no	not-confirmed(spurious)	no

@@ -153,9 +153,10 @@ up in Go only with the model's schedule replayed. GoKer is small (a median of 86
 grpc-go, sarama, prometheus, nats, containerd and others; both tools search
 the same concurrent harness): go2lean found **6**, Go's fuzzer under
 `-race` found **22**, and go2lean found none the fuzzer missed. go2lean's
-misses are gaps in its model of the code around the bug (sockets, atomics,
-standard-library calls it does not translate, runs out of fuel); they are
-the roadmap's next items ([details](docs/eval/conc-recent.md#results),
+misses were gaps in its model of the code around the bug (sockets, atomics,
+standard-library calls it did not translate, runs out of fuel). Rerun after
+fixing the first of them, go2lean found **10**
+([details](docs/eval/conc-recent.md#rerun-after-review-2-2026-10-29),
 [roadmap](https://github.com/andreasfoo/go2lean/issues/53)).
 
 [Validation and regression cases](docs/validation.md) ·

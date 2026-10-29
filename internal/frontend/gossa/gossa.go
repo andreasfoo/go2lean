@@ -219,7 +219,8 @@ func TranslateAllOpts(dir string, opts Options, patterns ...string) ([]*ir.Prog,
 // functions, and returns the functions reached by package path. Besides
 // static calls it follows functions used as values, the function a
 // package-level variable holds from its initializer (zeros), and the bodies
-// of closures (added to their package by withAnon). Generic functions and
+// of closures (added to their package by withAnon). A call of a small
+// helper within a dependency package stays at its caller's depth. Generic functions and
 // wrappers are left out (they stay unmodelled). The walk is breadth-first,
 // so a function's depth is that of its shortest call path from a root
 // and does not depend on which root reached it first.
@@ -314,9 +315,11 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 					seen[callee] = true
 					count++
 					out[path] = append(out[path], callee)
-					if modelledStdlib[path] {
+					if modelledStdlib[path] || (f.Pkg != nil && f.Pkg.Pkg.Path() == path && !mainPaths[path] && smallHelper(callee)) {
 						// Within a modelled standard-library package, every
-						// helper is needed (unescape calls ishex calls ...).
+						// helper is needed (unescape calls ishex calls ...);
+						// within a dependency, its small helpers (xxhash's
+						// Sum64 calls round calls rol31) cost no depth (#71).
 						visit(callee)
 					} else {
 						next = append(next, callee)
@@ -334,6 +337,20 @@ func depClosure(roots []*ssa.Function, mainPaths map[string]bool, zeros map[*ssa
 		level = next
 	}
 	return out
+}
+
+// smallHelper says whether f is a small function (rol1, round, u64): few
+// blocks and instructions, translated with its caller in a dependency
+// whatever the depth, where a large one would bring in its package.
+func smallHelper(f *ssa.Function) bool {
+	if len(f.Blocks) > 4 {
+		return false
+	}
+	n := 0
+	for _, b := range f.Blocks {
+		n += len(b.Instrs)
+	}
+	return n <= 40
 }
 
 // foldInit evaluates a package initializer's value when it is a constant
@@ -5229,7 +5246,9 @@ func sentinelErr(v ssa.Value) (ir.Val, bool) {
 // package variable its initializer sets to &T{...} of a struct whose
 // fields the initializer only sets to constants (sjson's errNoChange),
 // assumed not to be reassigned: the struct's zero value and the constant
-// of each field set (nil for the others).
+// of each field set (nil for the others). An array field set element by
+// element to constants (grpc's bdpPing, &ping{data: [8]byte{...}}) is in
+// the zero value returned (#71).
 func sentinelObject(v ssa.Value) (ir.Val, []*ssa.Const, bool) {
 	init, ok := loadedInit(v)
 	if !ok {
@@ -5261,6 +5280,9 @@ func sentinelObject(v ssa.Value) (ir.Val, []*ssa.Const, bool) {
 				if !ok || w.Addr != r {
 					return nil, nil, false
 				}
+				if constArrayField(zero, r.Field, w.Val) {
+					continue
+				}
 				k, ok := w.Val.(*ssa.Const)
 				if !ok {
 					return nil, nil, false
@@ -5275,6 +5297,55 @@ func sentinelObject(v ssa.Value) (ir.Val, []*ssa.Const, bool) {
 		}
 	}
 	return zero, fields, true
+}
+
+// constArrayField sets, in struct value zero, array field f to v when v
+// is an array literal of constants: go/ssa builds [8]byte{2, 4, ...} in a
+// local, stores each element, and loads the local.
+func constArrayField(zero ir.Val, f int, v ssa.Value) bool {
+	sv, ok := zero.(ir.StructVal)
+	if !ok || f >= len(sv.Fields) {
+		return false
+	}
+	arr, ok := sv.Fields[f].(ir.ArrVal)
+	load, isLoad := v.(*ssa.UnOp)
+	if !ok || !isLoad || load.Op != token.MUL {
+		return false
+	}
+	local, ok := load.X.(*ssa.Alloc)
+	if !ok || local.Heap || local.Referrers() == nil {
+		return false
+	}
+	elems := slices.Clone(arr.Elems)
+	for _, r := range *local.Referrers() {
+		if r == load {
+			continue
+		}
+		ia, ok := r.(*ssa.IndexAddr)
+		if !ok || ia.Referrers() == nil || len(*ia.Referrers()) != 1 {
+			return false
+		}
+		ic, ok := ia.Index.(*ssa.Const)
+		if !ok || ic.Value == nil {
+			return false
+		}
+		i, exact := constant.Int64Val(constant.ToInt(ic.Value))
+		w, ok := (*ia.Referrers())[0].(*ssa.Store)
+		if !exact || i < 0 || int(i) >= len(elems) || !ok || w.Addr != ia {
+			return false
+		}
+		k, ok := w.Val.(*ssa.Const)
+		if !ok {
+			return false
+		}
+		c, err := constVal(k)
+		if _, str := c.(ir.StrConst); err != nil || str {
+			return false
+		}
+		elems[i] = c
+	}
+	sv.Fields[f] = ir.ArrVal{Elems: elems}
+	return true
 }
 
 // sentinelTag tags sentinel errors: errors.New returns an *errors.errorString.
