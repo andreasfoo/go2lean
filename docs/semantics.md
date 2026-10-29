@@ -150,8 +150,7 @@ memory).
 | a modelled callee that gets stuck | the call's fallback binds a havoc result | havoc |
 | recursion, loops | fuel-bounded | exact up to fuel (`outOfFuel` beyond) |
 | `defer f()` of an unmodelled function | ignored | assumption |
-| `defer f(args)` of a modelled function, not in a loop | the arguments are evaluated at the `defer` statement; at each return the calls whose `defer` statement ran are made, last first (go/ssa's `RunDefers`; a panic in one ends the run with it) | exact for returns; on the way out of a panic no deferred call is made (the run ends with the panic, as a panic does here anyway) |
-| `defer` of a modelled function in a loop | — | rejected |
+| `defer f(args)` of a modelled function | the arguments are evaluated at the `defer` statement; at each return the calls whose `defer` statement ran are made, last first (go/ssa's `RunDefers`; a panic in one ends the run with it). In a function with a `defer` in a loop, every defer pushes its call onto a defer stack of the frame, which each return pops (#62; checked by `testdata/goosesem/go2lean_defer.go`) | exact for returns; on the way out of a panic no deferred call is made (the run ends with the panic, as a panic does here anyway) |
 | `panic(v)` | `panic explicit` | exact |
 | `recover()` | havoc | unreachable in practice (a panic ends the run) |
 
@@ -356,7 +355,7 @@ writes the same value as a Go literal.
 
 ## 8. Not modelled (rejected functions)
 
-`defer` of a modelled function in a loop; string orderings (`<` on strings);
+string orderings (`<` on strings);
 `unsafe` conversions; parameters of type `*testing.T` (test helpers; with
 `-tests` the test functions themselves, `TestXxx(t *testing.T)`, are
 targets, `t` the harness's own);

@@ -168,11 +168,12 @@ showed (#60: `==` on interface values was havoc; #61: an interface call on
 `*T` did not reach a method declared on `T`) also exposed a wrong answer on
 modelled code: a type alias got a type tag of its own, so
 `any((*B)(nil)) == any((*A)(nil))` with `type B = A` was false. With
-those fixed, the model agrees on 110. The one left, listed in
-`testdata/goosesem/expected.txt`, is a `defer` in a loop, which the
-compile stage rejects (#62). go2lean adds its own tests to the suite
-(`go2lean_*.go`) for each gap it closes: four for `sync/atomic`'s typed
-values (#67), which the model agrees on.
+those fixed, the model agrees on 110. The last one was a `defer` in a
+loop, which the compile stage rejected (#62); it now runs on a defer
+stack. go2lean adds its own tests to the suite (`go2lean_*.go`) for each
+gap it closes (`sync/atomic`'s typed values #67, `container/list` and
+`bufio` #69 #71, package initializers #55, defers in loops #62): the
+model agrees on all 124, and `expected.txt` is empty.
 
 The independent check is the TinyGo line (design §4.4): the same package
 compiled by TinyGo to LLVM IR, with the standard library and runtime taken

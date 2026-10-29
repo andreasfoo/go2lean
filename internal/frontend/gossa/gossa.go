@@ -1684,6 +1684,12 @@ type fnState struct {
 	// defers are the deferred calls to modelled functions, in the order
 	// their defer statements appear (deferCall).
 	defers []deferred
+	// deferStack, when the body has a defer statement in a loop: the cell
+	// holding the frame's defer stack, which every defer of the function
+	// pushes onto and runDefers pops (#62); dispatches are its pop sites,
+	// whose calls are filled in once every defer is known.
+	deferStack *ir.Var
+	dispatches []deferPop
 	// sync: the body starts a goroutine or synchronises (syncTerm).
 	sync bool
 	// pure caches readsOnly.
@@ -1768,6 +1774,17 @@ func (t *fnState) translate() error {
 		t.out.Params = append(t.out.Params, v)
 	}
 	t.out.Blocks = make([]ir.Block, len(f.Blocks))
+	if deferInLoop(f) {
+		// The stack is empty on entry: a node is (more, tag, args, rest).
+		stack, no, node := t.fresh(), t.fresh(), t.fresh()
+		t.deferStack = &stack
+		t.out.Blocks[0].Instrs = []ir.Instr{
+			{Dst: stack, Op: ir.Alloc{Zero: ir.Opaque{}}},
+			{Dst: no, Op: ir.Const{V: ir.BoolVal(false)}},
+			{Dst: node, Op: ir.Simple("mkTuple"), Args: []ir.Var{no}},
+			{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{stack, node}},
+		}
+	}
 	for i, b := range f.Blocks {
 		t.blockID[b] = i
 		t.out.Blocks[i].Name = b.Comment
@@ -1784,6 +1801,7 @@ func (t *fnState) translate() error {
 			return fmt.Errorf("block %d (%s): %w", i, b.Comment, err)
 		}
 	}
+	t.fillDeferPops()
 	t.out.NVals = t.nvals
 	t.out.Entry = 0
 	if t.partial {
@@ -5646,15 +5664,12 @@ type deferred struct {
 // deferCall lowers x, a defer of modelled function callee, or of a
 // synchronisation operation syncOp (callee nil for the builtin close): the
 // arguments are evaluated now and kept, and runDefers makes the call at
-// each return. A defer statement in a loop could run any number of times:
-// it is rejected.
+// each return. In a function with a defer statement in a loop, the
+// arguments go onto the frame's defer stack instead (deferStack).
 func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) error {
 	name := syncOp
 	if callee != nil {
 		name = callee.String()
-	}
-	if inCycle(x.Block()) {
-		return fmt.Errorf("deferred call to %s in a loop", name)
 	}
 	var args []ir.Var
 	callArgs := x.Call.Args
@@ -5685,6 +5700,25 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) e
 	if syncOp == "lockL" || syncOp == "unlockL" {
 		d.lock = t.prog.lockerOp(syncOp)
 	}
+	if syncOp != "" {
+		t.sync = true
+	} else if !dynamic && !slices.Contains(t.out.Calls, d.callee) {
+		t.out.Calls = append(t.out.Calls, d.callee)
+	}
+	if t.deferStack != nil {
+		// Push (true, tag, args, rest): rest is a new cell with the old stack.
+		tag, tup, old, rest, tr, node := t.fresh(), t.fresh(), t.fresh(), t.fresh(), t.fresh(), t.fresh()
+		t.emit(ir.Instr{Dst: tag, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: strconv.Itoa(len(t.defers))}}})
+		t.emit(ir.Instr{Dst: tup, Op: ir.Simple("mkTuple"), Args: args})
+		t.emit(ir.Instr{Dst: old, Op: ir.Simple("loadPath"), Args: []ir.Var{*t.deferStack}})
+		t.emit(ir.Instr{Dst: rest, Op: ir.Alloc{Zero: ir.Opaque{}}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{rest, old}})
+		t.emit(ir.Instr{Dst: tr, Op: ir.Const{V: ir.BoolVal(true)}})
+		t.emit(ir.Instr{Dst: node, Op: ir.Simple("mkTuple"), Args: []ir.Var{tr, tag, tup, rest}})
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{*t.deferStack, node}})
+		t.defers = append(t.defers, d)
+		return nil
+	}
 	// The cells, on entry: a return before the defer statement ran sees
 	// the flag false.
 	f, tr := t.fresh(), t.fresh()
@@ -5700,11 +5734,6 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) e
 	tup := t.fresh()
 	t.emit(ir.Instr{Dst: tup, Op: ir.Simple("mkTuple"), Args: args})
 	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{d.args, tup}})
-	if syncOp != "" {
-		t.sync = true
-	} else if !dynamic && !slices.Contains(t.out.Calls, d.callee) {
-		t.out.Calls = append(t.out.Calls, d.callee)
-	}
 	t.defers = append(t.defers, d)
 	return nil
 }
@@ -5714,49 +5743,123 @@ func (t *fnState) deferCall(x *ssa.Defer, callee *ssa.Function, syncOp string) e
 // (Go would run the remaining deferred calls first; their effects are not
 // seen). The calls on the way out of a panic are not made.
 func (t *fnState) runDefers() error {
+	if t.deferStack != nil {
+		t.popDefers()
+		return nil
+	}
 	for i := len(t.defers) - 1; i >= 0; i-- {
 		d := t.defers[i]
 		ran := t.fresh()
 		t.emit(ir.Instr{Dst: ran, Op: ir.Simple("loadPath"), Args: []ir.Var{d.flag}})
-		call := len(t.out.Blocks)
-		next, fb, join := call+1, call+2, call+3
+		call, join := len(t.out.Blocks), len(t.out.Blocks)+1
 		name := t.cur.Name
 		t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: ran, T: call, F: join}
-		t.out.Blocks = append(t.out.Blocks,
-			ir.Block{Name: name + ".defer"},
-			ir.Block{Name: name + ".defer-after"},
-			ir.Block{Name: name + ".defer-fallback"},
-			ir.Block{Name: name + ".defer-done"})
+		t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".defer"}, ir.Block{Name: name + ".defer-done"})
 		t.cur = &t.out.Blocks[call]
 		tup := t.fresh()
 		t.emit(ir.Instr{Dst: tup, Op: ir.Simple("loadPath"), Args: []ir.Var{d.args}})
-		args := make([]ir.Var, d.nargs)
-		for k := range args {
-			args[k] = t.fresh()
-			t.emit(ir.Instr{Dst: args[k], Op: ir.Extract{I: k}, Args: []ir.Var{tup}})
-		}
-		t.out.Blocks[next].Term = ir.Term{Kind: ir.TermJump, B: join}
-		if d.sync != "" {
-			op := ir.SyncOp{Kind: d.sync}
-			if d.lock.Kind != "" {
-				op = d.lock
-			}
-			t.syncOp(op, t.fresh(), args...)
-			t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
-			t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
-			t.cur = &t.out.Blocks[join]
-			continue
-		}
-		if d.dynamic {
-			t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: args[0], CArgs: args[1:], Dst: t.fresh(), Next: next, Fallback: fb}
-		} else {
-			t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
-		}
-		// A deferred call the model gets stuck in: its effects are dropped.
-		t.out.Blocks[fb].Term = ir.Term{Kind: ir.TermJump, B: join}
+		t.callDeferred(d, tup, join)
 		t.cur = &t.out.Blocks[join]
 	}
 	return nil
+}
+
+// deferPop is a pop site of the defer stack: block, which holds the popped
+// tag and args, gets the dispatch on tag to the deferred calls; each goes
+// back to loop, the next pop.
+type deferPop struct {
+	block, loop int
+	tag, args   ir.Var
+}
+
+// popDefers lowers RunDefers on the defer stack: pop nodes until the empty
+// one, making each node's call.
+func (t *fnState) popDefers() {
+	loop, body, done := len(t.out.Blocks), len(t.out.Blocks)+1, len(t.out.Blocks)+2
+	name := t.cur.Name
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: loop}
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + ".defer-pop"},
+		ir.Block{Name: name + ".defer"},
+		ir.Block{Name: name + ".defer-done"})
+	t.cur = &t.out.Blocks[loop]
+	node, more := t.fresh(), t.fresh()
+	t.emit(ir.Instr{Dst: node, Op: ir.Simple("loadPath"), Args: []ir.Var{*t.deferStack}})
+	t.emit(ir.Instr{Dst: more, Op: ir.Extract{I: 0}, Args: []ir.Var{node}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: more, T: body, F: done}
+	t.cur = &t.out.Blocks[body]
+	tag, args, rest, old := t.fresh(), t.fresh(), t.fresh(), t.fresh()
+	t.emit(ir.Instr{Dst: tag, Op: ir.Extract{I: 1}, Args: []ir.Var{node}})
+	t.emit(ir.Instr{Dst: args, Op: ir.Extract{I: 2}, Args: []ir.Var{node}})
+	t.emit(ir.Instr{Dst: rest, Op: ir.Extract{I: 3}, Args: []ir.Var{node}})
+	t.emit(ir.Instr{Dst: old, Op: ir.Simple("loadPath"), Args: []ir.Var{rest}})
+	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{*t.deferStack, old}})
+	t.dispatches = append(t.dispatches, deferPop{block: body, loop: loop, tag: tag, args: args})
+	t.cur = &t.out.Blocks[done]
+}
+
+// fillDeferPops ends each pop site with the dispatch on its tag: a test per
+// defer statement of the function, then its call.
+func (t *fnState) fillDeferPops() {
+	for _, p := range t.dispatches {
+		t.cur = &t.out.Blocks[p.block]
+		for k, d := range t.defers {
+			kv, is := t.fresh(), t.fresh()
+			t.emit(ir.Instr{Dst: kv, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: strconv.Itoa(k)}}})
+			t.emit(ir.Instr{Dst: is, Op: ir.Simple("eq"), Args: []ir.Var{p.tag, kv}})
+			call, next := len(t.out.Blocks), len(t.out.Blocks)+1
+			name := t.cur.Name
+			t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: is, T: call, F: next}
+			t.out.Blocks = append(t.out.Blocks, ir.Block{Name: name + ".call"}, ir.Block{Name: name + ".next"})
+			t.cur = &t.out.Blocks[call]
+			t.callDeferred(d, p.args, p.loop)
+			t.cur = &t.out.Blocks[next]
+		}
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: p.loop}
+	}
+}
+
+// callDeferred makes deferred call d with the arguments in tuple tup, then
+// goes to join.
+func (t *fnState) callDeferred(d deferred, tup ir.Var, join int) {
+	args := make([]ir.Var, d.nargs)
+	for k := range args {
+		args[k] = t.fresh()
+		t.emit(ir.Instr{Dst: args[k], Op: ir.Extract{I: k}, Args: []ir.Var{tup}})
+	}
+	if d.sync != "" {
+		op := ir.SyncOp{Kind: d.sync}
+		if d.lock.Kind != "" {
+			op = d.lock
+		}
+		t.syncOp(op, t.fresh(), args...)
+		t.cur.Term = ir.Term{Kind: ir.TermJump, B: join}
+		return
+	}
+	next, fb := len(t.out.Blocks), len(t.out.Blocks)+1
+	name := t.cur.Name
+	if d.dynamic {
+		t.cur.Term = ir.Term{Kind: ir.TermCallV, FV: args[0], CArgs: args[1:], Dst: t.fresh(), Next: next, Fallback: fb}
+	} else {
+		t.cur.Term = ir.Term{Kind: ir.TermCall, Callee: d.callee, CArgs: args, Dst: t.fresh(), Next: next, Fallback: fb}
+	}
+	// A deferred call the model gets stuck in: its effects are dropped.
+	t.out.Blocks = append(t.out.Blocks,
+		ir.Block{Name: name + "-after", Term: ir.Term{Kind: ir.TermJump, B: join}},
+		ir.Block{Name: name + "-fallback", Term: ir.Term{Kind: ir.TermJump, B: join}})
+}
+
+// deferInLoop says whether f has a defer statement that can run more than
+// once in a call.
+func deferInLoop(f *ssa.Function) bool {
+	for _, b := range f.Blocks {
+		for _, in := range b.Instrs {
+			if _, ok := in.(*ssa.Defer); ok && inCycle(b) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // inCycle says whether b can reach itself.

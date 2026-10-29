@@ -137,6 +137,18 @@ func SeqTestDefer() bool { return testDefer() }
 // go2lean:sequence testDeferFuncLit
 func SeqTestDeferFuncLit() bool { return testDeferFuncLit() }
 
+// go2lean:sequence testDeferLoopEarlyReturn
+func SeqTestDeferLoopEarlyReturn() bool { return testDeferLoopEarlyReturn() }
+
+// go2lean:sequence testDeferLoopNone
+func SeqTestDeferLoopNone() bool { return testDeferLoopNone() }
+
+// go2lean:sequence testDeferLoopOrder
+func SeqTestDeferLoopOrder() bool { return testDeferLoopOrder() }
+
+// go2lean:sequence testDeferLoopUnlock
+func SeqTestDeferLoopUnlock() bool { return testDeferLoopUnlock() }
+
 // go2lean:sequence testDefinedStrTypesEqual
 func SeqTestDefinedStrTypesEqual() bool { return testDefinedStrTypesEqual() }
 
