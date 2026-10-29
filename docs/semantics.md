@@ -189,7 +189,7 @@ Calls not listed here are unmodelled (§4.6).
 | `strings.Builder` (`WriteString WriteByte WriteRune String Len Reset`) | exact (a string cell); `Grow` (also `bytes.Buffer`'s) panics for a negative argument and is otherwise a no-op |
 | `strconv.Atoi` | exact for decimal `int64` (sign, range error) |
 | `strconv.Itoa` | exact |
-| `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add`; the functions `Load Store Add Swap CompareAndSwap` on `*int32 *int64 *uint32 *uint64` | exact: plain reads and writes (a goroutine's instructions between two scheduling points run atomically, §6); other methods (`Swap`, `CompareAndSwap` on the types): havoc |
+| `sync/atomic` `Bool Int32 Int64 Uint32 Uint64`: `Load Store Add Swap CompareAndSwap And Or` (#67); the functions `Load Store Add Swap CompareAndSwap` on `*int32 *int64 *uint32 *uint64` | exact: plain reads and writes (a goroutine's instructions between two scheduling points run atomically, §6); `Uintptr`, `Pointer[T]`, `Value`: havoc |
 | `strconv.ParseInt ParseUint` | exact: bases 0 (prefixes `0b 0o 0x 0`, underscores) and 2–36, bit sizes 0–64, syntax, range (the bound, as soon as the value overflows), base and bit size errors; checked against Go by `PKG=testdata/convdiff scripts/json-diff.sh` |
 | `strconv.ParseBool FormatInt FormatUint` | exact (an illegal base panics, as in Go) |
 | `math/rand` and `math/rand/v2` `Intn Int31n Int63n IntN Int32N Int64N UintN Uint32N Uint64N` (functions and `*Rand` methods) | any value in `[0, n)` (havoc); Go's panic for `n <= 0` |

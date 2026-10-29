@@ -5058,10 +5058,12 @@ func (t *fnState) atomicFuncCall(x *ssa.Call, callee *ssa.Function) (bool, error
 	return true, nil
 }
 
-// atomicCall lowers Load, Store and Add on sync/atomic's Bool, Int32,
-// Int64, Uint32 and Uint64: reads and writes of the integer field v the
-// type wraps (Bool holds 0 or 1). The model is single-threaded, so these
-// are plain accesses.
+// atomicCall lowers the methods of sync/atomic's Bool, Int32, Int64,
+// Uint32 and Uint64 (Load, Store, Add, Swap, CompareAndSwap, And, Or):
+// reads and writes of the integer field v the type wraps (Bool holds 0 or
+// 1). The model runs a goroutine's instructions between two
+// synchronisation terms atomically, so a read and a write in one method
+// are one atomic step (#67).
 func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 	recv := callee.Signature.Recv()
 	if recv == nil || callee.Pkg == nil || callee.Pkg.Pkg.Path() != "sync/atomic" {
@@ -5096,7 +5098,7 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 		return false, nil
 	}
 	switch callee.Name() {
-	case "Load", "Store", "Add":
+	case "Load", "Store", "Add", "Swap", "CompareAndSwap", "And", "Or":
 	default:
 		return false, nil
 	}
@@ -5141,6 +5143,55 @@ func (t *fnState) atomicCall(x *ssa.Call, callee *ssa.Function) (bool, error) {
 		t.emit(ir.Instr{Dst: old, Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
 		t.emit(ir.Instr{Dst: r, Op: ir.Simple("add"), Args: []ir.Var{old, d}})
 		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Conc("atomicStore"), Args: []ir.Var{addr, r}})
+	case "Swap", "CompareAndSwap", "And", "Or":
+		// The argument as the field holds it: Bool's true is 1.
+		arg := func(i int) (ir.Var, error) {
+			v, err := t.val(x.Call.Args[i])
+			if err != nil || !isBool {
+				return v, err
+			}
+			b := t.fresh()
+			t.emit(ir.Instr{Dst: b, Op: ir.Simple("ite"), Args: []ir.Var{v, konst("1"), konst("0")}})
+			return b, nil
+		}
+		cur := t.fresh()
+		t.emit(ir.Instr{Dst: cur, Op: ir.Conc("atomicLoad"), Args: []ir.Var{addr}})
+		var nv ir.Var
+		switch callee.Name() {
+		case "Swap": // returns the old value
+			v, err := arg(1)
+			if err != nil {
+				return true, err
+			}
+			nv = v
+			if isBool {
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("ne"), Args: []ir.Var{cur, konst("0")}})
+			} else {
+				t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("add"), Args: []ir.Var{cur, konst("0")}})
+			}
+		case "CompareAndSwap": // returns whether it swapped
+			old, err := arg(1)
+			if err != nil {
+				return true, err
+			}
+			v, err := arg(2)
+			if err != nil {
+				return true, err
+			}
+			r := t.def(x)
+			t.emit(ir.Instr{Dst: r, Op: ir.Simple("eq"), Args: []ir.Var{cur, old}})
+			nv = t.fresh()
+			t.emit(ir.Instr{Dst: nv, Op: ir.Simple("ite"), Args: []ir.Var{r, v, cur}})
+		default: // And, Or (Go 1.23): the old value; Bool has neither
+			m, err := arg(1)
+			if err != nil {
+				return true, err
+			}
+			nv = t.fresh()
+			t.emit(ir.Instr{Dst: nv, Op: ir.Simple(strings.ToLower(callee.Name())), Args: []ir.Var{cur, m}})
+			t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("add"), Args: []ir.Var{cur, konst("0")}})
+		}
+		t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Conc("atomicStore"), Args: []ir.Var{addr, nv}})
 	}
 	return true, nil
 }
