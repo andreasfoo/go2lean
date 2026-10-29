@@ -4419,7 +4419,8 @@ func compiledPattern(v ssa.Value) (*regexp.Regexp, bool) {
 // type holds synchronisation state by value (a mutex, read-write mutex, wait
 // group, once or channel, also in a struct field or array element) and no
 // initializer or init function sets it, so it starts at its zero value (or
-// at the one constant its initializer stores). The
+// at the one constant its initializer stores, or, for an interface its
+// initializer builds, at an opaque non-nil value). The
 // goroutines of a run share it, so loads and stores go through the cell; any
 // other package variable keeps the rules of docs/semantics.md §4.7.
 //
@@ -4440,10 +4441,23 @@ func (s *progState) cellGlobal(g *ssa.Global) (uint32, ir.Val, bool) {
 					if !ok || st.Addr != g {
 						continue
 					}
+					if start != nil {
+						return 0, nil, false
+					}
+					if _, iface := pt.Elem().Underlying().(*types.Interface); iface {
+						if _, made := st.Val.(*ssa.MakeInterface); made {
+							// An interface the initializer builds (var
+							// logger Logger = &std{}): non-nil, of a value
+							// the model does not know; calls on it are
+							// havoc, but writes and reads are the cell's.
+							start = ir.OpaqueNonNil{}
+							continue
+						}
+					}
 					// One constant initializer (var d = 10 * time.Second):
 					// the cell starts at it.
 					c, ok := st.Val.(*ssa.Const)
-					if !ok || start != nil {
+					if !ok {
 						return 0, nil, false
 					}
 					v, err := constVal(c)

@@ -50,13 +50,16 @@ exhausted conc_gen_nopanic
 exhausted conc_handoff_nopanic
 exhausted conc_lazyclose_nopanic
 exhausted conc_lockedcount_nopanic
+confirmed conc_logwhileswapping_nopanic
 confirmed conc_lostwakeup_nopanic
 exhausted conc_newqueue_nopanic
+exhausted conc_nopsink_log_nopanic
 confirmed conc_notify_nopanic
 exhausted conc_once_nopanic
 confirmed conc_peekearly_nopanic
 exhausted conc_pipe_nopanic
 exhausted_havoc conc_poll_nopanic
+exhausted conc_prefixsink_log_nopanic
 exhausted conc_publish_nopanic
 exhausted conc_queue_put_newqueue_nopanic
 confirmed conc_queue_take_newqueue_nopanic
