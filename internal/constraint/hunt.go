@@ -125,6 +125,7 @@ type searchResult struct {
 	Havoc       []contract.HavocValue      `json:"havoc"`
 	Relevant    []contract.HavocRead       `json:"relevant_havoc"`
 	Perturbed   int                        `json:"havoc_perturbed"`
+	Skipped     bool                       `json:"relevance_skipped"`
 	ModelOutput *contract.ModelOutput      `json:"model_output"`
 	Probes      []contract.Probe           `json:"probes"`
 	PanicAt     string                     `json:"panic_at"`
@@ -1044,18 +1045,19 @@ func runSearch(leanDir, name string, spec map[string]any, engine string) (*searc
 
 func writeCx(ws contract.Workspace, prop *contract.Property, res *searchResult, engine string, opts SearchOptions) (*contract.Counterexample, error) {
 	cx := &contract.Counterexample{
-		ID:             "cx_" + strings.TrimPrefix(prop.ID, "p_") + "_" + engine + fmt.Sprintf("_s%d", opts.Seed),
-		Property:       prop.ID,
-		Frontend:       prop.Frontend,
-		Engine:         engine,
-		Fuel:           opts.Fuel,
-		Inputs:         res.Inputs,
-		Memory:         res.Memory,
-		Objects:        res.Objects,
-		Havoc:          res.Havoc,
-		RelevantHavoc:  res.Relevant,
-		HavocPerturbed: res.Perturbed,
-		ModelOutput:    res.ModelOutput,
+		ID:               "cx_" + strings.TrimPrefix(prop.ID, "p_") + "_" + engine + fmt.Sprintf("_s%d", opts.Seed),
+		Property:         prop.ID,
+		Frontend:         prop.Frontend,
+		Engine:           engine,
+		Fuel:             opts.Fuel,
+		Inputs:           res.Inputs,
+		Memory:           res.Memory,
+		Objects:          res.Objects,
+		Havoc:            res.Havoc,
+		RelevantHavoc:    res.Relevant,
+		HavocPerturbed:   res.Perturbed,
+		RelevanceSkipped: res.Skipped,
+		ModelOutput:      res.ModelOutput,
 		// The reported values are the ones the model actually executed on.
 		RevalidatedInLean: true,
 		Probes:            res.Probes,

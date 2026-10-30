@@ -325,3 +325,24 @@ counterexample was further along the run, naming the next site: the
 CEGAR loop's progress, done by hand. Most sites were havoc outside a
 contract the callee documents. None of the cases turned confirmed: their
 bugs need the schedule and setup the model does not yet reach (#87).
+
+## k016 found (#87, 2026-10-30)
+
+k016 (prometheus' agent DB: two concurrent appends of one label set make
+two series) was missed by every run above. Three changes found it:
+- **Setup snapshots** (#90). Its harness builds three 16384-stripe arrays
+  before the goroutines start, 28 s a trial; that setup now runs once.
+- **Zero-copy views** (#91). In the model every `Append` had failed:
+  prometheus' labels encode a label set with
+  `unsafe.String(unsafe.SliceData(b), len(b))`, which the model took as
+  an empty string. It is now `string(b)`.
+- **Equal arguments** (#91). One trial in four, two parameters of one kind
+  get the same value, so two appends share a label set.
+
+**Result.** The fourth trial (`a = b`) violates the spec. Replayed at the
+parent under the model's schedule, it is confirmed (`ret: false`). At the
+fix the same input gives `ret: true`; the verdict there is inconclusive,
+because the fix rewrote `getOrCreate` and the schedule no longer applies.
+
+**Cost.** About 100 s a trial, mostly the harness's final loop over 16384
+stripe read locks.

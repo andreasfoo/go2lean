@@ -193,8 +193,10 @@ type Counterexample struct {
 	// HavocPerturbed counts the reads that were tried (strings and
 	// assumptions are fixed guesses, not perturbed). A violation whose
 	// perturbed reads are all irrelevant does not depend on unknown code.
+	// RelevanceSkipped: the run was too slow to rerun once per read (#87).
 	RelevantHavoc     []HavocRead  `json:"relevant_havoc,omitempty"`
 	HavocPerturbed    int          `json:"havoc_perturbed,omitempty"`
+	RelevanceSkipped  bool         `json:"relevance_skipped,omitempty"`
 	ModelOutput       *ModelOutput `json:"model_output,omitempty"`
 	RevalidatedInLean bool         `json:"revalidated_in_lean"`
 	// Probes are the values the spec's go2leanProbe calls recorded in the
