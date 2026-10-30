@@ -3249,6 +3249,22 @@ func (t *fnState) call(x *ssa.Call) error {
 	hasResult := !isUnitTuple(x.Type())
 	if bi, ok := x.Call.Value.(*ssa.Builtin); ok {
 		switch bi.Name() {
+		case "String", "Slice":
+			if b, ok := unsafeView(x.Call); ok {
+				return t.conv(x, b)
+			}
+		case "SliceData", "StringData":
+			// Read only by the conversions unsafeView lowers: nothing to do.
+			if refs := x.Referrers(); refs != nil && len(*refs) > 0 && !slices.ContainsFunc(*refs, func(r ssa.Instruction) bool {
+				c, ok := r.(*ssa.Call)
+				if !ok {
+					return true
+				}
+				_, view := unsafeView(c.Call)
+				return !view
+			}) {
+				return nil
+			}
 		case "close":
 			ch, err := t.val(x.Call.Args[0])
 			if err != nil {
@@ -6850,6 +6866,37 @@ func (t *fnState) contractParts(x ssa.Value, parts []ir.Var) ([]ir.Var, error) {
 	t.emit(ir.Instr{Dst: n1, Op: ir.Simple("add"), Args: []ir.Var{n, one}})
 	t.emit(ir.Instr{Dst: k, Op: ir.Simple("urem"), Args: []ir.Var{parts[0], n1}})
 	return []ir.Var{k, parts[1]}, nil
+}
+
+// unsafeView matches the zero-copy conversions unsafe.String(unsafe.SliceData(b),
+// len(b)) and unsafe.Slice(unsafe.StringData(s), len(s)) (prometheus'
+// yoloString and yoloBytes, #87), giving b or s: the model converts it as
+// string(b) or []byte(s). Exact for a valid program: package unsafe forbids
+// writing the bytes while the result is in use.
+func unsafeView(c ssa.CallCommon) (ssa.Value, bool) {
+	if len(c.Args) != 2 {
+		return nil, false
+	}
+	data, ok := c.Args[0].(*ssa.Call)
+	if !ok || len(data.Call.Args) != 1 {
+		return nil, false
+	}
+	db, ok := data.Call.Value.(*ssa.Builtin)
+	if !ok || (db.Name() != "SliceData" && db.Name() != "StringData") {
+		return nil, false
+	}
+	src := data.Call.Args[0]
+	n, ok := c.Args[1].(*ssa.Call)
+	if !ok || len(n.Call.Args) != 1 || n.Call.Args[0] != src {
+		return nil, false
+	}
+	if lb, ok := n.Call.Value.(*ssa.Builtin); !ok || lb.Name() != "len" {
+		return nil, false
+	}
+	if db.Name() == "SliceData" && !isByteSlice(src.Type()) || db.Name() == "StringData" && !isString(src.Type()) {
+		return nil, false
+	}
+	return src, true
 }
 
 // ---- types -----------------------------------------------------------------

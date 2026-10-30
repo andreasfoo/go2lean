@@ -469,9 +469,30 @@ where
       (v :: acc, g, heap)) (([] : List Val), g, heap)
     (acc.reverse, g, heap)
 
+/-- Two parameters a call can receive equal values for: integers of one
+width and signedness, strings of one kind. -/
+def sameKind : Gen → Gen → Bool
+  | .int _ w s, .int _ w' s' => w == w' && s == s'
+  | .str _ m e, .str _ m' e' => m == m' && e == e'
+  | _, _ => false
+
+/-- The call's arguments, their objects allocated on `base`. One time in
+four, two parameters of the same kind get the same value: equal arguments
+are a classic edge case (two appends of one label set, evaluation 7's
+k016), which independent draws almost never produce for strings (#87). -/
 def genArgs (pf : Profile) (extra : List Nat) (g : StdGen) (gens : List Gen) (pool : List (List Nat) := [])
     (table : TypeTable := #[]) (allowNil : Bool := true) (base : Heap Val := #[]) : List Val × StdGen × Heap Val :=
-  genVal.genList pf extra g base pool table topDepth allowNil gens
+  let (args, g, heap) := genVal.genList pf extra g base pool table topDepth allowNil gens
+  let pairs := (List.range gens.length).flatMap fun i =>
+    ((List.range gens.length).filter fun j => i < j &&
+      match gens[i]?, gens[j]? with
+      | some a, some b => sameKind a b
+      | _, _ => false).map (i, ·)
+  let (dup, g) := randNat g 0 3
+  if dup != 0 || pairs.isEmpty then (args, g, heap) else
+  let (k, g) := randNat g 0 (pairs.length - 1)
+  let (i, j) := pairs[k]!
+  (args.set j args[i]!, g, heap)
 
 /-- Memory contents derived from a per-trial seed and profile. -/
 def oracleOf (pf : Profile) (extra : List Nat) (seed : Nat) : Oracle :=

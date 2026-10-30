@@ -88,3 +88,51 @@ func S() int { return len(start) }
 		t.Errorf("S: []byte(constant) global is havoc: %v", fns["S"].Issues)
 	}
 }
+
+// The zero-copy conversions through package unsafe are conversions in the
+// model (#87: prometheus' labels encode every label set with yoloString).
+func TestUnsafeViews(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"m.go": `package m
+
+import "unsafe"
+
+func yoloString(b []byte) string { return unsafe.String(unsafe.SliceData(b), len(b)) }
+
+func yoloBytes(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s)) }
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _, err := Translate(dir, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"yoloString": "bytesToStr", "yoloBytes": "strToBytes"}
+	for _, f := range p.Funcs {
+		op, ok := want[f.Name]
+		if !ok {
+			continue
+		}
+		found := false
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				if o, ok := in.Op.(ir.Simple); ok && string(o) == op {
+					found = true
+				}
+			}
+		}
+		if !found || len(f.Issues) > 0 {
+			t.Errorf("%s: no %s, or issues %v", f.Name, op, f.Issues)
+		}
+		delete(want, f.Name)
+	}
+	if len(want) > 0 {
+		t.Errorf("not translated: %v", want)
+	}
+}

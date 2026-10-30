@@ -243,7 +243,7 @@ exhausted runes_reverse_nopanic
 exhausted mut=0/5 runes_reverse_specreverse
 none stream_converter_finish_nopanic
 none stream_converter_process_nopanic
-exhausted mut=4/14 stream_seqbounded_sequence
+exhausted mut=6/14 stream_seqbounded_sequence
 confirmed stream_seqcomplete_sequence
 exhausted strloops_countbyte_nopanic
 exhausted strloops_firstbyte_nopanic
