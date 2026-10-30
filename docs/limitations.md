@@ -66,6 +66,19 @@ elements. A spec verdict that read a havoc value is reported as unknown, but
 the other assumptions flow silently through a run, and the exhaustive engine
 does not enumerate havoc sites.
 
+A counterexample that read havoc says which reads its violation depends on
+(`relevant_havoc`, #84): the model reruns it once per read, that read
+changed (an integer one up and one down, a bool or an error the other way)
+and the others kept, and a read whose change makes the violation go away
+is relevant. Strings and assumptions are fixed guesses and are not
+perturbed (`havoc_perturbed` counts the reads that were), and the
+schedule's draws are left to the replay. An empty set is evidence only when
+the run took no assumption: on evaluation 7's spurious cases, three had a
+few relevant reads (in `creack/pty`, sarama, containerd's streaming proxy)
+and three had none, their violations coming from assumptions instead (a
+global taken as an empty slice, test options taken as zero, a stuck
+`xxhash.NewWithSeed`); both name what to model next (#85).
+
 So an `exhausted` result means: no counterexample on a small finite domain,
 havoc sites not enumerated, and the run may have taken an
 under-approximating branch. Which assumptions invalidate a given certificate

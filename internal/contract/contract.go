@@ -117,6 +117,12 @@ const (
 	PanicOther         PanicKind = "other"
 )
 
+// HavocRead names one read of a havoc site: its index and iteration.
+type HavocRead struct {
+	Idx  int `json:"idx"`
+	Iter int `json:"iter"`
+}
+
 // HavocValue is the value the counterexample assigns to one havoc site on
 // one iteration. GoHint, copied from the ABI, tells M3 how to realise it in
 // Go (e.g. "xs[i]" means element Iter of parameter xs).
@@ -180,10 +186,17 @@ type Counterexample struct {
 	Memory map[string][]string `json:"memory,omitempty"`
 	// Objects holds struct and pointer arguments as nested JSON (a struct is
 	// an array of its fields in order, a pointer is null or its pointee).
-	Objects           map[string]json.RawMessage `json:"objects,omitempty"`
-	Havoc             []HavocValue               `json:"havoc,omitempty"`
-	ModelOutput       *ModelOutput               `json:"model_output,omitempty"`
-	RevalidatedInLean bool                       `json:"revalidated_in_lean"`
+	Objects map[string]json.RawMessage `json:"objects,omitempty"`
+	Havoc   []HavocValue               `json:"havoc,omitempty"`
+	// RelevantHavoc are the havoc reads the violation depends on: changing
+	// one of them (and only it) makes the model's violation go away (#84).
+	// HavocPerturbed counts the reads that were tried (strings and
+	// assumptions are fixed guesses, not perturbed). A violation whose
+	// perturbed reads are all irrelevant does not depend on unknown code.
+	RelevantHavoc     []HavocRead  `json:"relevant_havoc,omitempty"`
+	HavocPerturbed    int          `json:"havoc_perturbed,omitempty"`
+	ModelOutput       *ModelOutput `json:"model_output,omitempty"`
+	RevalidatedInLean bool         `json:"revalidated_in_lean"`
 	// Probes are the values the spec's go2leanProbe calls recorded in the
 	// model run, in order; M3 records the real run's in Verdict.Probes.
 	Probes []Probe `json:"probes,omitempty"`
