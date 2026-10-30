@@ -180,6 +180,11 @@ inductive SyncOp where
   (boxed with tag `rwTag`) takes its writer side, its `RLocker()` (tag
   `rTag`) its reader side, anything else is a `*Mutex`. -/
   | lockL (rwTag rTag : Nat) | unlockL (rwTag rTag : Nat)
+  /-- `[]`: where a concurrent harness's setup ends, before anything it does
+  reads its parameters (#87). It completes at once and is not a schedule
+  step; the search snapshots the machine here and starts later trials from
+  the snapshot. -/
+  | setupEnd
   deriving Repr, DecidableEq
 
 inductive Term where

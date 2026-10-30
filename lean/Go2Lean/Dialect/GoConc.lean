@@ -333,6 +333,7 @@ def fire (heap : Heap Val) (gs : Array Gor) (i : Nat) (choice : Nat) : Fire :=
       match tries with
       | [] => if blocking then .blocked else done1 (selectResult heap cases (-1) false .unit) heap
       | _ => tries[choice % tries.length]!
+    | .setupEnd, [] => done1 .unit heap
     | .lock, [ptr] => if wordAt heap ptr = 1 then .blocked else withWord (setWord heap ptr 1) .unit
     | .tryLock, [ptr] =>
       if wordAt heap ptr = 1 then done1 (.bool false) heap else withWord (setWord heap ptr 1) (.bool true)
@@ -480,8 +481,8 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
               | some callee =>
                 .ok (gs.push { frames := [entryFrame callee (bound ++ args.map (f.env[·]!))], daemon := callee.daemon }, s)
               | none => .error .modelStuck
-          | .sync .. =>
-            let (c, s) := schedChoice p h s (fireArity s.heap gs i)
+          | .sync op .. =>
+            let (c, s) := if op == .setupEnd then (0, s) else schedChoice p h s (fireArity s.heap gs i)
             match fire s.heap gs i c with
             | .done gs heap => .ok (gs, { s with heap })
             | .blocked => .error .modelStuck
@@ -690,15 +691,26 @@ def raceStep (gs gs' : Array Gor) (i : Nat) (name : String) (partners : List Nat
   | .ok (vc, s) => .ok (gs'.modify i fun g => { g with vc }, { s with conc.acc := #[] })
   | .error e => .error e
 
+/-- The machine where the main goroutine, still the only one, reached its
+`setupEnd` (#87): the goroutines, the state, and the schedule steps and
+idle count `schedule` continues with. -/
+structure Snap where
+  gs : Array Gor
+  s : HState Val
+  n : Nat
+  idle : Nat
+
 /-- Schedule until no goroutine can move. `outOfFuel` when the steps run out
 (an unfair schedule spinning one goroutine ends here, not as a finding).
 Daemon goroutines (tickers) always can: when only they can, `idle` counts
 their steps, and once each had two without waking another goroutine the run
-ends as if they were done. -/
-def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
-    Array Gor → HState Val → Nat → Nat → Res Val × HState Val
-  | _, s, 0, _ => (.outOfFuel, s)
+ends as if they were done. With `stop`, the run instead ends with a
+snapshot where the main goroutine, alone, reaches a `setupEnd`. -/
+def scheduleS (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) (stop : Bool) :
+    Array Gor → HState Val → Nat → Nat → Snap ⊕ (Res Val × HState Val)
+  | _, s, 0, _ => .inr (.outOfFuel, s)
   | gs, s, n + 1, idle =>
+    if stop && gs.size == 1 && pendingName gs[0]! == "setupEnd" then .inl { gs, s, n := n + 1, idle } else
     let cands := (List.range gs.size).filter (ready s.heap gs)
     let live := cands.filter fun i => !(gs[i]!.daemon)
     let daemons := cands.length - live.length
@@ -706,12 +718,15 @@ def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
       match gs[0]? with
       | some g0 =>
         if g0.done then
-          if gs.all (fun g => g.done || g.daemon || waitsOnResult g0.result g) then (.ok g0.result, s)
-          else (.panic .goroutineLeak, { s with panicAt := some (describeBlocked gs) })
-        else (.panic .deadlock, { s with panicAt := some (describeBlocked gs) })
-      | none => (.panic .modelStuck, s)
+          if gs.all (fun g => g.done || g.daemon || waitsOnResult g0.result g) then .inr (.ok g0.result, s)
+          else .inr (.panic .goroutineLeak, { s with panicAt := some (describeBlocked gs) })
+        else .inr (.panic .deadlock, { s with panicAt := some (describeBlocked gs) })
+      | none => .inr (.panic .modelStuck, s)
     else
-      let (c, s) := schedChoice p h s cands.length
+      -- A lone goroutine at `setupEnd` draws no choice: the schedule's draws
+      -- stay those of the program without it.
+      let atSetupEnd := cands.length == 1 && pendingName gs[cands[0]!]! == "setupEnd"
+      let (c, s) := if atSetupEnd then (0, s) else schedChoice p h s cands.length
       let i := cands[c % cands.length]!
       -- The case a select takes: stepGor draws the same choice from `s`.
       let name := (selectTaken s.heap gs i (schedChoice p h s 1).1).getD (pendingName gs[i]!)
@@ -719,12 +734,21 @@ def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
       match stepGor p or h gs i { s with conc.acc := #[] } stepFuel with
       | (.ok (gs', s), _) =>
         let partners := completedBy gs gs' i
-        let s := { s with conc.sched := s.conc.sched.push (i, name, partners, pkg) }
+        -- `setupEnd` is no operation of the Go program: not in the trace
+        -- the replay follows.
+        let s := if name == "setupEnd" then s else { s with conc.sched := s.conc.sched.push (i, name, partners, pkg) }
         match raceStep gs gs' i name partners s with
-        | .ok (gs', s) => schedule p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0)
-        | .error e => (.panic .dataRace, { s with panicAt := some e })
-      | (.error .other, s) => (.outOfFuel, s)
-      | (.error k, s) => (.panic k, s)
+        | .ok (gs', s) => scheduleS p or h stepFuel stop gs' s n (if live.isEmpty then idle + 1 else 0)
+        | .error e => .inr (.panic .dataRace, { s with panicAt := some e })
+      | (.error .other, s) => .inr (.outOfFuel, s)
+      | (.error k, s) => .inr (.panic k, s)
+
+/-- `scheduleS` to the end. -/
+def schedule (p : Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat)
+    (gs : Array Gor) (s : HState Val) (n idle : Nat) : Res Val × HState Val :=
+  match scheduleS p or h stepFuel false gs s n idle with
+  | .inr r => r
+  | .inl _ => (.panic .modelStuck, s)
 
 /-- Run function `fid` on `args` in the concurrent machine: the main
 goroutine and every goroutine it starts. -/
@@ -734,12 +758,61 @@ def runConc (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List
   | none => (.panic .modelStuck, { heap })
   | some fn => schedule p or h fuel #[{ frames := [entryFrame fn args], vc := #[1] }] { heap } fuel 0
 
+/-- Does function `fid` mark where its setup ends? -/
+def hasSetupEnd (p : Prog) (fid : FuncId) : Bool :=
+  match p.funcs[fid]? with
+  | some fn => fn.sync && fn.blocks.any fun b => match b.term with
+    | .sync .setupEnd .. => true
+    | _ => false
+  | none => false
+
+/-- Run `fid`'s setup once, on an empty heap and placeholder arguments (the
+setup reads none), and snapshot the machine at its `setupEnd` (#87). The
+setup's havoc reads, if any, are then the same in every trial (`h`'s, as
+the exhaustive engine draws them anyway), recorded as an assumption. An
+error says why there is no snapshot: the run did not get there with the
+main goroutine alone, or chose between schedules on the way. -/
+def captureSetup (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (fuel : Nat) : Except String Snap :=
+  if !hasSetupEnd p fid then .error "no setupEnd" else
+  match p.funcs[fid]? with
+  | none => .error "no function"
+  | some fn =>
+    let args := fn.params.map fun _ => Val.unit
+    match scheduleS p or h fuel true #[{ frames := [entryFrame fn args], vc := #[1] }] {} fuel 0 with
+    | .inl snap =>
+      if !snap.s.conc.arity.all (· == 1) then .error "the setup chose between schedules"
+      else if let some site := snap.s.stuck then .error s!"the setup got stuck: {site}"
+      else if snap.s.log.all (fun (site, _, _) => some site == p.schedSite) then .ok snap
+      else
+        let s := snap.s.assume "the setup's havoc reads are the same in every trial (it runs once, #87)"
+        .ok { snap with s }
+    | .inr (r, _) =>
+      let how := match r with
+        | .ok _ => "returned"
+        | .panic k => s!"panic {repr k}"
+        | .outOfFuel => "out of fuel"
+      .error s!"the setup did not reach setupEnd alone ({how})"
+
+/-- Continue `fid` from snapshot `snap` with the trial's arguments, whose
+objects the trial allocated in `heap` (on top of the snapshot's heap). -/
+def resumeConc (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val) (fuel : Nat)
+    (heap : Heap Val) (snap : Snap) : Res Val × HState Val :=
+  match p.funcs[fid]?, snap.gs[0]? with
+  | some fn, some g0 =>
+    match g0.frames with
+    | [fr] =>
+      let g0 := { g0 with frames := [{ fr with env := bindParams fr.env fn.params args }] }
+      schedule p or h fuel (snap.gs.set! 0 g0) { snap.s with heap } snap.n snap.idle
+    | _ => (.panic .modelStuck, { heap })
+  | _, _ => (.panic .modelStuck, { heap })
+
 /-- Run `fid`: in the concurrent machine when it can synchronise, else with
 the big-step interpreter. -/
 def runAny (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val) (fuel : Nat)
-    (heap : Heap Val := #[]) : Res Val × HState Val :=
-  match p.funcs[fid]? with
-  | some fn => if fn.sync then runConc p or h fid args fuel heap else run p or h fid args fuel heap
-  | none => run p or h fid args fuel heap
+    (heap : Heap Val := #[]) (snap : Option Snap := none) : Res Val × HState Val :=
+  match p.funcs[fid]?, snap with
+  | some fn, some snap => if fn.sync then resumeConc p or h fid args fuel heap snap else run p or h fid args fuel heap
+  | some fn, none => if fn.sync then runConc p or h fid args fuel heap else run p or h fid args fuel heap
+  | none, _ => run p or h fid args fuel heap
 
 end Go2Lean.GoConc

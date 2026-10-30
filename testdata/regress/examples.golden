@@ -54,6 +54,7 @@ confirmed conc_logwhileswapping_nopanic
 confirmed conc_lostwakeup_nopanic
 exhausted conc_newprefixsink_nopanic
 exhausted conc_newqueue_nopanic
+confirmed conc_newtally_nopanic
 exhausted conc_nopsink_log_nopanic
 confirmed conc_notify_nopanic
 exhausted conc_once_nopanic
@@ -67,12 +68,16 @@ confirmed conc_queue_take_newqueue_nopanic
 confirmed conc_queue_takeonce_newqueue_nopanic
 confirmed conc_racycount_nopanic
 confirmed conc_readwhilewriting_nopanic
+exhausted mut=0/1 conc_seqconctally_sequence
+confirmed conc_seqconctallyracy_sequence
 exhausted conc_snapshotatomic_nopanic
 confirmed conc_snapshotracy_nopanic
 exhausted conc_store_get_nopanic
 exhausted conc_store_sum_nopanic
 exhausted_havoc conc_sum_nopanic
 exhausted conc_sumgen_nopanic
+confirmed conc_tally_add_newtally_nopanic
+confirmed conc_tally_addracy_newtally_nopanic
 confirmed conc_timeout_nopanic
 exhausted conc_timeoutbuffered_nopanic
 exhausted conc_trysend_nopanic

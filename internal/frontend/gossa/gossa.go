@@ -1726,6 +1726,9 @@ type fnState struct {
 	dispatches []deferPop
 	// sync: the body starts a goroutine or synchronises (syncTerm).
 	sync bool
+	// setup, for a concurrent sequence harness: its entry block's
+	// instructions reordered to end the setup with a setupEnd (setupCut).
+	setup *setupOrder
 	// pure caches readsOnly.
 	pure *bool
 }
@@ -1808,6 +1811,9 @@ func (t *fnState) translate() error {
 		t.out.Params = append(t.out.Params, v)
 	}
 	t.out.Blocks = make([]ir.Block, len(f.Blocks))
+	if t.out.SequenceFor != "" {
+		t.setup = setupCut(f)
+	}
 	if deferInLoop(f) {
 		// The stack is empty on entry: a node is (more, tag, args, rest).
 		stack, no, node := t.fresh(), t.fresh(), t.fresh()
@@ -1982,12 +1988,95 @@ func constVal(c *ssa.Const) (ir.Val, error) {
 
 func (t *fnState) block(i int, b *ssa.BasicBlock) error {
 	t.cur = &t.out.Blocks[i]
-	for _, in := range b.Instrs {
+	instrs := b.Instrs
+	if i == 0 && t.setup != nil {
+		for _, in := range t.setup.prefix {
+			if err := t.instr(b, in); err != nil {
+				return fmt.Errorf("%s: %w", in, err)
+			}
+		}
+		t.syncOp(ir.SyncOp{Kind: "setupEnd"}, t.fresh())
+		instrs = t.setup.rest
+	}
+	for _, in := range instrs {
 		if err := t.instr(b, in); err != nil {
 			return fmt.Errorf("%s: %w", in, err)
 		}
 	}
 	return nil
+}
+
+// setupOrder is a harness's entry block split where its setup ends.
+type setupOrder struct {
+	prefix, rest []ssa.Instruction
+}
+
+// setupCut splits the entry block of a sequence harness that starts
+// goroutines (#87): the prefix is what runs before anything reads a
+// parameter, the setup the search then runs once for all trials. A store
+// of a parameter into a local cell (a captured parameter) moves after the
+// cut, and reads of that cell count as reading the parameter. The cut also
+// comes before the first go statement, where the main goroutine stops being
+// alone. Nil when the prefix calls nothing: no setup worth saving.
+func setupCut(f *ssa.Function) *setupOrder {
+	starts := false
+	for _, b := range f.Blocks {
+		for _, in := range b.Instrs {
+			if _, ok := in.(*ssa.Go); ok {
+				starts = true
+			}
+		}
+	}
+	if !starts || len(f.Blocks) == 0 {
+		return nil
+	}
+	dep := map[ssa.Value]bool{}
+	for _, p := range f.Params {
+		dep[p] = true
+	}
+	for _, fv := range f.FreeVars {
+		dep[fv] = true
+	}
+	var o setupOrder
+	var deferred []ssa.Instruction
+	calls := false
+	instrs := f.Blocks[0].Instrs
+	cut := len(instrs) - 1 // the terminator never goes in the prefix
+	for i, in := range instrs[:len(instrs)-1] {
+		if _, ok := in.(*ssa.DebugRef); ok {
+			continue
+		}
+		reads := false
+		for _, op := range in.Operands(nil) {
+			if *op != nil && dep[*op] {
+				reads = true
+			}
+		}
+		if st, ok := in.(*ssa.Store); ok && reads && !dep[st.Addr] {
+			if _, local := st.Addr.(*ssa.Alloc); local {
+				if _, param := st.Val.(*ssa.Parameter); param {
+					deferred = append(deferred, in)
+					dep[st.Addr] = true
+					continue
+				}
+			}
+		}
+		if _, ok := in.(*ssa.Go); ok || reads {
+			cut = i
+			break
+		}
+		if c, ok := in.(*ssa.Call); ok {
+			if _, builtin := c.Call.Value.(*ssa.Builtin); !builtin {
+				calls = true
+			}
+		}
+		o.prefix = append(o.prefix, in)
+	}
+	if !calls {
+		return nil
+	}
+	o.rest = append(deferred, instrs[cut:]...)
+	return &o
 }
 
 func (t *fnState) binop(x *ssa.BinOp) error {
