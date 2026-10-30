@@ -1,26 +1,26 @@
-case	kind	eval7 A	rerun A score	rerun A found
-k001	race	yes	-	no
-k004	race	no	FOUND	yes
-k007	deadlock	no	not-confirmed(inconclusive)	no
-k009	leak	no	not-confirmed(spurious)	no
-k010	wrong_result	no	replay-error(inconclusive schedule_not_reproduced)	yes
-k012	race	no	FOUND	yes
-k014	race	no	FOUND	yes
-k015	deadlock	yes	replay-error(inconclusive schedule_not_reproduced)	yes
-k016	wrong_result	no	-	no
-k017	race	yes	not-confirmed(inconclusive)	no
-k018	hang	no	fails-on-fix	no
-k023	race	no	-	no
-k024	panic	no	replay-error(inconclusive schedule_not_reproduced)	yes
-k028	wrong_result	no	-	no
-k030	race	yes	FOUND	yes
-k031	race	yes	FOUND	yes
-k033	panic	no	not-confirmed(inconclusive)	no
-k038	wrong_result	no	not-confirmed(spurious)	no
-k039	wrong_result	no	replay-error(inconclusive schedule_not_reproduced)	yes
-k042	deadlock	no	-	no
-k043	deadlock	no	not-confirmed(spurious)	no
-k044	deadlock	no	-	no
-k045	wrong_result	no	not-confirmed(spurious)	no
-k047	deadlock	yes	replay-error(inconclusive schedule_not_reproduced)	yes
-k050	race	no	not-confirmed(spurious)	no
+case	kind	eval7 A	rerun A score	rerun A found	rerun 2 A score	rerun 2 A found	rerun 2 A secs
+k001	race	yes	-	no	FOUND	yes	268
+k004	race	no	FOUND	yes	FOUND	yes	772
+k007	deadlock	no	not-confirmed(inconclusive)	no	not-confirmed(inconclusive)	no	631
+k009	leak	no	not-confirmed(spurious)	no	-	no	324
+k010	wrong_result	no	replay-error(inconclusive schedule_not_reproduced)	yes	replay-error(inconclusive schedule_not_reproduced)	yes	119
+k012	race	no	FOUND	yes	FOUND	yes	742
+k014	race	no	FOUND	yes	FOUND	yes	712
+k015	deadlock	yes	replay-error(inconclusive schedule_not_reproduced)	yes	replay-error(inconclusive schedule_not_reproduced)	yes	144
+k016	wrong_result	no	-	no	-	no	239
+k017	race	yes	not-confirmed(inconclusive)	no	not-confirmed(inconclusive)	no	42
+k018	hang	no	fails-on-fix	no	fails-on-fix	no	101
+k023	race	no	-	no	-	no	1079
+k024	panic	no	replay-error(inconclusive schedule_not_reproduced)	yes	replay-error(inconclusive schedule_not_reproduced)	yes	10
+k028	wrong_result	no	-	no	-	no	168
+k030	race	yes	FOUND	yes	FOUND	yes	116
+k031	race	yes	FOUND	yes	FOUND	yes	284
+k033	panic	no	not-confirmed(inconclusive)	no	not-confirmed(inconclusive)	no	580
+k038	wrong_result	no	not-confirmed(spurious)	no	not-confirmed(spurious)	no	50
+k039	wrong_result	no	replay-error(inconclusive schedule_not_reproduced)	yes	replay-error(inconclusive schedule_not_reproduced)	yes	56
+k042	deadlock	no	-	no	-	no	524
+k043	deadlock	no	not-confirmed(spurious)	no	not-confirmed(spurious)	no	296
+k044	deadlock	no	-	no	-	no	113
+k045	wrong_result	no	not-confirmed(spurious)	no	-	no	19
+k047	deadlock	yes	replay-error(inconclusive schedule_not_reproduced)	yes	replay-error(inconclusive schedule_not_reproduced)	yes	195
+k050	race	no	not-confirmed(spurious)	no	not-confirmed(inconclusive)	no	108
