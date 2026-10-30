@@ -583,10 +583,10 @@ def locKey : Val → Option (Nat × List Nat)
   | _ => none
 
 def syncGet (s : HState Val) (k : Nat × List Nat) : Array Nat :=
-  ((s.conc.syncVC.find? (·.1 == k)).map (·.2)).getD #[]
+  s.conc.syncVC.getD k #[]
 
 def syncSet (s : HState Val) (k : Nat × List Nat) (v : Array Nat) : HState Val :=
-  { s with conc.syncVC := (k, v) :: s.conc.syncVC.filter (·.1 != k) }
+  { s with conc.syncVC := s.conc.syncVC.insert k v }
 
 /-- The object a fired operation synchronises on: its first argument, or
 the case a select took. -/
@@ -602,30 +602,37 @@ def syncObj (g : Gor) (name : String) : Option (Nat × List Nat) :=
   | some (_, a :: _) => locKey a
   | _ => none
 
-def overlaps (a b : Nat × List Nat) : Bool :=
-  a.1 == b.1 && (a.2.isPrefixOf b.2 || b.2.isPrefixOf a.2)
-
 /-- Goroutine `g` with clock `vc` reads or writes `k` (atomically or not):
 the race it makes, or the shadow state with the access added. Two atomic
 accesses never race. -/
 def checkAccess (s : HState Val) (vc : Array Nat) (g : Nat) (k : Nat × List Nat) (write atomic : Bool) :
     Except String (HState Val) :=
   let unordered := fun (h c : Nat) (a : Bool) => h != g && c > vcGet vc h && !(atomic && a)
-  let race := s.conc.shadow.findSome? fun (k', w, rs) =>
-    if !overlaps k k' then none else
-    let byWrite := match w with
+  let check := fun (e : Option (Nat × Nat × Bool) × List (Nat × Nat × Bool)) =>
+    let byWrite := match e.1 with
       | some (h, c, a) => if unordered h c a then some (h, "wrote") else none
       | none => none
-    let byRead := if write then rs.findSome? fun (h, c, a) => if unordered h c a then some (h, "read") else none else none
+    let byRead := if write then e.2.findSome? fun (h, c, a) => if unordered h c a then some (h, "read") else none else none
     byWrite <|> byRead
+  -- Taken out of `s`, so the maps are updated in place.
+  let shadow := s.conc.shadow
+  let s := { s with conc.shadow := {} }
+  let (depth, paths) := shadow.getD k.1 (0, {})
+  let shadow := shadow.erase k.1
+  -- The location and its enclosing ones, then, when deeper paths were
+  -- accessed, the ones inside it.
+  let race := ((List.range (k.2.length + 1)).findSome? fun n => (paths.get? (k.2.take n)).bind check) <|>
+    (if depth > k.2.length then
+      paths.fold (fun r q e => r <|> (if q.length > k.2.length && k.2.isPrefixOf q then check e else none)) none
+    else none)
   match race with
   | some (h, what) =>
     .error s!"data race on object {k.1} at {k.2}: goroutine {g} {if write then "writes" else "reads"} it, goroutine {h} {what} it, neither ordered before the other"
   | none =>
     let clk := vcGet vc g
-    let (w, rs) := ((s.conc.shadow.find? (·.1 == k)).map (·.2)).getD (none, [])
+    let (w, rs) := paths.getD k.2 (none, [])
     let entry := if write then (some (g, clk, atomic), []) else (w, (g, clk, atomic) :: rs.filter (·.1 != g))
-    .ok { s with conc.shadow := (k, entry) :: s.conc.shadow.filter (·.1 != k) }
+    .ok { s with conc.shadow := shadow.insert k.1 (max depth k.2.length, paths.insert k.2 entry) }
 
 /-- Go's race annotations of `sync.WaitGroup`, as accesses to a location of
 its own next to the counter: an `Add` that raises the counter from zero
