@@ -346,3 +346,34 @@ because the fix rewrote `getOrCreate` and the schedule no longer applies.
 
 **Cost.** About 100 s a trial, mostly the harness's final loop over 16384
 stripe read locks.
+
+## Rerun at main (2026-10-30)
+
+The same 25 harnesses and budget, arm A only, with main at `c8d1176`
+(contract havoc #89, setup snapshots #90, zero-copy views and equal
+arguments #91, the relevance time guard #92). Scored as the rerun above.
+`run14.sh` ran A; six cases first failed on a full disk and were rerun by
+`redo14.sh`, which trims Go's build cache while it runs. Per case: the
+"rerun 2" columns of [results-rerun.tsv](conc-recent/results-rerun.tsv).
+
+| | first run | rerun | rerun 2 |
+|---|---|---|---|
+| found by A | 6 | 10 | 11 |
+| A only (B missed) | 0 | 0 | 0 |
+| spurious counterexamples | 10 | 5 | 2 |
+
+- **Found again (1).** k001: constant array fields of pointer sentinels
+  (#80), as predicted above. No case found by the rerun was lost.
+- **Spurious to none (2).** k045 holds over 2000 trials (contract havoc on
+  `Read` counts, #89). k009 gives no counterexample, but 1566 of its 2000
+  trials are stuck at a lock in `Digest.Sum64` (#71).
+- **Spurious to inconclusive (1).** k050: protobuf's `unsafe` internals
+  (#70); the counterexample now rests on assumptions only.
+- **k016 still missed at this budget.** All 2000 trials run out of the
+  default fuel. It is found with 256000 fuel and about 100 s a trial (the
+  section above), far over the 300 s budget.
+- **k023 regressed in cost.** The Lean build of nats-server's `server`
+  package was killed after 12 minutes at 13 GB (the container has 15 GB);
+  the rerun's build fit. It gave no counterexample either time (#45).
+
+Time: 2.1 h for the 25 cases, against 1.9 h for the rerun.
