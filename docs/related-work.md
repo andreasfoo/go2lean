@@ -130,6 +130,14 @@ translation sound).
    annotations, not search), and the Aeneas/hax line (shallow embeddings
    prove more easily, but need the ownership Go lacks).
 
+## Software model checkers
+
+[cpachecker.md](cpachecker.md) studies what go2lean can take from
+CPAchecker against its two bottlenecks, an incomplete model and scarce
+specs: replay-driven refinement of havoc sites, havoc relevance by
+re-execution, hang detection by revisited states and setup snapshots fit
+go2lean's own IR; running CPAchecker on exported C does not.
+
 ## Sources
 
 - Aeneas: https://github.com/sonmarcho/aeneas

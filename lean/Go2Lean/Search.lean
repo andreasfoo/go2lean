@@ -566,6 +566,35 @@ def Outcome.refutes : Property → Outcome → Bool
   | .sequence _, .panicked k => !k.isStuck
   | _, _ => false
 
+/-- Other values a havoc read could have taken: an integer one up and one
+down, a bool or an error the other way. Strings and assumption markers are
+fixed guesses, not perturbed. -/
+def havocAlternatives : Val → List Val
+  | .int w x => [.int w (x + 1), .int w (x - 1)]
+  | .bool b => [.bool !b]
+  | .err e => [.err !e]
+  | _ => []
+
+/-- The havoc reads a refutation depends on (#84): rerun the same input once
+per read, that read changed and the others kept; a read whose change makes
+the refutation go away is relevant. The schedule's draws are left alone
+(schedule dependence is judged by the replay). Interpolation in CPAchecker's
+value analysis, done by re-execution instead of a solver. -/
+def relevantHavoc (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
+    (fuel : Nat) (heap : Heap Val) (s : HState Val) : List (Nat × Nat) :=
+  let reads := s.log.toList.filter fun (site, _, _) => some site != p.schedSite
+  reads.filterMap fun (site, iter, v) =>
+    let gone := (havocAlternatives v).any fun v' =>
+      let h' : Havoc Val := fun st it => if st == site && it == iter then v' else h st it
+      -- The same assignment as `alts`: the rerun's verdict is its own.
+      let (o', _, _) := check p or h' prop args fuel heap [h']
+      !o'.refutes prop
+    if gone then some (site, iter) else none
+
+/-- How many of a refutation's havoc reads `relevantHavoc` could perturb. -/
+def perturbable (p : GoSSA.Prog) (s : HState Val) : Nat :=
+  (s.log.toList.filter fun (site, _, v) => some site != p.schedSite && !(havocAlternatives v).isEmpty).length
+
 /-- A run that is neither a refutation nor support: the model got stuck, or
 a postcondition's target panicked before the oracle ran. Counted so that a
 clean pass is not mistaken for a certificate. -/
@@ -710,7 +739,8 @@ def modelOutput : Outcome → Option Val → Json
   | _, v => Json.mkObj [("res", "ok"), ("value", (v.map renderVal).getD Json.null)]
 
 def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (trial seed : Nat)
-    (o : Outcome) (s : HState Val) (ret : Option Val) (origins : Array (String × Nat) := #[]) : Json :=
+    (o : Outcome) (s : HState Val) (ret : Option Val) (origins : Array (String × Nat) := #[])
+    (relevant : List (Nat × Nat) := []) (perturbed : Nat := 0) : Json :=
   let inputs := (gens.zip args).flatMap (fun (g, v) => flatten g v)
   let memory := memoryOf or heap gens args
   let objects := objectsOf heap gens args
@@ -725,7 +755,10 @@ def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (
     Json.mkObj [("label", label), ("value", renderObj s.heap true v)]
   Json.mkObj [("found", true), ("trial", trial), ("seed", seed),
     ("inputs", Json.mkObj inputs), ("memory", Json.mkObj memory), ("objects", Json.mkObj objects),
-    ("havoc", Json.arr havoc.toArray), ("probes", Json.arr probes.toArray),
+    ("havoc", Json.arr havoc.toArray),
+    ("relevant_havoc", Json.arr (relevant.map fun (site, iter) => Json.mkObj [("idx", (site : Json)), ("iter", iter)]).toArray),
+    ("havoc_perturbed", perturbed),
+    ("probes", Json.arr probes.toArray),
     ("assumptions", Json.arr (s.assumed.map Json.str)),
     ("model_output", modelOutput o ret), ("panic_at", (s.panicAt.map Json.str).getD Json.null),
     ("schedule", Json.arr (s.conc.sched.map fun (g, op, ps, pkg) =>
@@ -782,12 +815,12 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       -- A refutation whose run read a havoc value (an unmodelled call) is
       -- kept as a fallback while the search goes on for one that did not:
       -- M3 refutes most havoc-dependent ones.
-      let j := report or heap gens args trial seed o s ret p.siteOrigin
       if s.log.size == 0 then
-        IO.println j.compress
+        IO.println (report or heap gens args trial seed o s ret p.siteOrigin).compress
         return
       else if fallback.isNone then
-        fallback := some j
+        fallback := some (report or heap gens args trial seed o s ret p.siteOrigin
+          (relevantHavoc p or h prop args fuel heap s) (perturbable p s))
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := bump exits b
     if o.moot prop then
@@ -1209,12 +1242,12 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     let alts := [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
     let (o, s, ret) := check p or h prop args fuel heap alts
     if o.refutes prop then
-      let j := report or heap gens args i 0 o s ret p.siteOrigin
       if s.log.size == 0 then
-        IO.println j.compress
+        IO.println (report or heap gens args i 0 o s ret p.siteOrigin).compress
         return
       else if fallback.isNone then
-        fallback := some j
+        fallback := some (report or heap gens args i 0 o s ret p.siteOrigin
+          (relevantHavoc p or h prop args fuel heap s) (perturbable p s))
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
@@ -1240,12 +1273,12 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
           let (o', s', ret') := check p or hs prop args fuel heap (alts.map (forceSched · site pf))
           runs := runs + 1
           if o'.refutes prop then
-            let j := report or heap gens args i 0 o' s' ret' p.siteOrigin
             if s'.log.all (·.1 == site) then
-              IO.println j.compress
+              IO.println (report or heap gens args i 0 o' s' ret' p.siteOrigin).compress
               return
             else if fallback.isNone then
-              fallback := some j
+              fallback := some (report or heap gens args i 0 o' s' ret' p.siteOrigin
+                (relevantHavoc p or hs prop args fuel heap s') (perturbable p s'))
           -- A schedule that spins one goroutine out of fuel is one Go's
           -- scheduler does not keep taking: no finding, but no certificate.
           if let .outOfFuel := o' then complete := false
