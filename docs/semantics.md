@@ -70,6 +70,28 @@ yields UB or poison, Go panics. A run ends in one of:
 
 `recover` is not modelled: a panic ends the run.
 
+**Loops that never end (#86).** The engines rerun up to 20 of a
+property's out-of-fuel runs in a copy of the sequential interpreter
+(`Go2Lean/Hang.lean`) that watches the state at each back edge: the
+block, the environment, the heap and the havoc counters. A run that
+comes back to a state it was in loops forever on that input, since the
+run from there is deterministic. Brent's cycle detection keeps one saved
+state per call, so a back edge costs one comparison. The hunt summary
+counts these runs and names the loop (`@Words#1`). A run that had taken
+an under-approximation by then is marked `(under assumptions)`, since
+the loop may be the model's.
+
+Some hangs are not caught:
+- **Changing state.** A loop that changes a counter it never reads
+  never repeats its state.
+- **Long cycles.** A cycle longer than about half the fuel closes too
+  late.
+- **Concurrent runs.** The machine draws a schedule choice at every
+  step, so a concurrent run's state never repeats.
+
+`examples/hang` holds two such bugs, a scan that stops advancing on a
+tab and a chain of links with a cycle, and a long loop that does end.
+
 ## 4. Operations by group
 
 ### 4.1 Integers and booleans

@@ -114,6 +114,7 @@ The "two equal string args" problem is what symbolic execution solves. go2lean's
   - replay with the existing watchdog.
 - **First experiment.** When a run returns `outOfFuel`, rerun it with state hashing at back edges. Count lassos on `examples/` and on the conc-recent fuel cases.
 - **Cost.** Needs `Hashable Val` and lives in `Core.lean`'s `runBlock` or in a wrapper in `Search.check`.
+- **Done (step 1).** Out-of-fuel sequential runs are rerun in `Go2Lean/Hang.lean`, a copy of the interpreter with Brent's detection at back edges (equality, not hashing). The hunt summary counts the runs that loop forever ([semantics](semantics.md#3-failure)). The fuel cases of conc-recent are all concurrent, which this step does not cover. Open: a `no_hang` property with its own counterexamples, replayed under the watchdog.
 
 ### 4.2 Relational specs nobody writes
 

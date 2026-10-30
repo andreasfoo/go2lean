@@ -3,5 +3,6 @@
 import Go2Lean.SSA.Core
 import Go2Lean.Dialect.GoSSA
 import Go2Lean.Dialect.GoConc
+import Go2Lean.Hang
 import Go2Lean.Search
 import Go2Lean.Proof.Simp

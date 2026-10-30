@@ -99,6 +99,9 @@ exhausted globals_same_nopanic
 exhausted globals_same_specsamefieldwise
 exhausted_assuming globals_setgenfortest_nopanic
 confirmed globals_slot_nopanic
+none hang_last_nopanic
+none hang_triangle_nopanic
+exhausted hang_words_nopanic
 exhausted iface_area_nopanic
 exhausted mut=2/2 iface_area_specareadispatch
 exhausted iface_count_nopanic
