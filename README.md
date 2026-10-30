@@ -112,7 +112,9 @@ writes Go specs; it does not replace model search or real Go verification.
 
 ## Writing a spec
 
-Built-in `no_panic` checks need no spec code. For a business rule, write an
+Built-in `no_panic` checks need no spec code. A run that comes back to a
+state it was in is reported as looping forever, also without a spec
+([details](docs/semantics.md#3-failure)). For a business rule, write an
 ordinary Go function in the target package—yourself or with the agent:
 
 ```go

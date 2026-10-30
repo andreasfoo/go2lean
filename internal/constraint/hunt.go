@@ -131,6 +131,13 @@ type searchResult struct {
 	PanicAt     string                     `json:"panic_at"`
 	Assumptions []string                   `json:"assumptions"`
 	Schedule    []contract.SchedStep       `json:"schedule"`
+
+	// Out-of-fuel runs rerun with their state watched at back edges (#86):
+	// how many, how many came back to a state (they loop forever), and where.
+	LoopsChecked int            `json:"loops_checked"`
+	LoopsForever int            `json:"loops_forever"`
+	LoopSites    map[string]int `json:"loop_sites"`
+
 	// The mutation engine's report (Mutation set).
 	Mutation     bool                  `json:"mutation"`
 	MutantsTotal int                   `json:"mutants_total"`
@@ -649,7 +656,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		if res.BudgetHit {
 			note = fmt.Sprintf(" [stopped by the %ds budget]", opts.BudgetSeconds)
 		}
-		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s%s", res.Trials, res.OutOfFuel, res.Moot, exitNote(specExits, res.SpecExits), note, stuckNote(res.StuckSites, report.Havoc, reportsByKey(ws, report.Frontend, res.StuckSites))))
+		summary = append(summary, fmt.Sprintf("random: none in %d trials (%d out of fuel, %d moot/stuck)%s%s%s%s", res.Trials, res.OutOfFuel, res.Moot, loopNote(res), exitNote(specExits, res.SpecExits), note, stuckNote(res.StuckSites, report.Havoc, reportsByKey(ws, report.Frontend, res.StuckSites))))
 	}
 	if opts.Engine == EngineExhaustive || opts.Engine == EngineAll {
 		if prop.Kind == contract.KindSequence {
@@ -729,7 +736,7 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		case res.Moot > 0:
 			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d of %.0f inputs were moot (the model got stuck, or the target panicked before the oracle ran)", res.Moot, res.Domain))
 		default:
-			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d inputs ran out of fuel", res.OutOfFuel))
+			summary = append(summary, fmt.Sprintf("exhaustive: no certificate, %d inputs ran out of fuel%s", res.OutOfFuel, loopNote(res)))
 		}
 	}
 	if opts.Mutate && (prop.Kind == contract.KindPostcondition || prop.Kind == contract.KindSequence) {
@@ -1110,6 +1117,25 @@ func exitCounts(sites []contract.ExitSite, exits map[string]int) (vacuous, check
 
 // exitNote says how many trials got past the spec's guards, and through
 // which return statements (by source line) they left.
+// loopNote says how many of the out-of-fuel runs rerun loop forever, and
+// at the most frequent loop (#86). A loop the run entered under an
+// under-approximation may be the model's, not the program's.
+func loopNote(res *searchResult) string {
+	if res.LoopsChecked == 0 {
+		return ""
+	}
+	if res.LoopsForever == 0 {
+		return fmt.Sprintf("; none of %d out-of-fuel runs rerun comes back to a state", res.LoopsChecked)
+	}
+	best, n := "", 0
+	for s, c := range res.LoopSites {
+		if c > n || c == n && s < best {
+			best, n = s, c
+		}
+	}
+	return fmt.Sprintf("; %d of %d out-of-fuel runs rerun loop forever (most at %s)", res.LoopsForever, res.LoopsChecked, best)
+}
+
 func exitNote(sites []contract.ExitSite, exits map[string]int) string {
 	if len(exits) == 0 {
 		return ""
