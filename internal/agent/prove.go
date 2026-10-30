@@ -107,10 +107,16 @@ func ProveGoals(ctx context.Context, llm LLM, ws contract.Workspace, leanDir str
 		}
 	}
 	provedGoals := map[string]bool{}
-	model, err := os.ReadFile(filepath.Join(ws.Root, report.LeanFile))
-	if err != nil {
-		return nil, err
+	// A large model is split into parts (#45): read them all.
+	var model []byte
+	for _, f := range append(append([]string{}, report.LeanParts...), report.LeanFile) {
+		b, err := os.ReadFile(filepath.Join(ws.Root, f))
+		if err != nil {
+			return nil, err
+		}
+		model = append(model, b...)
 	}
+	var err error
 	logDir := filepath.Join(ws.Root, "agent", "prove", contract.PackageKey(report.Package))
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil, err

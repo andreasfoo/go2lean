@@ -76,7 +76,8 @@ The judge builds its project only from these inputs:
 - the checkout's core sources (`repo.CoreFiles`, hashed into the
   certificate);
 - the model file, copied only if its SHA-256 matches the one the compile
-  stage recorded;
+  stage recorded (a model over 4 MB is written as part modules, hashed in
+  order with it);
 - go2lean's own statements, in `Challenge.lean`.
 
 The trusted modules are built before any answer text is in the project.

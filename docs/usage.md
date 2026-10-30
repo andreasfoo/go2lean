@@ -208,6 +208,14 @@ dereferences of fields a caller is expected to set. The agent on
 `internal/typ` wrote 63 specs and found `pickWithinTier` indexing an
 empty slice.
 
+A package's model is one Lean module, which Lean elaborates and compiles
+in one process. A model over 4 MB is written as part modules of about
+2 MB that the package's module imports, so lake builds them in parallel
+in bounded memory. nats-server's `server` package (35 MB of model) built
+as one module was killed at 13 GB. As 17 parts it builds in 11 minutes,
+using at most 4.8 GB in one Lean process and 9.3 GB across the four jobs
+(#45).
+
 The tingly-box case study (hand-written specs, the rounds of hunting,
 PoCs, full-pass history and one page per finding) lives in its own
 repository, [andreasfoo/go2lean-tingly-box](https://github.com/andreasfoo/go2lean-tingly-box).

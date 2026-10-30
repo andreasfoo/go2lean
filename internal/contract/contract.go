@@ -637,8 +637,12 @@ type ModelReport struct {
 	Frontend   string `json:"frontend"`
 	LeanModule string `json:"lean_module"` // e.g. Go2Lean.Generated.gossa.overflow
 	LeanFile   string `json:"lean_file"`   // relative to the workspace
-	// LeanSHA256 is the hash of the model file as the compile stage wrote
-	// it: the proof judge copies the file only if it still matches.
+	// LeanParts are the part modules a large model is split into, in the
+	// order LeanFile imports them (relative to the workspace).
+	LeanParts []string `json:"lean_parts,omitempty"`
+	// LeanSHA256 is the hash of the model as the compile stage wrote it
+	// (its parts in order, then LeanFile): the proof judge copies the
+	// files only if they still match.
 	LeanSHA256 string      `json:"lean_sha256,omitempty"`
 	Funcs      []ModelFunc `json:"funcs"`
 	Havoc      []ABIHavoc  `json:"havoc,omitempty"` // program-wide havoc sites
