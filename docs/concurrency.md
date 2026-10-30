@@ -66,6 +66,10 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
 - Data races in the model: vector clocks per goroutine and per
   synchronisation object, and a FastTrack shadow per location (last write,
   reads since); semantics in [semantics.md §6](semantics.md#6-concurrency).
+  The shadow is a hash map by location: an access checks its own location
+  and the enclosing ones by lookup, and the ones inside it only when the
+  object has deeper ones (a list scan made a setup of 16384 maps take
+  minutes per run, #71).
   The dialect lists each operation's heap accesses (`Dialect.accesses`),
   the machine checks them after every goroutine step. The interpreter
   records them only when its `track` argument is set: the concurrent

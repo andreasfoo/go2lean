@@ -1,3 +1,4 @@
+import Std.Data.HashMap
 /-!
 # SSA core
 
@@ -266,8 +267,12 @@ it ran. The replay stage replays it. -/
   /-- The race detector's state: the vector clock of each synchronisation
   object (by heap location) and, per location, its last write and the reads
   since (goroutine, clock, whether the access was atomic). -/
-  syncVC : List ((Nat × List Nat) × Array Nat) := []
-  shadow : List ((Nat × List Nat) × Option (Nat × Nat × Bool) × List (Nat × Nat × Bool)) := []
+  syncVC : Std.HashMap (Nat × List Nat) (Array Nat) := {}
+  /-- Per heap object: the depth of its deepest path accessed, and its
+  accessed paths. An access checks its own path and its prefixes by lookup,
+  and scans the object only when a deeper path was accessed (a scan of every
+  location was quadratic in a long setup's accesses, #71). -/
+  shadow : Std.HashMap Nat (Nat × Std.HashMap (List Nat) (Option (Nat × Nat × Bool) × List (Nat × Nat × Bool))) := {}
 
 /-- Run-time bookkeeping for havoc: how often each site fired and which
 values were handed out, so a counterexample can report them. -/
@@ -331,7 +336,12 @@ def execInstrs (or : Oracle) (h : Havoc Val) (track : Bool) :
     let s := match Dialect.assumption s.heap o vals with
       | some note => s.assume note
       | none => s
-    let s := if track then { s with conc.acc := s.conc.acc ++ (Dialect.accesses o vals).toArray } else s
+    -- Taken out of `s` before it grows, so it is unique and grows in place.
+    let s := if track then
+        let acc := s.conc.acc
+        let s := { s with conc.acc := #[] }
+        { s with conc.acc := (Dialect.accesses o vals).foldl (·.push ·) acc }
+      else s
     match Dialect.denote or s.heap o vals with
     | .ok (v, heap) => execInstrs or h track rest (env.set! dst v) { s with heap := heap }
     | .panic .modelStuck =>
