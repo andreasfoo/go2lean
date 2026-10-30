@@ -300,3 +300,28 @@ without a result. Per case: [results-rerun.tsv](conc-recent/results-rerun.tsv).
   k045 and k050 spurious, and k023, k028, k042, k044 give no
   counterexample; their issues are those of the first run's ledger.
 
+
+## Refinement by hand (#85, 2026-10-30)
+
+Arm A's spurious and inconclusive cases, rerun after refining the sites
+their counterexamples named: the reads `relevant_havoc` (#84) found
+relevant, or else the assumptions the run took. Same harnesses and
+budget as the rerun (`run11.sh`). Round 1 bounds `Read`/`Write` counts and
+`hash.Hash` writes by their contracts and makes a `[]byte` constant global
+known. Round 2 adds the bounds on `Len`/`Cap` and `runtime.Callers`, and
+`rand.Perm`. k043 (a NATS server started in setup, #87) and k050
+(protobuf's `unsafe` internals, #70) were not refined.
+
+| case | rerun | site refined | round 1 | round 2 |
+|---|---|---|---|---|
+| k045 | spurious: `bufio` "negative read" | `Read` count | **holds** (2000 trials, 1 stuck) | — |
+| k009 | spurious | `hash.Hash` write | spurious, at `Digest.Sum64` (`reflect.Value.Len` < 0) | **holds**, but 1566 of 2000 trials stuck |
+| k038 | spurious: `redact` slice bounds | `[]byte` constant global | spurious, at `runtime.Callers` | spurious, a havoc field of a pooled printer |
+| k007 | inconclusive | `io.ReadAtLeast` count | inconclusive, at `rand.Perm`'s length | inconclusive, at `Sdump` (assumptions only) |
+| k033 | inconclusive | — | inconclusive, at `GetOrRegister` | inconclusive, at `Sdump` |
+
+Every refinement removed the violation it targeted, and the next
+counterexample was further along the run, naming the next site: the
+CEGAR loop's progress, done by hand. Most sites were havoc outside a
+contract the callee documents. None of the cases turned confirmed: their
+bugs need the schedule and setup the model does not yet reach (#87).
