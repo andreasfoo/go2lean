@@ -566,11 +566,12 @@ def Outcome.refutes : Property → Outcome → Bool
   | .sequence _, .panicked k => !k.isStuck
   | _, _ => false
 
-/-- Other values a havoc read could have taken: an integer one up and one
-down, a bool or an error the other way. Strings and assumption markers are
-fixed guesses, not perturbed. -/
+/-- Other values a havoc read could have taken: an integer one up, one
+down and zero (a read far past a threshold, such as a negative count, is
+not moved back across it by one), a bool or an error the other way. Strings
+and assumption markers are fixed guesses, not perturbed. -/
 def havocAlternatives : Val → List Val
-  | .int w x => [.int w (x + 1), .int w (x - 1)]
+  | .int w x => [.int w (x + 1), .int w (x - 1)] ++ (if x == 0 then [] else [.int w 0])
   | .bool b => [.bool !b]
   | .err e => [.err !e]
   | _ => []

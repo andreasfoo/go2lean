@@ -559,7 +559,7 @@ func zeroGlobals(sprog *ssa.Program, spkgs []*ssa.Package, deps bool) map[*ssa.G
 							known = true
 						case *ssa.MakeMap:
 							known = constMapEntries(v) != nil
-						case *ssa.Slice:
+						case *ssa.Slice, *ssa.Convert:
 							_, known = constSlice(v, inits)
 						case *ssa.Call:
 							_, known = constSlice(v, inits)
@@ -1573,6 +1573,15 @@ func constSlice(v ssa.Value, inits map[*ssa.Global]ssa.Value) ([]ir.Val, bool) {
 			}
 			return append(slices.Clone(x), y...), true
 		}
+	case *ssa.Convert:
+		// []byte("constant"): redact's startRedactableBytes (#85).
+		if c, ok := v.X.(*ssa.Const); ok && c.Value != nil && c.Value.Kind() == constant.String && isByteSlice(v.Type()) {
+			var elems []ir.Val
+			for _, b := range []byte(constant.StringVal(c.Value)) {
+				elems = append(elems, ir.IntVal{Width: 8, Bits: strconv.Itoa(int(b))})
+			}
+			return elems, true
+		}
 	}
 	return nil, false
 }
@@ -2187,9 +2196,19 @@ func (t *fnState) havoc(x ssa.Value, site, reason, goHint string) error {
 			}
 			parts = append(parts, v)
 		}
+		parts, err := t.contractParts(x, parts)
+		if err != nil {
+			return err
+		}
 		t.issue("%s: %s is havoc (%s)", site, x.Name(), reason)
 		t.emit(ir.Instr{Dst: t.def(x), Op: ir.Simple("mkTuple"), Args: parts})
 		return nil
+	}
+	if done, err := t.contractHavoc(t.def(x), x, t.f.Name()+": "+site, reason, goHint); done || err != nil {
+		if err == nil {
+			t.issue("%s: %s is havoc (%s)", site, x.Name(), reason)
+		}
+		return err
 	}
 	if err := t.havocInto(t.def(x), x.Type(), t.f.Name()+": "+site, reason, goHint); err != nil {
 		return err
@@ -3486,6 +3505,9 @@ func (t *fnState) call(x *ssa.Call) error {
 		name = callee.String()
 	}
 	if hasResult {
+		if callee != nil && callee.Pkg != nil && callee.Name() == "Perm" && strings.HasPrefix(callee.Pkg.Pkg.Path(), "math/rand") && isSlice(x.Type()) {
+			return t.randPerm(x, x.Call.Args[len(x.Call.Args)-1])
+		}
 		return t.havoc(x, "call "+name, "unmodeled-call", "")
 	}
 	// The sync operations the concurrent machine models are lowered before
@@ -6569,10 +6591,176 @@ func (t *fnState) havocResult(dst ir.Var, x ssa.Value, site, reason string) erro
 			}
 			parts = append(parts, v)
 		}
+		parts, err := t.contractParts(x, parts)
+		if err != nil {
+			return err
+		}
 		t.emit(ir.Instr{Dst: dst, Op: ir.Simple("mkTuple"), Args: parts})
 		return nil
 	}
+	if done, err := t.contractHavoc(dst, x, t.f.Name()+": "+site, reason, ""); done || err != nil {
+		return err
+	}
 	return t.havocInto(dst, x.Type(), t.f.Name()+": "+site, reason, "")
+}
+
+// contractHavoc binds dst to a havoc result of a single-result call kept
+// within its callee's documented contract (#85): a Len or Cap is from 0 to
+// the model's slice bound; runtime.Callers fills at most len(pc).
+func (t *fnState) contractHavoc(dst ir.Var, x ssa.Value, site, reason, goHint string) (bool, error) {
+	c, ok := x.(*ssa.Call)
+	if !ok {
+		return false, nil
+	}
+	if w, signed, isInt := intWidth(x.Type()); !isInt || w != 64 || !signed {
+		return false, nil
+	}
+	var bound ir.Var
+	bounded := false
+	name, nargs := "", len(c.Call.Args)
+	if c.Call.IsInvoke() {
+		name = c.Call.Method.Name()
+	} else if f := c.Call.StaticCallee(); f != nil {
+		name = f.Name()
+		if f.Signature.Recv() != nil {
+			nargs--
+		}
+		if f.Pkg != nil && f.Pkg.Pkg.Path() == "runtime" && name == "Callers" && nargs == 2 {
+			pc, err := t.val(c.Call.Args[1])
+			if err != nil {
+				return true, err
+			}
+			n, one := t.fresh(), t.fresh()
+			t.emit(ir.Instr{Dst: n, Op: ir.Simple("len"), Args: []ir.Var{pc}})
+			t.emit(ir.Instr{Dst: one, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "1"}}})
+			bound, bounded = t.fresh(), true
+			t.emit(ir.Instr{Dst: bound, Op: ir.Simple("add"), Args: []ir.Var{n, one}})
+		}
+	}
+	if !bounded && (name == "Len" || name == "Cap") && nargs == 0 {
+		bound, bounded = t.fresh(), true
+		t.emit(ir.Instr{Dst: bound, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "16385"}}})
+	}
+	if !bounded {
+		return false, nil
+	}
+	raw := t.fresh()
+	if err := t.havocInto(raw, x.Type(), site, reason, goHint); err != nil {
+		return true, err
+	}
+	t.emit(ir.Instr{Dst: dst, Op: ir.Simple("urem"), Args: []ir.Var{raw, bound}})
+	return true, nil
+}
+
+// randPerm lowers an unmodelled rand.Perm(n) to the identity permutation,
+// one of its results, where a havoc slice of any length would break its
+// contract (len n, the values 0..n-1) and index past what it permutes.
+func (t *fnState) randPerm(x *ssa.Call, n ssa.Value) error {
+	nv, err := t.val(n)
+	if err != nil {
+		return err
+	}
+	t.assume("%s: call %s: assumed the identity permutation (one of its results; not modelled)", t.f.Name(), x.Call.Value.Name())
+	s := t.def(x)
+	t.emit(ir.Instr{Dst: s, Op: ir.MakeSlice{Zero: ir.IntVal{Width: 64, Bits: "0"}}, Args: []ir.Var{nv, nv}})
+	i, one := t.fresh(), t.fresh()
+	t.emit(ir.Instr{Dst: i, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "0"}}})
+	t.emit(ir.Instr{Dst: one, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "1"}}})
+	head := len(t.out.Blocks)
+	body, done := head+1, head+2
+	name := t.cur.Name
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: head}
+	t.addBlocks(name+".perm-head", name+".perm-body", name+".perm-done")
+	t.cur = &t.out.Blocks[head]
+	more := t.fresh()
+	t.emit(ir.Instr{Dst: more, Op: ir.Simple("slt"), Args: []ir.Var{i, nv}})
+	t.cur.Term = ir.Term{Kind: ir.TermBr, Cond: more, T: body, F: done}
+	t.cur = &t.out.Blocks[body]
+	a := t.fresh()
+	t.emit(ir.Instr{Dst: a, Op: ir.Simple("indexAddr"), Args: []ir.Var{s, i}})
+	t.emit(ir.Instr{Dst: t.fresh(), Op: ir.Simple("storePath"), Args: []ir.Var{a, i}})
+	t.emit(ir.Instr{Dst: i, Op: ir.Simple("add"), Args: []ir.Var{i, one}})
+	t.cur.Term = ir.Term{Kind: ir.TermJump, B: head}
+	t.cur = &t.out.Blocks[done]
+	return nil
+}
+
+// ioCall splits a call to a method of an io-style signature, (p []byte)
+// or (s string) to (n int, err error): its name, receiver type and p.
+func ioCall(x ssa.Value) (name string, recv types.Type, p ssa.Value, ok bool) {
+	c, isCall := x.(*ssa.Call)
+	if !isCall {
+		return "", nil, nil, false
+	}
+	var sig *types.Signature
+	args := c.Call.Args
+	switch {
+	case c.Call.IsInvoke():
+		name, recv, sig = c.Call.Method.Name(), c.Call.Value.Type(), c.Call.Signature()
+	case c.Call.StaticCallee() != nil && c.Call.StaticCallee().Signature.Recv() != nil && len(args) > 0:
+		f := c.Call.StaticCallee()
+		name, recv, sig, args = f.Name(), args[0].Type(), f.Signature, args[1:]
+	default:
+		return "", nil, nil, false
+	}
+	if sig.Params().Len() != 1 || len(args) != 1 || sig.Results().Len() != 2 {
+		return "", nil, nil, false
+	}
+	pt := sig.Params().At(0).Type()
+	if !isByteSlice(pt) && !isString(pt) {
+		return "", nil, nil, false
+	}
+	if w, signed, isInt := intWidth(sig.Results().At(0).Type()); !isInt || w != 64 || !signed || !isError(sig.Results().At(1).Type()) {
+		return "", nil, nil, false
+	}
+	return name, recv, args[0], true
+}
+
+// isHash says whether t has hash.Hash's methods; its Write "never returns
+// an error" (package hash).
+func isHash(t types.Type) bool {
+	ms := types.NewMethodSet(t)
+	if _, ptr := t.Underlying().(*types.Pointer); !ptr && !types.IsInterface(t) {
+		ms = types.NewMethodSet(types.NewPointer(t))
+	}
+	for _, m := range []string{"Write", "Sum", "Reset", "Size", "BlockSize"} {
+		if ms.Lookup(nil, m) == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// contractParts narrows the havoc results of an unmodelled call to what
+// its interface's documented contract allows (#85): a Read or Write
+// (io.Reader, io.Writer) returns 0 <= n <= len(p); a hash.Hash's Write and
+// WriteString take all of p and never fail. Outside the contract the
+// caller is right to panic (bufio's "negative read"), so a value there
+// only makes a spurious counterexample.
+func (t *fnState) contractParts(x ssa.Value, parts []ir.Var) ([]ir.Var, error) {
+	name, recv, p, ok := ioCall(x)
+	if !ok || len(parts) != 2 || (name != "Read" && name != "Write" && name != "WriteString") {
+		return parts, nil
+	}
+	pv, err := t.val(p)
+	if err != nil {
+		return nil, err
+	}
+	n := t.fresh()
+	t.emit(ir.Instr{Dst: n, Op: pick(isString(p.Type()), "strLen", "len"), Args: []ir.Var{pv}})
+	if name != "Read" && isHash(recv) {
+		nilErr := t.fresh()
+		t.emit(ir.Instr{Dst: nilErr, Op: ir.Const{V: ir.ErrVal{}}})
+		return []ir.Var{n, nilErr}, nil
+	}
+	if name == "WriteString" {
+		return parts, nil
+	}
+	one, n1, k := t.fresh(), t.fresh(), t.fresh()
+	t.emit(ir.Instr{Dst: one, Op: ir.Const{V: ir.IntVal{Width: 64, Bits: "1"}}})
+	t.emit(ir.Instr{Dst: n1, Op: ir.Simple("add"), Args: []ir.Var{n, one}})
+	t.emit(ir.Instr{Dst: k, Op: ir.Simple("urem"), Args: []ir.Var{parts[0], n1}})
+	return []ir.Var{k, parts[1]}, nil
 }
 
 // ---- types -----------------------------------------------------------------

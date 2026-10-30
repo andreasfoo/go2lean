@@ -68,7 +68,7 @@ does not enumerate havoc sites.
 
 A counterexample that read havoc says which reads its violation depends on
 (`relevant_havoc`, #84): the model reruns it once per read, that read
-changed (an integer one up and one down, a bool or an error the other way)
+changed (an integer one up, one down and zero, a bool or an error the other way)
 and the others kept, and a read whose change makes the violation go away
 is relevant. Strings and assumptions are fixed guesses and are not
 perturbed (`havoc_perturbed` counts the reads that were), and the
@@ -78,6 +78,15 @@ few relevant reads (in `creack/pty`, sarama, containerd's streaming proxy)
 and three had none, their violations coming from assumptions instead (a
 global taken as an empty slice, test options taken as zero, a stuck
 `xxhash.NewWithSeed`); both name what to model next (#85).
+
+Refining what those sites named, by hand (#85's first experiment), moved
+every case: each refinement removed its violation, and the search either
+found none or a new one further on, the next site to refine. Most sites
+were havoc outside a documented contract (a negative count from `Read`, a
+negative `Len`, a `rand.Perm` of the wrong length), so unmodelled calls
+with such a contract now keep their havoc within it, and a global holding
+`[]byte` of a constant is known; k045 then holds, k009 holds but with most
+runs stuck. The loop itself is not automated yet.
 
 So an `exhausted` result means: no counterexample on a small finite domain,
 havoc sites not enumerated, and the run may have taken an

@@ -146,6 +146,7 @@ memory).
 | call into a logging package (logrus, log, slog, zap) | results opaque, calls without results ignored | exact for the code under test |
 | `apijson.UnmarshalRoot` (the SDKs' `UnmarshalJSON`, unions' `As*` methods) | `jsonDecode` with the target type's description | as JSON decoding above |
 | call to an unmodelled function with a result | `havocInto`: scalars havoc; structs havoc field by field (an array field of up to 16 scalars element by element; another field the model cannot vary is its zero value, recorded as an assumption, #68); pointers to a fresh struct of havoc fields; slices of 0–3 zero elements (assumption); interfaces/maps/funcs unknown | havoc / assumption |
+| an unmodelled call with a documented contract (#85) | the havoc result kept within it: `Read`/`Write` counts 0..len(p) (`io.Reader`, `io.Writer`); a `hash.Hash`'s `Write`/`WriteString` takes all of p and returns nil; `Len()`/`Cap()` 0..16384; `runtime.Callers` 0..len(pc); `rand.Perm(n)` the identity permutation (assumption) | havoc within the contract |
 | call to an unmodelled function without a result | ignored | assumption (its effects are lost) |
 | a modelled callee that gets stuck | the call's fallback binds a havoc result | havoc |
 | recursion, loops | fuel-bounded | exact up to fuel (`outOfFuel` beyond) |
