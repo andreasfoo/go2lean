@@ -105,7 +105,9 @@ def advance (p : Prog) (or : Oracle) (h : Havoc Val) : List Frame → HState Val
               | (.ok v, s') => advance p or h (goto next (env.set! dst v) nargs) s' fuel
               | (.panic k, s') =>
                 if k.isStuck then
-                  let s'' := { s' with heap := s.heap, stuck := s.stuck }
+                  -- Forget where the callee got stuck too: a later stuck
+                  -- site would be reported at the callee's place (#71).
+                  let s'' := { s' with heap := s.heap, stuck := s.stuck, panicAt := s.panicAt }
                   advance p or h (goto fb env []) (s''.assume (stuckCallNote p f)) fuel
                 else (.panicked k, s')
               | (.outOfFuel, s') => (.outOfFuel, s')
@@ -496,6 +498,11 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
     let note := match gs[i]? >>= pendingSync with
       | some (op, args) => (s!"{repr op} on {repr args}".take 200).toString
       | none => "a go statement"
+    -- And where: the goroutine's innermost frame.
+    let place := match gs[i]? >>= (·.frames.head?) with
+      | some fr => some s!"@{fr.fn.name}#{fr.bid}"
+      | none => none
+    let s := if s.stuck.isNone then { s with panicAt := place <|> s.panicAt } else s
     (.error .modelStuck, { s with stuck := s.stuck <|> some note })
   | .error k => (.error k, s)
   | .ok (gs, s) =>

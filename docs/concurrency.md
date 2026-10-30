@@ -155,7 +155,10 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   as the calls on it are ignored; 17 of go-cache's tests that were never
   explored now run (docs/eval/conc.md, tool issue 5).
 - Where a run gets stuck is named by function and block, in the
-  concurrent machine too.
+  concurrent machine too. A synchronisation operation the machine cannot
+  fire (a lock on a pointer it does not know) names its own goroutine's
+  frame. A callee that got stuck earlier and was skipped leaves no place
+  behind (#71: k009's stuck lock was named after xxhash's `Sum64`).
 - **Setup snapshots (#87).** A concurrent sequence harness (a
   `go2lean:sequence` function with a `go` statement) often builds its
   object before its goroutines start. The frontend reorders the harness's
