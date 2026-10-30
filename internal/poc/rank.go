@@ -29,7 +29,8 @@ import (
 
 // rankOf ranks one confirmed verdict.
 func rankOf(p *prepared, callers *callerIndex) *contract.Rank {
-	if p.prop.Kind != contract.KindNoPanic {
+	// A hang, like a panic, is ranked by how plausible its input is.
+	if p.prop.Kind != contract.KindNoPanic && p.prop.Kind != contract.KindNoHang {
 		if p.prop.Source == "agent" {
 			return &contract.Rank{Tier: 3, Reason: "agent-written spec violated: check that the spec is right"}
 		}

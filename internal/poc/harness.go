@@ -416,7 +416,12 @@ func harnessFunc(t *contract.Target, p *contract.Property, cx *contract.Countere
 		specArgs := append(append([]string{}, specNames...), d.Rets...)
 		d.SpecCall = fmt.Sprintf("%s(%s)", p.Spec.GoFunc, strings.Join(specArgs, ", "))
 	}
-	if m := modelPanic(cx); m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak || m == contract.PanicDataRace || scheduleDependent(cx) {
+	if p.Kind == contract.KindNoHang {
+		// A loop the model never leaves: one run under the watchdog, which
+		// reports a call that has not returned after 2s (#86).
+		d.Conc, d.ConcRuns, d.PkgPath, d.NoLeak = true, 1, t.Package, true
+		d.Imports = append(d.Imports, `"runtime"`, `"strings"`, `"time"`)
+	} else if m := modelPanic(cx); m == contract.PanicDeadlock || m == contract.PanicGoroutineLeak || m == contract.PanicDataRace || scheduleDependent(cx) {
 		d.Conc, d.ConcRuns, d.PkgPath = true, concRuns, t.Package
 		if m != contract.PanicDeadlock && m != contract.PanicGoroutineLeak && m != contract.PanicDataRace {
 			// A panic or a false result under a concurrent schedule: Go's

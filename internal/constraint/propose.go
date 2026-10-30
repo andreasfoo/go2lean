@@ -48,6 +48,17 @@ func Propose(ws contract.Workspace, report *contract.ModelReport) ([]*contract.P
 			Frontend: report.Frontend,
 			Source:   "template",
 		})
+		if len(f.LoopHeaders) > 0 {
+			// A function with a loop of its own: does every run end?
+			out = append(out, &contract.Property{
+				ID:       PropertyID(contract.PackageKey(report.Package), key[f.Name], "nohang"),
+				Target:   contract.TargetID(report.Package, key[f.Name]),
+				Kind:     contract.KindNoHang,
+				NL:       fmt.Sprintf("%s returns on every input (no run comes back to a state)", f.Name),
+				Frontend: report.Frontend,
+				Source:   "template",
+			})
+		}
 	}
 	for _, f := range report.Funcs {
 		if f.SpecFor == "" || f.Status == contract.ModelRejected {

@@ -38,6 +38,9 @@ const (
 	// KindSequence: a `go2lean:sequence` spec returns true without
 	// panicking for every input sequence (bounded by the engines).
 	KindSequence PropertyKind = "sequence"
+	// KindNoHang: the target returns on every input; a run that comes back
+	// to a state it was in never does (#86).
+	KindNoHang PropertyKind = "no_hang"
 )
 
 // GoLean carries the two forms of a predicate: the Go expression M3 can
@@ -138,7 +141,7 @@ type HavocValue struct {
 
 // ModelOutput is what the Lean model returned on the counterexample.
 type ModelOutput struct {
-	Res   string    `json:"res"` // "ok" | "panic" | "out_of_fuel"
+	Res   string    `json:"res"` // "ok" | "panic" | "out_of_fuel" | "hang"
 	Value FlexValue `json:"value,omitempty"`
 	Panic PanicKind `json:"panic,omitempty"`
 }

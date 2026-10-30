@@ -433,6 +433,7 @@ cross-check results, and optionally a natural-language focus from the user.
 | `no_panic` | no panic under a precondition | `run f args ≠ .panic _` | mechanical: `defer recover()` |
 | `postcondition` | the result satisfies a predicate | derived from the spec function | the agent's `Spec(args…, ret) bool` |
 | `sequence` | a `go2lean:sequence` spec returns true for every input sequence | `run seq args = .ok (.bool true)` | the spec itself, called with the sequence |
+| `no_hang` | every run of a function with a loop ends (#86) | violated by a run that comes back to a state (`Hang.lasso`) | mechanical: the call under a 2s watchdog |
 | `equivalence` | `f ≡ g` | `run f = run g` | run both, compare |
 | `crosscheck` | GoSSA model ≡ LLVM model | core-level comparison | `go test` vs `tinygo test` |
 | `custom` | the agent writes Lean directly | agent-written | agent-written (mandatory) |
@@ -661,7 +662,7 @@ later.)
 
 | status | condition |
 |---|---|
-| `confirmed` | the real run violates the Go oracle in the way the kind requires (a panic of the expected category for `no_panic`; the spec returning false for `postcondition`) |
+| `confirmed` | the real run violates the Go oracle in the way the kind requires (a panic of the expected category for `no_panic`; the spec returning false for `postcondition`; the call not returning within 2s for `no_hang`) |
 | `spurious` | the real run satisfies the oracle |
 | `inconclusive` | compile failure, timeout, missing result line, a panic where the oracle could not be evaluated, or a panic category mismatch |
 

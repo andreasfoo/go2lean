@@ -25,7 +25,7 @@ func (p *Property) Validate() error {
 		errs = append(errs, errors.New("property: id and target are required"))
 	}
 	switch p.Kind {
-	case KindNoPanic, KindSequence:
+	case KindNoPanic, KindSequence, KindNoHang:
 	case KindPostcondition, KindEquivalence:
 		if p.Spec == nil || p.Spec.GoFunc == "" {
 			errs = append(errs, fmt.Errorf("property %s: kind %s requires spec.go_func", p.ID, p.Kind))
