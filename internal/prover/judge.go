@@ -170,16 +170,31 @@ func judgeProject(in JudgeInput) (*Certificate, error) {
 	if snap := filepath.Base(filepath.Dir(built)); snap != "core-"+coreSum[:16] {
 		return nil, fmt.Errorf("judge: the core snapshot %s does not hold the checkout's core sources (%s)", snap, coreSum[:16])
 	}
+	// A large model is split into parts (#45); the hash covers the parts
+	// in order, then the main module.
 	modelRel := strings.ReplaceAll(in.Report.LeanModule, ".", "/") + ".lean"
-	model, err := os.ReadFile(filepath.Join(in.WSLean, modelRel))
-	if err != nil {
-		return nil, err
+	var rels []string
+	for i := range in.Report.LeanParts {
+		rels = append(rels, strings.ReplaceAll(fmt.Sprintf("%s.Part%d", in.Report.LeanModule, i), ".", "/")+".lean")
+	}
+	rels = append(rels, modelRel)
+	var model []byte
+	texts := make([][]byte, len(rels))
+	for i, rel := range rels {
+		b, err := os.ReadFile(filepath.Join(in.WSLean, rel))
+		if err != nil {
+			return nil, err
+		}
+		texts[i] = b
+		model = append(model, b...)
 	}
 	if got := hash(model); got != in.Report.LeanSHA256 {
 		return nil, fmt.Errorf("judge: %s changed since the compile stage wrote it (sha256 %s, recorded %s)", modelRel, got, in.Report.LeanSHA256)
 	}
-	if err := writeFile(filepath.Join(core, modelRel), model); err != nil {
-		return nil, err
+	for i, rel := range rels {
+		if err := writeFile(filepath.Join(core, rel), texts[i]); err != nil {
+			return nil, err
+		}
 	}
 	toolchain, err := os.ReadFile(filepath.Join(core, "lean-toolchain"))
 	if err != nil {
