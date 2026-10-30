@@ -589,6 +589,8 @@ func Hunt(ws contract.Workspace, root string, prop *contract.Property, opts Sear
 		leanProp = map[string]any{"kind": "postcondition", "f": fid, "spec": sid}
 	case contract.KindSequence:
 		leanProp = map[string]any{"kind": "sequence", "f": fid}
+	case contract.KindNoHang:
+		leanProp = map[string]any{"kind": "noHang", "f": fid}
 	default:
 		return nil, "", fmt.Errorf("property kind %s has no search engine yet", prop.Kind)
 	}

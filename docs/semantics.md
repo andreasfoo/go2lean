@@ -81,6 +81,14 @@ counts these runs and names the loop (`@Words#1`). A run that had taken
 an under-approximation by then is marked `(under assumptions)`, since
 the loop may be the model's.
 
+Every function with a loop of its own also gets a `no_hang` property. A
+run that comes back to a state violates it: the input and the loop
+(`panic_at`) become a counterexample. The replay runs the call once
+under a 2s watchdog. The finding is confirmed if the call does not
+return, and spurious if it does (`returned_in_real_run`). A domain the
+exhaustive engine covers with no run out of fuel is a certificate that
+every input in it ends.
+
 Some hangs are not caught:
 - **Changing state.** A loop that changes a counter it never reads
   never repeats its state.
@@ -90,7 +98,9 @@ Some hangs are not caught:
   step, so a concurrent run's state never repeats.
 
 `examples/hang` holds two such bugs, a scan that stops advancing on a
-tab and a chain of links with a cycle, and a long loop that does end.
+tab and a chain of links with a cycle. Both are found and confirmed in
+Go. It also holds a long loop that does end, which gives no
+counterexample.
 
 ## 4. Operations by group
 

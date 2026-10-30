@@ -87,6 +87,13 @@ inductive Property where
   drives its target over an input event sequence, checks an invariant after
   each step and a condition at the end of the stream. -/
   | sequence (f : FuncId)
+  /-- `f` returns on every input (#86): no run comes back to a state it was
+  in (`Hang.lasso`, rerun when a run ends out of fuel). -/
+  | noHang (f : FuncId)
+
+def Property.isNoHang : Property → Bool
+  | .noHang _ => true
+  | _ => false
 
 inductive Outcome where
   | holds
@@ -96,6 +103,8 @@ inductive Outcome where
   /-- The spec returned false after reading havoc: unknown, not a refutation. -/
   | specUnknown
   | outOfFuel
+  /-- The run came back to a state at this loop: it never ends. -/
+  | hangs (site : String)
   deriving Repr
 
 -- Generation -----------------------------------------------------------------
@@ -519,6 +528,32 @@ def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
 
 -- Checking -------------------------------------------------------------------
 
+/-- For a trial that ran out of fuel: the loop its target never leaves
+(#86), found by rerunning it with the state watched at back edges. Only a
+sequential target: the concurrent machine draws a schedule choice at every
+step, so its states do not repeat. -/
+def lassoOf (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
+    (fuel : Nat) (heap : Heap Val) : Option Hang.Loop :=
+  let f := match prop with
+    | .noPanic f => f
+    | .postcondition f _ => f
+    | .sequence f => f
+    | .noHang f => f
+  match p.funcs[f]? with
+  | some fn => if fn.sync then none else Hang.lasso p or h f args fuel heap
+  | none => none
+
+/-- Out-of-fuel trials rerun to look for a loop: each rerun costs as much
+as the trial. -/
+def lassoLimit : Nat := 20
+
+/-- The report's fields on loops that never end. -/
+def loopFields (checked loops : Nat) (sites : List (String × Nat)) : List (String × Json) :=
+  if checked == 0 then [] else
+  [("loops_checked", checked), ("loops_forever", loops),
+   ("loop_sites", Json.mkObj ((sites.take 5).map fun (site, n) => (site, (n : Json))))]
+
+
 def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
     (fuel : Nat) (heap : Heap Val := #[]) (alts : List (Havoc Val) := []) (snap : Option GoConc.Snap := none) :
     Outcome × HState Val × Option Val :=
@@ -580,6 +615,15 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
     | (.ok v, s) => (.specPanicked .modelStuck, s, some v)
     | (.panic k, s) => (.panicked k, s, none)
     | (.outOfFuel, s) => (.outOfFuel, s, none)
+  | .noHang f =>
+    match GoConc.runAny p or h f args fuel heap with
+    | (.ok v, s) => (.holds, s, some v)
+    | (.panic k, s) => (.panicked k, s, none)
+    | (.outOfFuel, s) =>
+      -- The run ran out of fuel: a hang if it came back to a state.
+      match lassoOf p or h prop args fuel heap with
+      | some l => (.hangs l.site, { s with panicAt := some l.site }, none)
+      | none => (.outOfFuel, s, none)
 
 /-- Does the outcome refute the property? A stuck model never does. -/
 def Outcome.refutes : Property → Outcome → Bool
@@ -587,6 +631,7 @@ def Outcome.refutes : Property → Outcome → Bool
   | .postcondition .., .violated => true
   | .sequence _, .violated => true
   | .sequence _, .panicked k => !k.isStuck
+  | .noHang _, .hangs _ => true
   | _, _ => false
 
 /-- Other values a havoc read could have taken: an integer one up, one
@@ -760,6 +805,7 @@ def modelOutput : Outcome → Option Val → Json
   | .specPanicked k, v =>
     Json.mkObj [("res", "spec_panic"), ("panic", k.tag), ("value", (v.map renderVal).getD Json.null)]
   | .outOfFuel, _ => Json.mkObj [("res", "out_of_fuel")]
+  | .hangs site, _ => Json.mkObj [("res", "hang"), ("at", site)]
   | _, v => Json.mkObj [("res", "ok"), ("value", (v.map renderVal).getD Json.null)]
 
 def report (or : Oracle) (heap : Heap Val) (gens : List Gen) (args : List Val) (trial seed : Nat)
@@ -819,30 +865,6 @@ def havocReport (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property)
   if slow then (report or heap gens args trial seed o s ret p.siteOrigin).setObjVal! "relevance_skipped" true
   else report or heap gens args trial seed o s ret p.siteOrigin
     (relevantHavoc p or h prop args fuel heap s snap) (perturbable p s)
-
-/-- For a trial that ran out of fuel: the loop its target never leaves
-(#86), found by rerunning it with the state watched at back edges. Only a
-sequential target: the concurrent machine draws a schedule choice at every
-step, so its states do not repeat. -/
-def lassoOf (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
-    (fuel : Nat) (heap : Heap Val) : Option Hang.Loop :=
-  let f := match prop with
-    | .noPanic f => f
-    | .postcondition f _ => f
-    | .sequence f => f
-  match p.funcs[f]? with
-  | some fn => if fn.sync then none else Hang.lasso p or h f args fuel heap
-  | none => none
-
-/-- Out-of-fuel trials rerun to look for a loop: each rerun costs as much
-as the trial. -/
-def lassoLimit : Nat := 20
-
-/-- The report's fields on loops that never end. -/
-def loopFields (checked loops : Nat) (sites : List (String × Nat)) : List (String × Json) :=
-  if checked == 0 then [] else
-  [("loops_checked", checked), ("loops_forever", loops),
-   ("loop_sites", Json.mkObj ((sites.take 5).map fun (site, n) => (site, (n : Json))))]
 
 /-- A concurrent sequence harness's setup, run once for all trials (#87):
 the snapshot at its `setupEnd`, when the setup depends on nothing a trial
@@ -909,7 +931,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
         fallback := some (havocReport p or h prop args fuel heap snap slow gens trial seed o s ret)
     if let .outOfFuel := o then
       fuelOuts := fuelOuts + 1
-      if lassoChecked < lassoLimit then
+      if lassoChecked < lassoLimit && !prop.isNoHang then
         lassoChecked := lassoChecked + 1
         if let some l := lassoOf p or h prop args fuel heap then
           loops := loops + 1
@@ -1347,7 +1369,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
         fallback := some (havocReport p or h prop args fuel heap snap slow gens i 0 o s ret)
     if let .outOfFuel := o then
       fuelOuts := fuelOuts + 1
-      if lassoChecked < lassoLimit then
+      if lassoChecked < lassoLimit && !prop.isNoHang then
         lassoChecked := lassoChecked + 1
         if let some l := lassoOf p or h prop args fuel heap then
           loops := loops + 1

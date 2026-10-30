@@ -907,6 +907,22 @@ func judge(v *contract.Verdict, prop *contract.Property, cx *contract.Counterexa
 			diag.Reason = "panic_kind_mismatch"
 			diag.Notes = []string{fmt.Sprintf("expected %s, got %s", prop.ExpectedPanic, ClassifyPanic(r.Panic))}
 		}
+	case contract.KindNoHang:
+		// The model's run came back to a state: the real call should not
+		// return. One that does refutes the loop (an under-approximation
+		// the run took, or a model gap).
+		switch {
+		case r.Blocked:
+			v.Observed["blocked"] = "the call did not return within 2s"
+			v.Status, diag = contract.VerdictConfirmed, nil
+		case r.Panicked:
+			v.Status = contract.VerdictInconclusive
+			diag.Reason = "unexpected_panic"
+			diag.Notes = []string{"the model's run loops forever; the real run panicked: " + r.Panic}
+		default:
+			v.Status = contract.VerdictSpurious
+			diag.Reason = "returned_in_real_run"
+		}
 	case contract.KindSequence:
 		// The sequence spec is the target: a panic while it drives the
 		// code, or a false verdict, is the violation.

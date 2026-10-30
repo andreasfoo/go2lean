@@ -3,9 +3,11 @@ exhausted alias_account_withdraw_nopanic
 confirmed alias_account_withdraw_specaccountwithdrawnevergrows
 exhausted alias_deposit_nopanic
 confirmed alias_deposit_specdepositwithinlimit
+exhausted alias_fill_nohang
 exhausted alias_fill_nopanic
 confirmed alias_fill_specfilllast
 exhausted alias_swap_nopanic
+exhausted builder_join_nohang
 confirmed builder_join_nopanic
 exhausted builder_parse_nopanic
 exhausted mut=0/4 builder_parse_specparseemptyfails
@@ -19,28 +21,36 @@ proved checked_double_nopanic
 confirmed checked_double_specdoublehalves
 proved checked_half_nopanic
 exhausted checked_half_spechalfnoerror
+exhausted closures_anyof_nohang
 confirmed closures_anyof_nopanic
 exhausted closures_hasabove_nopanic
 exhausted mut=1/1 closures_hasabove_spechasabove
 exhausted closures_hasneg_nopanic
 exhausted mut=4/5 closures_hasneg_spechasneg
+exhausted closures_last_nohang
 confirmed closures_last_nopanic
 proved closures_negative_nopanic
+exhausted closures_total_nohang
 exhausted closures_total_nopanic
 exhausted mut=3/4 closures_total_spectotal
 exhausted conc_addbefore_nopanic
 confirmed conc_addinside_nopanic
 confirmed conc_addmore_nopanic
+exhausted conc_atomiccount_nohang
 exhausted conc_atomiccount_nopanic
 confirmed conc_bump_nopanic
+exhausted_havoc conc_bumpall_nohang
 exhausted_havoc conc_bumpall_nopanic
 exhausted conc_cache_get_nopanic
 exhausted conc_cache_getunlocked_nopanic
 exhausted_havoc conc_cache_put_nopanic
 exhausted conc_cancelled_nopanic
+exhausted conc_countatomic_nohang
 exhausted conc_countatomic_nopanic
 exhausted conc_counter_inc_nopanic
+exhausted conc_counthits_nohang
 confirmed conc_counthits_nopanic
+exhausted conc_drain_nohang
 confirmed conc_drain_nopanic
 confirmed conc_fillandpeek_nopanic
 exhausted conc_fillandread_nopanic
@@ -49,23 +59,28 @@ exhausted conc_firstbuffered_nopanic
 exhausted conc_gen_nopanic
 exhausted conc_handoff_nopanic
 exhausted conc_lazyclose_nopanic
+exhausted conc_lockedcount_nohang
 exhausted conc_lockedcount_nopanic
 confirmed conc_logwhileswapping_nopanic
 confirmed conc_lostwakeup_nopanic
 exhausted conc_newprefixsink_nopanic
 exhausted conc_newqueue_nopanic
+none conc_newtally_nohang
 confirmed conc_newtally_nopanic
 exhausted conc_nopsink_log_nopanic
 confirmed conc_notify_nopanic
+exhausted conc_once_nohang
 exhausted conc_once_nopanic
 confirmed conc_peekearly_nopanic
 exhausted conc_pipe_nopanic
+exhausted_havoc conc_poll_nohang
 exhausted_havoc conc_poll_nopanic
 exhausted conc_prefixsink_log_nopanic
 exhausted conc_publish_nopanic
 exhausted conc_queue_put_newqueue_nopanic
 confirmed conc_queue_take_newqueue_nopanic
 confirmed conc_queue_takeonce_newqueue_nopanic
+exhausted conc_racycount_nohang
 confirmed conc_racycount_nopanic
 confirmed conc_readwhilewriting_nopanic
 exhausted mut=0/1 conc_seqconctally_sequence
@@ -74,7 +89,9 @@ exhausted conc_snapshotatomic_nopanic
 confirmed conc_snapshotracy_nopanic
 exhausted conc_store_get_nopanic
 exhausted conc_store_sum_nopanic
+exhausted_havoc conc_sum_nohang
 exhausted_havoc conc_sum_nopanic
+exhausted conc_sumgen_nohang
 exhausted conc_sumgen_nopanic
 confirmed conc_tally_add_newtally_nopanic
 confirmed conc_tally_addracy_newtally_nopanic
@@ -87,7 +104,9 @@ confirmed divzero_avg_nopanic
 proved divzero_ratio_nopanic
 exhausted errs_apierror_error_nopanic
 exhausted_assuming errs_status_nopanic
+exhausted fuzzed_decode_nohang
 exhausted fuzzed_decode_nopanic
+exhausted fuzzed_encode_nohang
 exhausted fuzzed_encode_nopanic
 exhausted mut=5/24 fuzzed_go2leanfuzz_fuzzdecodeshort_sequence
 confirmed fuzzed_go2leanfuzz_fuzzroundtrip_sequence
@@ -99,8 +118,11 @@ exhausted globals_same_nopanic
 exhausted globals_same_specsamefieldwise
 exhausted_assuming globals_setgenfortest_nopanic
 confirmed globals_slot_nopanic
+confirmed hang_last_nohang
 none hang_last_nopanic
+none hang_triangle_nohang
 none hang_triangle_nopanic
+confirmed hang_words_nohang
 exhausted hang_words_nopanic
 exhausted iface_area_nopanic
 exhausted mut=2/2 iface_area_specareadispatch
@@ -113,10 +135,12 @@ exhausted iface_omitted_nopanic
 exhausted iface_opt_iszero_nopanic
 exhausted iface_pipe_keep_nopanic
 exhausted mut=0/5 iface_pipe_keep_specpipekeepunfiltered
+exhausted iface_queue_ints_nohang
 exhausted iface_queue_ints_nopanic
 exhausted iface_queue_push_nopanic
 exhausted iface_queue_push_specqueuepushlast
 exhausted iface_queue_pushname_nopanic
+exhausted iface_queue_sum_nohang
 confirmed iface_queue_sum_nopanic
 confirmed iface_ratio_nopanic
 exhausted iface_rect_area_nopanic
@@ -126,6 +150,7 @@ exhausted iface_sq_area_nopanic
 confirmed iface_unwrap_nopanic
 proved initvars_add_nopanic
 exhausted initvars_apply_nopanic
+exhausted initvars_band_nohang
 exhausted initvars_band_nopanic
 exhausted initvars_bandwidth_nopanic
 exhausted initvars_endsclause_nopanic
@@ -137,6 +162,7 @@ exhausted initvars_range_contains_newrange_nopanic
 confirmed initvars_slot_nopanic
 proved initvars_sub_nopanic
 exhausted initvars_unit_nopanic
+exhausted inputs_count_nohang
 exhausted inputs_count_nopanic
 exhausted mut=1/6 inputs_count_speccountbounded
 confirmed inputs_label_nopanic
@@ -144,9 +170,13 @@ confirmed inputs_role_nopanic
 exhausted inputs_text_nopanic
 exhausted mut=2/2 inputs_text_spectextshorter
 confirmed inputs_weight_nopanic
+exhausted invariants_allnonneg_nohang
 exhausted invariants_allnonneg_nopanic
+exhausted invariants_countpositive_nohang
 exhausted invariants_countpositive_nopanic
+exhausted invariants_fill_nohang
 exhausted invariants_fill_nopanic
+exhausted invariants_indexof_nohang
 exhausted invariants_indexof_nopanic
 exhausted jsonc_quote_nopanic
 confirmed jsonc_quote_specquoteplain
@@ -154,44 +184,56 @@ exhausted jsonc_reload_nopanic
 confirmed jsonc_reload_specreloadkeeps
 none jsonc_roundtrip_nopanic
 none mut=4/4 jsonc_roundtrip_specroundtripkeeps
+exhausted list_len_nohang
 exhausted list_len_nopanic
+exhausted list_sum_nohang
 exhausted list_sum_nopanic
 confirmed list_sum_specsumsingleton
+exhausted loops_bubblesort_nohang
 exhausted loops_bubblesort_nopanic
 exhausted mut=4/13 loops_bubblesort_specbubblesortsorted
 proved loops_clamp_nopanic
 proved mut=4/4 loops_clamp_specclamp
+none loops_clampall_nohang
 none loops_clampall_nopanic
 none mut=6/7 loops_clampall_specclampall
+exhausted loops_hasduplicate_nohang
 exhausted loops_hasduplicate_nopanic
 confirmed magic_decode_nopanic
 exhausted maps_counter_add_newcounter_nopanic
 confirmed maps_counter_share_newcounter_nopanic
+exhausted maps_distinct_nohang
 exhausted maps_distinct_nopanic
 exhausted mut=4/5 maps_distinct_specdistinctbounded
 exhausted maps_newcounter_nopanic
 exhausted maps_newregistry_nopanic
+exhausted maps_pick_nohang
 confirmed maps_pick_nopanic
 exhausted maps_registry_put_newregistry_nopanic
+exhausted maps_sum_nohang
 exhausted maps_sum_nopanic
 exhausted mut=2/8 maps_sum_specsumnonnegative
 proved oob_clamp_nopanic
 proved mut=4/4 oob_clamp_specclamp
 exhausted mut=2/4 oob_clamp_specclampidempotent
 proved mut=4/4 oob_clamp_specclampidentity
+exhausted oob_last_nohang
 confirmed oob_last_nopanic
 none mut=0/7 oob_last_speclastempty
 none mut=6/7 oob_last_speclastislast
 confirmed opaque_cache_share_nopanic
 exhausted opaque_describe_nopanic
 confirmed opaque_lookup_nopanic
+exhausted overflow_sum_nohang
 exhausted overflow_sum_nopanic
 confirmed overflow_sum_specsum
 exhausted portable_budget_nopanic
 exhausted portable_count_nopanic
 exhausted_havoc portable_digit_nopanic
+exhausted portable_drain_nohang
 confirmed portable_drain_nopanic
 confirmed portable_enter_nopanic
+exhausted portable_fill_nohang
 exhausted portable_fill_nopanic
 confirmed portable_finish_nopanic
 exhausted portable_first_nopanic
@@ -216,22 +258,30 @@ confirmed portable_pick_nopanic
 confirmed portable_port_nopanic
 exhausted portable_release_nopanic
 confirmed portable_shrink_nopanic
+exhausted portable_sumfirst_nohang
 confirmed portable_sumfirst_nopanic
 confirmed portable_tokens_nopanic
 confirmed portable_unit_nopanic
 confirmed portable_url_nopanic
+none proofs_countup_nohang
 none proofs_countup_nopanic
+exhausted proofs_insertionsort_nohang
 exhausted proofs_insertionsort_nopanic
 proved proofs_max2_nopanic
 exhausted proofs_max3_nopanic
+exhausted proofs_max_nohang
 exhausted proofs_max_nopanic
+none recs_dedup_nohang
 confirmed recs_dedup_nopanic
 confirmed recs_first_nopanic
+exhausted recs_longest_nohang
 confirmed recs_longest_nopanic
+none recs_names_nohang
 none recs_names_nopanic
 none mut=2/3 recs_names_specnames
 exhausted recs_push_nopanic
 exhausted recs_push_specpush
+none recs_total_nohang
 none recs_total_nopanic
 none mut=3/4 recs_total_spectotal
 none replaydep_dispatcher_close_nopanic
@@ -241,13 +291,16 @@ exhausted_havoc replaydep_queue_queue_push_nopanic
 confirmed replaydep_writewhileclosing_nopanic
 confirmed runes_counter_bump_nopanic
 confirmed runes_head_nopanic
+exhausted runes_initials_nohang
 exhausted runes_initials_nopanic
+exhausted runes_reverse_nohang
 exhausted runes_reverse_nopanic
 exhausted mut=0/5 runes_reverse_specreverse
 none stream_converter_finish_nopanic
 none stream_converter_process_nopanic
 exhausted mut=6/14 stream_seqbounded_sequence
 confirmed stream_seqcomplete_sequence
+exhausted strloops_countbyte_nohang
 exhausted strloops_countbyte_nopanic
 exhausted strloops_firstbyte_nopanic
 exhausted strs_before_nopanic
