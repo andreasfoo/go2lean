@@ -156,8 +156,9 @@ the same concurrent harness): go2lean found **6**, Go's fuzzer under
 `-race` found **22**, and go2lean found none the fuzzer missed. go2lean's
 misses were gaps in its model of the code around the bug (sockets, atomics,
 standard-library calls it did not translate, runs out of fuel). Rerun after
-fixing the first of them, go2lean found **10**
+fixing the first of them, go2lean found **10**, and k016 since
 ([details](docs/eval/conc-recent.md#rerun-after-review-2-2026-10-29),
+[k016](docs/eval/conc-recent.md#k016-found-87-2026-10-30),
 [roadmap](https://github.com/andreasfoo/go2lean/issues/53)).
 
 [Validation and regression cases](docs/validation.md) ·

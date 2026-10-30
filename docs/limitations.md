@@ -72,7 +72,9 @@ changed (an integer one up, one down and zero, a bool or an error the other way)
 and the others kept, and a read whose change makes the violation go away
 is relevant. Strings and assumptions are fixed guesses and are not
 perturbed (`havoc_perturbed` counts the reads that were), and the
-schedule's draws are left to the replay. An empty set is evidence only when
+schedule's draws are left to the replay. A run that took more than 5 s is
+not rerun per read (`relevance_skipped`): evaluation 7's k016 takes about
+100 s a run and reads dozens. An empty set is evidence only when
 the run took no assumption: on evaluation 7's spurious cases, three had a
 few relevant reads (in `creack/pty`, sarama, containerd's streaming proxy)
 and three had none, their violations coming from assumptions instead (a

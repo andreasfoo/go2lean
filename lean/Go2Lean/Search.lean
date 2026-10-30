@@ -797,6 +797,28 @@ def specExit (prop : Property) (o : Outcome) (s : HState Val) : Option String :=
     s.exit.map fun (_, b) => toString b
   | _, _ => none
 
+/-- How long one run may take (ms) for its counterexample to get
+`relevantHavoc`, which reruns it once or twice per havoc read: an
+evaluation 7 harness (k016) takes about 100 s a run and reads dozens. -/
+def relevanceMs : Nat := 5000
+
+/-- `check`, timed: whether it took longer than `relevanceMs`. -/
+def timedCheck (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
+    (fuel : Nat) (heap : Heap Val) (alts : List (Havoc Val)) (snap : Option GoConc.Snap) :
+    IO (Outcome × HState Val × Option Val × Bool) := do
+  let t0 ← IO.monoMsNow
+  let (o, s, ret) ← IO.lazyPure fun _ => check p or h prop args fuel heap alts snap
+  return (o, s, ret, (← IO.monoMsNow) - t0 > relevanceMs)
+
+/-- A havoc-dependent counterexample's report, with the reads it depends
+on unless its run was too slow to rerun per read (`relevance_skipped`). -/
+def havocReport (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
+    (fuel : Nat) (heap : Heap Val) (snap : Option GoConc.Snap) (slow : Bool)
+    (gens : List Gen) (trial seed : Nat) (o : Outcome) (s : HState Val) (ret : Option Val) : Json :=
+  if slow then (report or heap gens args trial seed o s ret p.siteOrigin).setObjVal! "relevance_skipped" true
+  else report or heap gens args trial seed o s ret p.siteOrigin
+    (relevantHavoc p or h prop args fuel heap s snap) (perturbable p s)
+
 /-- A concurrent sequence harness's setup, run once for all trials (#87):
 the snapshot at its `setupEnd`, when the setup depends on nothing a trial
 draws. -/
@@ -845,7 +867,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       IO.eprintln (Json.mkObj [("trial", trial), ("objects", Json.mkObj (objectsOf heap gens args)),
         ("inputs", Json.mkObj ((gens.zip args).flatMap fun (g, v) => flatten g v))]).compress
     let alts := [havocOf (tseed + 7919) p.havocWidths, havocOf (tseed + 104729) p.havocWidths]
-    let (o, s, ret) := check p or h prop args fuel heap alts snap
+    let (o, s, ret, slow) ← timedCheck p or h prop args fuel heap alts snap
     if trace then IO.eprintln s!"done trial {trial}: {repr o}"
     if o.refutes prop then
       -- Report the initial heap: what the inputs looked like before the run.
@@ -856,8 +878,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
         IO.println (report or heap gens args trial seed o s ret p.siteOrigin).compress
         return
       else if fallback.isNone then
-        fallback := some (report or heap gens args trial seed o s ret p.siteOrigin
-          (relevantHavoc p or h prop args fuel heap s snap) (perturbable p s))
+        fallback := some (havocReport p or h prop args fuel heap snap slow gens trial seed o s ret)
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := bump exits b
     if o.moot prop then
@@ -1279,14 +1300,13 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
         ("domain", n), ("limit", limit), ("checked", (i : Nat))]).compress
       return
     let alts := [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
-    let (o, s, ret) := check p or h prop args fuel heap alts snap
+    let (o, s, ret, slow) ← timedCheck p or h prop args fuel heap alts snap
     if o.refutes prop then
       if s.log.size == 0 then
         IO.println (report or heap gens args i 0 o s ret p.siteOrigin).compress
         return
       else if fallback.isNone then
-        fallback := some (report or heap gens args i 0 o s ret p.siteOrigin
-          (relevantHavoc p or h prop args fuel heap s snap) (perturbable p s))
+        fallback := some (havocReport p or h prop args fuel heap snap slow gens i 0 o s ret)
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
@@ -1309,15 +1329,14 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
             complete := false
             break
           let hs := forceSched h site pf
-          let (o', s', ret') := check p or hs prop args fuel heap (alts.map (forceSched · site pf)) snap
+          let (o', s', ret', slow') ← timedCheck p or hs prop args fuel heap (alts.map (forceSched · site pf)) snap
           runs := runs + 1
           if o'.refutes prop then
             if s'.log.all (·.1 == site) then
               IO.println (report or heap gens args i 0 o' s' ret' p.siteOrigin).compress
               return
             else if fallback.isNone then
-              fallback := some (report or heap gens args i 0 o' s' ret' p.siteOrigin
-                (relevantHavoc p or hs prop args fuel heap s' snap) (perturbable p s'))
+              fallback := some (havocReport p or hs prop args fuel heap snap slow' gens i 0 o' s' ret')
           -- A schedule that spins one goroutine out of fuel is one Go's
           -- scheduler does not keep taking: no finding, but no certificate.
           if let .outOfFuel := o' then complete := false
