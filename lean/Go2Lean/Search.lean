@@ -470,8 +470,8 @@ where
     (acc.reverse, g, heap)
 
 def genArgs (pf : Profile) (extra : List Nat) (g : StdGen) (gens : List Gen) (pool : List (List Nat) := [])
-    (table : TypeTable := #[]) (allowNil : Bool := true) : List Val × StdGen × Heap Val :=
-  genVal.genList pf extra g #[] pool table topDepth allowNil gens
+    (table : TypeTable := #[]) (allowNil : Bool := true) (base : Heap Val := #[]) : List Val × StdGen × Heap Val :=
+  genVal.genList pf extra g base pool table topDepth allowNil gens
 
 /-- Memory contents derived from a per-trial seed and profile. -/
 def oracleOf (pf : Profile) (extra : List Nat) (seed : Nat) : Oracle :=
@@ -498,7 +498,8 @@ def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
 -- Checking -------------------------------------------------------------------
 
 def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
-    (fuel : Nat) (heap : Heap Val := #[]) (alts : List (Havoc Val) := []) : Outcome × HState Val × Option Val :=
+    (fuel : Nat) (heap : Heap Val := #[]) (alts : List (Havoc Val) := []) (snap : Option GoConc.Snap := none) :
+    Outcome × HState Val × Option Val :=
   match prop with
   | .noPanic f =>
     match GoConc.runAny p or h f args fuel heap with
@@ -544,13 +545,13 @@ def check (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args
     | (.panic k, s) => (.panicked k, s, none)
     | (.outOfFuel, s) => (.outOfFuel, s, none)
   | .sequence f =>
-    match GoConc.runAny p or h f args fuel heap with
+    match GoConc.runAny p or h f args fuel heap snap with
     | (.ok (.bool true), s) => (.holds, s, some (.bool true))
     | (.ok (.bool false), s) =>
       -- A false verdict that read havoc stands only if every other havoc
       -- assignment gives it too.
       let decided := s.log.isEmpty || (!alts.isEmpty && alts.all fun h' =>
-        match GoConc.runAny p or h' f args fuel heap with
+        match GoConc.runAny p or h' f args fuel heap snap with
         | (.ok (.bool false), _) => true
         | _ => false)
       if decided then (.violated, s, some (.bool false)) else (.specUnknown, s, some (.bool false))
@@ -582,13 +583,13 @@ the refutation go away is relevant. The schedule's draws are left alone
 (schedule dependence is judged by the replay). Interpolation in CPAchecker's
 value analysis, done by re-execution instead of a solver. -/
 def relevantHavoc (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
-    (fuel : Nat) (heap : Heap Val) (s : HState Val) : List (Nat × Nat) :=
+    (fuel : Nat) (heap : Heap Val) (s : HState Val) (snap : Option GoConc.Snap := none) : List (Nat × Nat) :=
   let reads := s.log.toList.filter fun (site, _, _) => some site != p.schedSite
   reads.filterMap fun (site, iter, v) =>
     let gone := (havocAlternatives v).any fun v' =>
       let h' : Havoc Val := fun st it => if st == site && it == iter then v' else h st it
       -- The same assignment as `alts`: the rerun's verdict is its own.
-      let (o', _, _) := check p or h' prop args fuel heap [h']
+      let (o', _, _) := check p or h' prop args fuel heap [h'] snap
       !o'.refutes prop
     if gone then some (site, iter) else none
 
@@ -775,6 +776,18 @@ def specExit (prop : Property) (o : Outcome) (s : HState Val) : Option String :=
     s.exit.map fun (_, b) => toString b
   | _, _ => none
 
+/-- A concurrent sequence harness's setup, run once for all trials (#87):
+the snapshot at its `setupEnd`, when the setup depends on nothing a trial
+draws. -/
+def setupSnap (p : GoSSA.Prog) (prop : Property) (extra : List Nat) (fuel : Nat) : Option GoConc.Snap × Json :=
+  match prop with
+  | .sequence f =>
+    if !GoConc.hasSetupEnd p f then (none, false) else
+    match GoConc.captureSetup p (oracleOf .mixed extra 0) (havocOf 0 p.havocWidths) f fuel with
+    | .ok snap => (some snap, true)
+    | .error why => (none, why)
+  | _ => (none, false)
+
 /-- Run `trials` random trials; print one JSON line, `{"found": false, ...}` if nothing refutes. -/
 def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     (seed trials fuel : Nat) (strs : List String := []) (table : TypeTable := #[])
@@ -788,6 +801,8 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let mut exits : List (String × Nat) := []
   let trace := (← IO.getEnv "GO2LEAN_TRACE").isSome
   let start ← IO.monoMsNow
+  let (snap, snapNote) := setupSnap p prop extra fuel
+  let base := (snap.map (·.s.heap)).getD #[]
   let mut done := 0
   for trial in [0:trials] do
     -- A wall-clock budget (0: none) bounds a property whose inputs are
@@ -801,7 +816,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     let tseed := (mixHash (UInt64.ofNat seed) (UInt64.ofNat trial)).toNat
     let or := oracleOf pf extra tseed
     let h := havocOf tseed p.havocWidths
-    let (args, g', heap) := genArgs pf extra g gens pool table allowNil
+    let (args, g', heap) := genArgs pf extra g gens pool table allowNil base
     g := g'
     if trace then
       -- GO2LEAN_TRACE: every input before it runs, for crashes that leave
@@ -809,7 +824,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       IO.eprintln (Json.mkObj [("trial", trial), ("objects", Json.mkObj (objectsOf heap gens args)),
         ("inputs", Json.mkObj ((gens.zip args).flatMap fun (g, v) => flatten g v))]).compress
     let alts := [havocOf (tseed + 7919) p.havocWidths, havocOf (tseed + 104729) p.havocWidths]
-    let (o, s, ret) := check p or h prop args fuel heap alts
+    let (o, s, ret) := check p or h prop args fuel heap alts snap
     if trace then IO.eprintln s!"done trial {trial}: {repr o}"
     if o.refutes prop then
       -- Report the initial heap: what the inputs looked like before the run.
@@ -821,7 +836,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
         return
       else if fallback.isNone then
         fallback := some (report or heap gens args trial seed o s ret p.siteOrigin
-          (relevantHavoc p or h prop args fuel heap s) (perturbable p s))
+          (relevantHavoc p or h prop args fuel heap s snap) (perturbable p s))
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := bump exits b
     if o.moot prop then
@@ -837,7 +852,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     return
   let top := (stuckSites.toArray.qsort (fun a b => a.2 > b.2)).toList.take 5
   IO.println (Json.mkObj [("found", false), ("trials", done), ("out_of_fuel", fuelOuts),
-    ("moot", moots), ("budget_hit", decide (done < trials)),
+    ("moot", moots), ("budget_hit", decide (done < trials)), ("setup_snapshot", snapNote),
     ("stuck_sites", Json.mkObj (top.map fun (site, n) => (site, (n : Json)))),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 where
@@ -1221,6 +1236,8 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     return
   let h := havocOf 0 p.havocWidths
   let or := oracleOf .mixed extra 0
+  let (snap, snapNote) := setupSnap p prop extra fuel
+  let base := (snap.map (·.s.heap)).getD #[]
   let mut fuelOuts := 0
   let mut moots := 0
   let mut havocRuns := 0
@@ -1234,21 +1251,21 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut exits : List (String × Nat) := []
   let start ← IO.monoMsNow
   for build in enumArgs extra maxLen pool gens table allowNil do
-    let (args, heap) := build #[]
+    let (args, heap) := build base
     if budgetMs > 0 && (← IO.monoMsNow) - start > budgetMs then
       -- Out of time: no certificate, but say how far it got.
       IO.println (Json.mkObj [("found", false), ("exhaustive", false), ("reason", "budget"),
         ("domain", n), ("limit", limit), ("checked", (i : Nat))]).compress
       return
     let alts := [havocOf 1 p.havocWidths, havocOf 2 p.havocWidths]
-    let (o, s, ret) := check p or h prop args fuel heap alts
+    let (o, s, ret) := check p or h prop args fuel heap alts snap
     if o.refutes prop then
       if s.log.size == 0 then
         IO.println (report or heap gens args i 0 o s ret p.siteOrigin).compress
         return
       else if fallback.isNone then
         fallback := some (report or heap gens args i 0 o s ret p.siteOrigin
-          (relevantHavoc p or h prop args fuel heap s) (perturbable p s))
+          (relevantHavoc p or h prop args fuel heap s snap) (perturbable p s))
     if let .outOfFuel := o then fuelOuts := fuelOuts + 1
     if let some b := specExit prop o s then exits := run.bump exits b
     if o.moot prop then moots := moots + 1
@@ -1271,7 +1288,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
             complete := false
             break
           let hs := forceSched h site pf
-          let (o', s', ret') := check p or hs prop args fuel heap (alts.map (forceSched · site pf))
+          let (o', s', ret') := check p or hs prop args fuel heap (alts.map (forceSched · site pf)) snap
           runs := runs + 1
           if o'.refutes prop then
             if s'.log.all (·.1 == site) then
@@ -1279,7 +1296,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
               return
             else if fallback.isNone then
               fallback := some (report or heap gens args i 0 o' s' ret' p.siteOrigin
-                (relevantHavoc p or hs prop args fuel heap s') (perturbable p s'))
+                (relevantHavoc p or hs prop args fuel heap s' snap) (perturbable p s'))
           -- A schedule that spins one goroutine out of fuel is one Go's
           -- scheduler does not keep taking: no finding, but no certificate.
           if let .outOfFuel := o' then complete := false
@@ -1300,7 +1317,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   IO.println (Json.mkObj [("found", false), ("exhaustive", fuelOuts == 0 && moots == 0), ("domain", n),
     ("out_of_fuel", fuelOuts), ("moot", moots), ("max_len", maxLen),
     ("havoc_sites", p.havocWidths.size), ("havoc_read", havocRuns),
-    ("schedules", schedRuns), ("schedules_sampled", schedSampled),
+    ("schedules", schedRuns), ("schedules_sampled", schedSampled), ("setup_snapshot", snapNote),
     ("assumptions", Json.arr (assumed.map Json.str)),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))]).compress
 

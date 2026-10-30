@@ -156,6 +156,37 @@ projects offer for it (Goose's channel model, Veil, Iris-Lean) is in
   explored now run (docs/eval/conc.md, tool issue 5).
 - Where a run gets stuck is named by function and block, in the
   concurrent machine too.
+- **Setup snapshots (#87).** A concurrent sequence harness (a
+  `go2lean:sequence` function with a `go` statement) often builds its
+  object before its goroutines start. The frontend reorders the harness's
+  entry block so that everything before the first read of a parameter or
+  the first `go` statement comes first, then ends it with a `setupEnd`
+  sync op.
+  - **Captured parameters.** A store of a parameter into a local cell
+    moves after the cut; a read of that cell counts as a read of the
+    parameter.
+  - **The marker.** `setupEnd` completes at once, draws no schedule choice
+    and is not in the trace the replay follows.
+  - **The snapshot.** The search runs the setup once, on placeholder
+    arguments and an empty heap, and snapshots the machine at `setupEnd`
+    with the main goroutine still alone. Every trial and every schedule
+    the exhaustive engine enumerates then resumes from that snapshot, with
+    its arguments in the entry frame and its input objects allocated on
+    top of the snapshot's heap.
+  - **What changes for a trial.** Its setup's havoc reads, if any, take
+    the same values in every trial (one draw, recorded as an assumption);
+    relevance cannot perturb them.
+  - **When there is no snapshot.** If the setup chose between schedules,
+    got stuck, or did not reach `setupEnd` alone, there is no snapshot and
+    each trial runs from the start. The search's JSON says which
+    (`setup_snapshot`).
+  - **Effect.** Evaluation 7's k016 (prometheus' agent DB, three
+    16384-element stripe arrays) took 28 s per trial, nearly all of it
+    setup. With the snapshot, 200 trials take 43 s (the setup about 38 s
+    of it), and 5000 take 240 s. The bug was still not found: it needs two
+    appenders with equal labels and a narrow interleaving, which wants
+    schedules enumerated for a fixed input.
+  - **Example.** `examples/conc/setup.go`.
 
 ## GoKer
 

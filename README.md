@@ -45,7 +45,8 @@ Lean finds the inputs; `go test` is the judge.
 - **Concurrency bugs** — deadlocks, goroutine leaks and data races, found in
   the model and confirmed by `go test` (with `-race`, and the model's
   schedule replayed when Go's scheduler does not take it); for small
-  configurations, a certificate that none occurs under any schedule.
+  configurations, a certificate that none occurs under any schedule. A
+  harness's setup runs once, not in every trial and schedule.
 - **Functional proofs** — `go2lean prove` states a function's contract from a
   postcondition (in Lean, or one of your Go specs) and proves it for every
   input and every value of each type the model does not know, with the
