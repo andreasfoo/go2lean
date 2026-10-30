@@ -41,6 +41,7 @@ memory images.
 | `float32/64`, `complex64/128` | opaque (`.unit`) | havoc: arithmetic, comparisons and conversions |
 | `chan T` | `.ptr r []` to a heap object `.structv [cap, .arr buffer, .bool closed, zero]`; nil is `.ptr 0 []` or `.opaqueNil` | exact (§6) |
 | `unsafe.Pointer` | opaque | havoc |
+| `unsafe.String(unsafe.SliceData(b), len(b))`, `unsafe.Slice(unsafe.StringData(s), len(s))` (zero-copy views, prometheus' `yoloString`) | `string(b)`, `[]byte(s)` | exact: package `unsafe` forbids writing the bytes while the view is in use (#87) |
 
 Integers are bitvectors of the Go width, not mathematical integers: the
 `int` of a 64-bit target is 64 bits, overflow wraps.
@@ -348,6 +349,7 @@ writes the same value as a Go literal.
 | maps | nil (with `-nil-inputs`) or up to `maxlen` entries, keys mostly from the strings the call tree uses as map keys |
 | `interface{}` | nil, string, bool, int, `map[string]interface{}`, `[]interface{}`, and (at the top level) up to six concrete types the function's call tree asserts empty interfaces to (`x.(int64)`, a type switch's cases), so that every case can be taken; the PoC writes them typed (`uint8(0)`) |
 | interfaces with methods, funcs, channels, floats | their zero value (nil, 0) |
+| two parameters of one kind (integers of one width and sign, strings) | one trial in four, one takes the other's value: equal arguments are an edge case independent draws almost never reach for strings (two appends of one label set, #87) |
 | `context.Context` | `context.Background()` |
 | unexported fields of another package's struct | their zero value (a test cannot set them) |
 | SDK response types (with JSON metadata) | generated field by field plus a raw JSON object of one or two members keyed by strings the call tree compares with `==`, then written as the JSON document the harness builds for the value and decoded by the JSON model: typed fields, `RawJSON()`, per-member `respjson.Field` and `ExtraFields` agree as decoding makes them; the harness decodes the same document |
