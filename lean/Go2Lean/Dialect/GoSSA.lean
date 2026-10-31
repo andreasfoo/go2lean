@@ -1,5 +1,6 @@
 import Go2Lean.SSA.Core
 import Lean.Data.Json
+import Lean.Meta.Eqns
 
 /-!
 # GoSSA dialect
@@ -12,6 +13,9 @@ Semantics follow the Go specification, not LLVM: integer division by zero
 panics, `MinInt / -1` wraps, shifts by at least the width give 0 (or the sign
 fill), negative signed shift counts panic.
 -/
+
+-- The equation lemmas below are made under this limit (#94).
+set_option maxHeartbeats 4000000
 namespace Go2Lean.GoSSA
 
 open Go2Lean.SSA
@@ -3217,5 +3221,14 @@ abbrev Prog := SSA.Prog Op
 abbrev Func := SSA.Func Op
 abbrev Block := SSA.Block Op
 abbrev Instr := SSA.Instr Op
+
+/-! The equation lemmas of the operations' semantics, made here (#94).
+`simp` asks for them when a proof unfolds the dialect. A lemma made later,
+in the module that asks, is made under that module's default heartbeat
+limit (200000), not under the options of the proof, and `denotePure`'s
+lemmas no longer fit in it. Made here, under this file's limit, they are
+part of this module. -/
+open Lean Meta in
+run_meta for d in [``denotePure, ``denote, ``denoteConc] do discard <| getEqnsFor? d
 
 end Go2Lean.GoSSA
