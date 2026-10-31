@@ -29,6 +29,14 @@ value the model does not know, and every run that ends. They are judged
 by Lean's comparator against go2lean's own statement, in a sandbox, with a
 certificate.
 
+CI's regression gate runs without the proofs (`PROVE=0`), so a change that
+breaks a proof is caught only by a local `scripts/regress.sh` run with
+`PROVE=1`. #94 went unnoticed this way. One more operation made the dialect's
+semantics too large for the equation lemmas `simp` needs. Lean makes these
+lemmas under the default heartbeat limit of the module that asks for them,
+not under the proof's options. `GoSSA.lean` now makes them itself, under
+its own limit.
+
 The hand proofs (`lean/Proofs/Functional.lean`) are the agent's worked
 examples. The proofs workflow (run by hand) checks them by `#print axioms`,
 not by the judge.
