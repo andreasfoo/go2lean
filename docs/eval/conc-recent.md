@@ -377,3 +377,23 @@ arguments #91, the relevance time guard #92). Scored as the rerun above.
   the rerun's build fit. It gave no counterexample either time (#45).
 
 Time: 2.1 h for the 25 cases, against 1.9 h for the rerun.
+
+## Hang detection on the fuel cases (#86, 2026-10-31)
+
+Arm A's out-of-fuel runs, rerun with the state watched for a cycle (#96,
+#98), concurrent runs included (#100): main at `f62721d`, the same
+harnesses and budget, by `run15all.sh`.
+
+- **Fixed earlier.** k010, k038 and k044, the fuel cases of the first run,
+  no longer run out of fuel: k010 and k038 give a counterexample, k044
+  none, as in the rerun at main above.
+- **Still out of fuel, no cycle.** k009 (434 of 2000 trials), k016 (2000)
+  and k042 (2000). None of 20 out-of-fuel runs per case comes back to a
+  state. k016 needs more fuel (above); k009 is stuck at otel's registry
+  (#71). Why k042, prometheus' out-of-order compaction deadlock, runs
+  out of fuel is not yet known. Its state may keep growing. Or one
+  goroutine step may run out of its own fuel, and the rerun only watches
+  the states between scheduling points.
+
+So hang detection finds nothing in this evaluation. Its findings are
+`examples/hang`'s loops and livelock, confirmed in Go.
