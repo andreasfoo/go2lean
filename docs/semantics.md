@@ -111,6 +111,14 @@ in between can be made again forever. It is reported as a livelock
 A spin-wait for another goroutine (`for !ready {}` under a lock) under a
 schedule that never runs that goroutine is unfair and is not reported.
 
+The hunt summary also says how many out-of-fuel runs ran out inside one
+goroutine step, and where the most common such step started. A step is
+a goroutine's code between two scheduling points. Example:
+`100 of them inside one goroutine step (most from
+@SeqConcOOOCompactionHead#8)`. Such a run either spins without
+synchronising or does more sequential work than the fuel allows, such as
+an expensive setup.
+
 `examples/hang` holds two such bugs, a scan that stops advancing on a
 tab and a chain of links with a cycle. Both are found and confirmed in
 Go. It also holds a long loop that does end, which gives no
