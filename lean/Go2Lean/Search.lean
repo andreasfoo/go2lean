@@ -533,14 +533,14 @@ def havocOf (seed : Nat) (widths : Array Nat) : Havoc Val := fun site iter =>
 sequential target: the concurrent machine draws a schedule choice at every
 step, so its states do not repeat. -/
 def lassoOf (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (args : List Val)
-    (fuel : Nat) (heap : Heap Val) : Option Hang.Loop :=
+    (fuel : Nat) (heap : Heap Val) (snap : Option GoConc.Snap := none) : Option Hang.Loop :=
   let f := match prop with
     | .noPanic f => f
     | .postcondition f _ => f
     | .sequence f => f
     | .noHang f => f
   match p.funcs[f]? with
-  | some fn => if fn.sync then none else Hang.lasso p or h f args fuel heap
+  | some fn => if fn.sync then Hang.lassoConc p or h f args fuel heap snap else Hang.lasso p or h f args fuel heap
   | none => none
 
 /-- Out-of-fuel trials rerun to look for a loop: each rerun costs as much
@@ -933,7 +933,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
       fuelOuts := fuelOuts + 1
       if lassoChecked < lassoLimit && !prop.isNoHang then
         lassoChecked := lassoChecked + 1
-        if let some l := lassoOf p or h prop args fuel heap then
+        if let some l := lassoOf p or h prop args fuel heap snap then
           loops := loops + 1
           loopSites := bump loopSites (if l.assumed then l.site ++ " (under assumptions)" else l.site)
     if let some b := specExit prop o s then exits := bump exits b
@@ -1371,7 +1371,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
       fuelOuts := fuelOuts + 1
       if lassoChecked < lassoLimit && !prop.isNoHang then
         lassoChecked := lassoChecked + 1
-        if let some l := lassoOf p or h prop args fuel heap then
+        if let some l := lassoOf p or h prop args fuel heap snap then
           loops := loops + 1
           loopSites := run.bump loopSites (if l.assumed then l.site ++ " (under assumptions)" else l.site)
     if let some b := specExit prop o s then exits := run.bump exits b

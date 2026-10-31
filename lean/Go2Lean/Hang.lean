@@ -1,4 +1,5 @@
 import Go2Lean.Dialect.GoSSA
+import Go2Lean.Dialect.GoConc
 
 /-!
 # Definite infinite loops (#86)
@@ -157,5 +158,98 @@ def lasso (p : Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List V
   match runFunc p or h fid args { heap := heap } fuel with
   | .error l => some l
   | .ok _ => none
+
+-- The concurrent machine ----------------------------------------------------
+
+/-! A concurrent run draws a schedule choice at every step, so its havoc
+counters never repeat. `lassoConc` reruns it in a copy of
+`GoConc.scheduleS` and compares the machine's state without the schedule
+site's counter (and without the race detector's clocks, which only grow):
+the goroutines' frames, the heap and the other havoc counters. A state
+seen again means the choices made in between can be made again forever.
+That is a livelock only under a fair schedule: every goroutine that could
+move during the cycle moved in it. A spin-wait for another goroutine
+(`for !done {}`) under a schedule that never runs that goroutine is
+unfair and is not reported. -/
+
+open Go2Lean.GoConc in
+def frameEq (a b : Frame) : Bool :=
+  a.fn.name == b.fn.name && a.bid == b.bid && arrEq a.env b.env && a.atTerm == b.atTerm &&
+    a.dst == b.dst && a.next == b.next && a.nargs == b.nargs
+
+open Go2Lean.GoConc in
+def gorEq (a b : Gor) : Bool :=
+  a.done == b.done && a.daemon == b.daemon && valEq a.result b.result &&
+    a.frames.length == b.frames.length && (a.frames.zip b.frames).all fun (x, y) => frameEq x y
+
+/-- Havoc counters without the schedule site's. -/
+def countsOff (p : GoSSA.Prog) (c : Array Nat) : Array Nat :=
+  match p.schedSite with
+  | some site => if site < c.size then c.set! site 0 else c
+  | none => c
+
+open Go2Lean.GoConc in
+/-- Brent's detection over the machine's states, with the goroutines that
+could move and that moved since the saved state. -/
+structure BrentC where
+  saved : Option (Array Gor × Heap Val × Array Nat) := none
+  power : Nat := 1
+  lam : Nat := 0
+  enabled : List Nat := []
+  moved : List Nat := []
+
+open Go2Lean.GoConc in
+partial def concLoop (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (stepFuel : Nat) :
+    Array Gor → HState Val → Nat → Nat → BrentC → Option Loop
+  | _, _, 0, _, _ => none
+  | gs, s, n + 1, idle, br =>
+    let cands := (List.range gs.size).filter (ready s.heap gs)
+    let live := cands.filter fun i => !(gs[i]!.daemon)
+    let daemons := cands.length - live.length
+    if live.isEmpty && (daemons = 0 || idle ≥ 2 * daemons) then none else
+    let counts := countsOff p s.counts
+    let seen := match br.saved with
+      | some (gs0, h0, c0) =>
+        gs0.size == gs.size && (gs0.zip gs).all (fun (x, y) => gorEq x y) && heapEq h0 s.heap && countsEq c0 counts
+      | none => false
+    -- A cycle after the call returned is no hang of the call.
+    let mainWaits := match gs[0]? with | some g0 => !g0.done | none => false
+    if seen && mainWaits && br.enabled.all br.moved.contains then
+      let place := match gs[0]? >>= (·.frames.head?) with
+        | some fr => s!"@{fr.fn.name}#{fr.bid}"
+        | none => "the main goroutine"
+      some { site := s!"{place} (livelock: {br.moved.length} goroutines cycle)", assumed := !s.assumed.isEmpty }
+    else
+    let br := if seen then { br with enabled := [], moved := [] } else br
+    let br := if br.lam + 1 == br.power then
+        { br with saved := some (gs, s.heap, counts), power := br.power * 2, lam := 0, enabled := [], moved := [] }
+      else { br with lam := br.lam + 1 }
+    let atSetupEnd := cands.length == 1 && pendingName gs[cands[0]!]! == "setupEnd"
+    let (c, s) := if atSetupEnd then (0, s) else schedChoice p h s cands.length
+    let i := cands[c % cands.length]!
+    let br := { br with enabled := cands.foldl (fun acc j => if acc.contains j then acc else j :: acc) br.enabled,
+                        moved := if br.moved.contains i then br.moved else i :: br.moved }
+    match stepGor p or h gs i { s with conc.acc := #[] } stepFuel with
+    | (.ok (gs', s), _) => concLoop p or h stepFuel gs' s n (if live.isEmpty then idle + 1 else 0) br
+    | _ => none
+
+open Go2Lean.GoConc in
+/-- Rerun the concurrent function `fid` on `args` as `GoConc.runAny` does
+(from the setup snapshot `snap`, if any): the cycle a fair schedule can
+keep it in forever, if its state comes back. -/
+def lassoConc (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (fid : FuncId) (args : List Val) (fuel : Nat)
+    (heap : Heap Val := #[]) (snap : Option Snap := none) : Option Loop :=
+  match p.funcs[fid]?, snap with
+  | some fn, some snap =>
+    match snap.gs[0]? with
+    | some g0 =>
+      match g0.frames with
+      | [fr] =>
+        let g0 := { g0 with frames := [{ fr with env := bindParams fr.env fn.params args }] }
+        concLoop p or h fuel (snap.gs.set! 0 g0) { snap.s with heap } snap.n snap.idle {}
+      | _ => none
+    | none => none
+  | some fn, none => concLoop p or h fuel #[{ frames := [entryFrame fn args], vc := #[1] }] { heap } fuel 0 {}
+  | none, _ => none
 
 end Go2Lean.Hang
