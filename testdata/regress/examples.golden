@@ -118,8 +118,11 @@ exhausted globals_same_nopanic
 exhausted globals_same_specsamefieldwise
 exhausted_assuming globals_setgenfortest_nopanic
 confirmed globals_slot_nopanic
+exhausted_havoc hang_handoff_nohang
+exhausted_havoc hang_handoff_nopanic
 confirmed hang_last_nohang
 none hang_last_nopanic
+none hang_relay_nopanic
 none hang_triangle_nohang
 none hang_triangle_nopanic
 confirmed hang_words_nohang

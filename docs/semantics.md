@@ -94,13 +94,31 @@ Some hangs are not caught:
   never repeats its state.
 - **Long cycles.** A cycle longer than about half the fuel closes too
   late.
-- **Concurrent runs.** The machine draws a schedule choice at every
-  step, so a concurrent run's state never repeats.
+
+A concurrent run draws a schedule choice at every step. Its state is
+therefore compared without the schedule's counter, and without the race
+detector's clocks, which only grow: the goroutines' frames, the heap and
+the other havoc counters. A state that comes back means the choices made
+in between can be made again forever. It is reported as a livelock
+(`@Relay#3 (livelock: 2 goroutines cycle)`) only if three things hold:
+- **the schedule is fair:** every goroutine that could move during the
+  cycle moved in it;
+- **the call has not returned;**
+- **the cycle spans scheduling points:** a goroutine spinning inside one
+  step (no channel, lock or other scheduling point) ends out of fuel in
+  that step and is not checked.
+
+A spin-wait for another goroutine (`for !ready {}` under a lock) under a
+schedule that never runs that goroutine is unfair and is not reported.
 
 `examples/hang` holds two such bugs, a scan that stops advancing on a
 tab and a chain of links with a cycle. Both are found and confirmed in
 Go. It also holds a long loop that does end, which gives no
-counterexample.
+counterexample. Two concurrent cases are there too. `Relay` is two
+goroutines passing a value back and forth while the caller waits, and is
+reported as a livelock. `Handoff` is a spin-wait that only loops under an
+unfair schedule; checked under a schedule that always runs the first
+goroutine that can move, it is not reported.
 
 ## 4. Operations by group
 
