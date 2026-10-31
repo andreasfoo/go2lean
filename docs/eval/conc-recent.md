@@ -390,9 +390,10 @@ harnesses and budget, by `run15all.sh`.
 - **Still out of fuel, no cycle.** k009 (434 of 2000 trials), k016 (2000)
   and k042 (2000). None of 20 out-of-fuel runs per case comes back to a
   state. k016 needs more fuel (above); k009 is stuck at otel's registry
-  (#71). k042, prometheus' out-of-order compaction deadlock, does not
-  cycle: its fuel goes on growing state, or on one goroutine step
-  that runs out of its own fuel, which the rerun does not watch.
+  (#71). Why k042, prometheus' out-of-order compaction deadlock, runs
+  out of fuel is not yet known. Its state may keep growing. Or one
+  goroutine step may run out of its own fuel, and the rerun only watches
+  the states between scheduling points.
 
 So hang detection finds nothing in this evaluation. Its findings are
 `examples/hang`'s loops and livelock, confirmed in Go.
