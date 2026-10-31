@@ -137,6 +137,10 @@ type searchResult struct {
 	LoopsChecked int            `json:"loops_checked"`
 	LoopsForever int            `json:"loops_forever"`
 	LoopSites    map[string]int `json:"loop_sites"`
+	// Out-of-fuel runs whose fuel ran out inside one goroutine step, by
+	// where the step started (a loop without a scheduling point).
+	FuelInStep    int            `json:"out_of_fuel_in_step"`
+	FuelStepSites map[string]int `json:"fuel_step_sites"`
 
 	// The mutation engine's report (Mutation set).
 	Mutation     bool                  `json:"mutation"`
@@ -1123,19 +1127,28 @@ func exitCounts(sites []contract.ExitSite, exits map[string]int) (vacuous, check
 // at the most frequent loop (#86). A loop the run entered under an
 // under-approximation may be the model's, not the program's.
 func loopNote(res *searchResult) string {
+	step := ""
+	if res.FuelInStep > 0 {
+		step = fmt.Sprintf("; %d of them inside one goroutine step (most from %s)", res.FuelInStep, mostSite(res.FuelStepSites))
+	}
 	if res.LoopsChecked == 0 {
-		return ""
+		return step
 	}
 	if res.LoopsForever == 0 {
-		return fmt.Sprintf("; none of %d out-of-fuel runs rerun comes back to a state", res.LoopsChecked)
+		return step + fmt.Sprintf("; none of %d out-of-fuel runs rerun comes back to a state", res.LoopsChecked)
 	}
+	return step + fmt.Sprintf("; %d of %d out-of-fuel runs rerun loop forever (most at %s)", res.LoopsForever, res.LoopsChecked, mostSite(res.LoopSites))
+}
+
+// mostSite is the site with the highest count (the first by name on a tie).
+func mostSite(sites map[string]int) string {
 	best, n := "", 0
-	for s, c := range res.LoopSites {
+	for s, c := range sites {
 		if c > n || c == n && s < best {
 			best, n = s, c
 		}
 	}
-	return fmt.Sprintf("; %d of %d out-of-fuel runs rerun loop forever (most at %s)", res.LoopsForever, res.LoopsChecked, best)
+	return best
 }
 
 func exitNote(sites []contract.ExitSite, exits map[string]int) string {

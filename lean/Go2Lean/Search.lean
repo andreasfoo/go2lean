@@ -547,6 +547,15 @@ def lassoOf (p : GoSSA.Prog) (or : Oracle) (h : Havoc Val) (prop : Property) (ar
 as the trial. -/
 def lassoLimit : Nat := 20
 
+/-- The report's fields on the out-of-fuel runs whose fuel ran out inside
+one goroutine step (a loop without a scheduling point), by where the step
+started. -/
+def stepFuelFields (sites : List (String × Nat)) : List (String × Json) :=
+  if sites.isEmpty then [] else
+  [("out_of_fuel_in_step", ((sites.map (·.2)).sum : Nat)),
+   ("fuel_step_sites", Json.mkObj ((sites.take 5).map fun (site, n) =>
+     ((site.drop "out of fuel in a goroutine step from ".length).toString, (n : Json))))]
+
 /-- The report's fields on loops that never end. -/
 def loopFields (checked loops : Nat) (sites : List (String × Nat)) : List (String × Json) :=
   if checked == 0 then [] else
@@ -892,6 +901,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
   let mut lassoChecked := 0
   let mut loops := 0
   let mut loopSites : List (String × Nat) := []
+  let mut stepFuel : List (String × Nat) := []
   let trace := (← IO.getEnv "GO2LEAN_TRACE").isSome
   let start ← IO.monoMsNow
   let (snap, snapNote) := setupSnap p prop extra fuel
@@ -931,6 +941,8 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
         fallback := some (havocReport p or h prop args fuel heap snap slow gens trial seed o s ret)
     if let .outOfFuel := o then
       fuelOuts := fuelOuts + 1
+      if let some site := s.stuck then
+        if site.startsWith "out of fuel in a goroutine" then stepFuel := bump stepFuel site
       if lassoChecked < lassoLimit && !prop.isNoHang then
         lassoChecked := lassoChecked + 1
         if let some l := lassoOf p or h prop args fuel heap snap then
@@ -953,7 +965,7 @@ def run (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List Nat)
     ("moot", moots), ("budget_hit", decide (done < trials)), ("setup_snapshot", snapNote),
     ("stuck_sites", Json.mkObj (top.map fun (site, n) => (site, (n : Json)))),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))] : List (String × Json)) ++
-    loopFields lassoChecked loops loopSites)).compress
+    loopFields lassoChecked loops loopSites ++ stepFuelFields stepFuel)).compress
 where
   bump (sites : List (String × Nat)) (site : String) : List (String × Nat) :=
     match sites.lookup site with
@@ -1351,6 +1363,7 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
   let mut lassoChecked := 0
   let mut loops := 0
   let mut loopSites : List (String × Nat) := []
+  let mut stepFuel : List (String × Nat) := []
   let start ← IO.monoMsNow
   for build in enumArgs extra maxLen pool gens table allowNil do
     let (args, heap) := build base
@@ -1369,6 +1382,8 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
         fallback := some (havocReport p or h prop args fuel heap snap slow gens i 0 o s ret)
     if let .outOfFuel := o then
       fuelOuts := fuelOuts + 1
+      if let some site := s.stuck then
+        if site.startsWith "out of fuel in a goroutine" then stepFuel := run.bump stepFuel site
       if lassoChecked < lassoLimit && !prop.isNoHang then
         lassoChecked := lassoChecked + 1
         if let some l := lassoOf p or h prop args fuel heap snap then
@@ -1426,6 +1441,6 @@ def exhaust (p : GoSSA.Prog) (prop : Property) (gens : List Gen) (extra : List N
     ("schedules", schedRuns), ("schedules_sampled", schedSampled), ("setup_snapshot", snapNote),
     ("assumptions", Json.arr (assumed.map Json.str)),
     ("spec_exits", Json.mkObj (exits.map fun (b, n) => (b, (n : Json))))] : List (String × Json)) ++
-    loopFields lassoChecked loops loopSites)).compress
+    loopFields lassoChecked loops loopSites ++ stepFuelFields stepFuel)).compress
 
 end Go2Lean.Search

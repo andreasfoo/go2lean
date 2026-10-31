@@ -513,7 +513,13 @@ def stepGor (p : Prog) (or : Oracle) (h : Havoc Val) (gs : Array Gor) (i : Nat) 
       | (.atSync frames, s) => (.ok (gs.set! i { g with frames }, s), s)
       | (.returned v, s) => (.ok (gs.set! i { g with frames := [], done := true, result := v }, s), s)
       | (.panicked k, s) => (.error k, s)
-      | (.outOfFuel, s) => (.error .other, { s with stuck := s.stuck <|> some "out of fuel in a goroutine" })
+      | (.outOfFuel, s) =>
+        -- Where the step started: the loop a goroutine spins in without
+        -- reaching a scheduling point (#86).
+        let place := match g.frames.head? with
+          | some fr => s!" step from @{fr.fn.name}#{fr.bid}"
+          | none => ""
+        (.error .other, { s with stuck := s.stuck <|> some s!"out of fuel in a goroutine{place}" })
 
 /-- The operation goroutine `g` waits at, named for the schedule trace
 ("" when it is not at one). -/
